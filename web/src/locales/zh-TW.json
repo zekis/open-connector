@@ -41,6 +41,9 @@
     "overview": "總覽",
     "providers": "服務提供者",
     "actions": "動作",
+    "agents": "代理",
+    "flows": "流程",
+    "approvals": "核准",
     "runs": "執行記錄",
     "access": "API 金鑰",
     "docs": "文件"
@@ -70,6 +73,18 @@
       "actions": {
         "title": "動作",
         "subtitle": "搜尋、檢視及偵錯本機執行階段動作。"
+      },
+      "agents": {
+        "title": "代理",
+        "subtitle": "設定代理執行階段及其 API 憑證。"
+      },
+      "flows": {
+        "title": "流程",
+        "subtitle": "在兩個連線之間執行聚焦的 Agent 同步。"
+      },
+      "approvals": {
+        "title": "核准",
+        "subtitle": "檢視並處理待核准的流程工具請求。"
       },
       "runs": {
         "title": "執行記錄",

@@ -41,6 +41,9 @@
     "overview": "概要",
     "providers": "プロバイダー",
     "actions": "アクション",
+    "agents": "エージェント",
+    "flows": "フロー",
+    "approvals": "承認",
     "runs": "実行履歴",
     "access": "API Key",
     "docs": "ドキュメント"
@@ -70,6 +73,18 @@
       "actions": {
         "title": "アクション",
         "subtitle": "ローカルランタイムのアクションを検索、確認、デバッグします。"
+      },
+      "agents": {
+        "title": "エージェント",
+        "subtitle": "エージェントランタイムと API 認証情報を設定します。"
+      },
+      "flows": {
+        "title": "フロー",
+        "subtitle": "2 つの接続間でエージェントによる同期を実行します。"
+      },
+      "approvals": {
+        "title": "承認",
+        "subtitle": "保留中のフローツールリクエストを確認して判断します。"
       },
       "runs": {
         "title": "実行履歴",

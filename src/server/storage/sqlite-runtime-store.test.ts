@@ -1,4 +1,5 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
+import type { FlowApproval, FlowDefinition, FlowRun, FlowStep } from "../flows/flow-types.ts";
 
 import { readFileSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -49,6 +50,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0008_runtime_token_policy.sql",
       "0009_runtime_token_proxy.sql",
       "0010_connection_revision.sql",
+      "0011_flows.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -153,6 +155,64 @@ describe("SqliteRuntimeDatabase", () => {
         },
       ],
     });
+    second.close();
+  });
+
+  it("persists flow definitions, runs, steps, and atomic approvals", async () => {
+    const databasePath = await createDatabasePath();
+    const flow = createFlow();
+    const run = createFlowRun(flow);
+    const step: FlowStep = {
+      id: "flow-step-1",
+      runId: run.id,
+      sequence: 1,
+      kind: "action",
+      status: "pending",
+      actionId: flow.tools[0]!.actionId,
+      connectionId: flow.tools[0]!.connectionId,
+      startedAt: "2026-07-30T00:00:01.000Z",
+      input: { privateValue: "stored encrypted" },
+    };
+    const approval: FlowApproval = {
+      id: "approval-1",
+      flowId: flow.id,
+      runId: run.id,
+      stepId: step.id,
+      status: "pending",
+      actionId: step.actionId!,
+      connectionId: step.connectionId!,
+      input: step.input,
+      inputHash: "input-hash",
+      modelResponseId: "response-1",
+      modelCallId: "call-1",
+      modelToolName: "flow_1_source",
+      requestedAt: "2026-07-30T00:00:02.000Z",
+    };
+
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("flow-key"),
+    });
+    await first.flowStore.setFlow(flow);
+    await first.flowStore.addRun(run);
+    await first.flowStore.addStep(step);
+    await first.flowStore.addApproval(approval);
+    first.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("flow-key"),
+    });
+    await expect(second.flowStore.listFlows()).resolves.toEqual([flow]);
+    await expect(second.flowStore.listRuns(flow.id)).resolves.toEqual([run]);
+    await expect(second.flowStore.listSteps(run.id)).resolves.toEqual([step]);
+    await expect(second.flowStore.listApprovals("pending")).resolves.toEqual([approval]);
+    const approved: FlowApproval = {
+      ...approval,
+      status: "approved",
+      resolvedAt: "2026-07-30T00:00:03.000Z",
+    };
+    await expect(second.flowStore.updateApproval(approved, "pending")).resolves.toBe(true);
+    await expect(second.flowStore.updateApproval({ ...approved, status: "denied" }, "pending")).resolves.toBe(false);
+    await expect(second.flowStore.getApproval(approval.id)).resolves.toEqual(approved);
     second.close();
   });
 
@@ -448,6 +508,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0008_runtime_token_policy.sql",
       "0009_runtime_token_proxy.sql",
       "0010_connection_revision.sql",
+      "0011_flows.sql",
     ]) {
       raw.exec(readFileSync(new URL(`../../../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -555,6 +616,7 @@ describe("SqliteRuntimeDatabase", () => {
     expect(
       inspected.prepare("select name from runtime_migrations where name = ?").get("0010_connection_revision.sql"),
     ).toBeDefined();
+    expect(inspected.prepare("select name from runtime_migrations where name = ?").get("0011_flows.sql")).toBeDefined();
     expect(inspected.prepare("pragma table_info(connections)").all()).toContainEqual(
       expect.objectContaining({ name: "id", notnull: 1 }),
     );
@@ -713,12 +775,14 @@ describe("SqliteRuntimeDatabase", () => {
       now: "2026-06-30T00:00:00.000Z",
       expiresAt: "2026-07-01T00:00:00.000Z",
     });
+    await database.flowStore.setFlow(createFlow());
 
     database.resetRuntimeData();
 
     await expect(database.connectionStore.get("github", "default")).resolves.toBeUndefined();
     await expect(database.runLogStore.list()).resolves.toEqual({ items: [] });
     await expect(database.runtimePolicyStore.get()).resolves.toBeUndefined();
+    await expect(database.flowStore.listFlows()).resolves.toEqual([]);
     await expect(
       database.idempotencyStore.claim({
         keyHash: "key-hash",
@@ -768,6 +832,8 @@ describe("SqliteRuntimeDatabase", () => {
       expiresAt: claim.expiresAt,
     });
     await database.runLogStore.add(createRun("run-1", "2026-06-30T00:00:00.000Z"));
+    const flow = createFlow();
+    await database.flowStore.setFlow(flow);
     await database.rotateSecretCodec(new AesGcmSecretCodec("new-key"));
     database.close();
 
@@ -776,6 +842,7 @@ describe("SqliteRuntimeDatabase", () => {
     });
     await expect(withOldKey.connectionStore.get("github", "default")).rejects.toThrow();
     await expect(withOldKey.idempotencyStore.claim({ ...claim, claimId: "claim-2" })).rejects.toThrow();
+    await expect(withOldKey.flowStore.getFlow(flow.id)).rejects.toThrow();
     withOldKey.close();
 
     const withNewKey = new SqliteRuntimeDatabase(databasePath, {
@@ -792,6 +859,7 @@ describe("SqliteRuntimeDatabase", () => {
     });
     await expect(withNewKey.runtimeTokenStore.list()).resolves.toMatchObject([{ id: token.record.id }]);
     await expect(withNewKey.runLogStore.list()).resolves.toMatchObject({ items: [{ id: "run-1" }] });
+    await expect(withNewKey.flowStore.getFlow(flow.id)).resolves.toEqual(flow);
     await expect(withNewKey.idempotencyStore.claim({ ...claim, claimId: "claim-3" })).resolves.toEqual({
       kind: "completed",
       response: successResponse({ token: "rotated-idempotency-secret" }),
@@ -816,6 +884,47 @@ function createRun(id: string, startedAt: string, actionId = "hackernews.get_top
     completedAt: startedAt,
     durationMs: 0,
     ok: true,
+  };
+}
+
+function createFlow(): FlowDefinition {
+  return {
+    id: "flow-1",
+    revision: "revision-1",
+    name: "Mail archive",
+    status: "active",
+    sourceConnectionId: "outlook-connection",
+    destinationConnectionId: "sharepoint-connection",
+    instructions: "Copy today's messages into the destination spreadsheet.",
+    agent: {
+      connectionId: "openai-connection",
+      model: "opus",
+      reasoningEffort: "medium",
+    },
+    tools: [
+      {
+        actionId: "outlook.search_emails",
+        connectionId: "outlook-connection",
+        approval: "always_allow",
+      },
+    ],
+    maxSteps: 8,
+    createdAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:00.000Z",
+  };
+}
+
+function createFlowRun(flow: FlowDefinition): FlowRun {
+  return {
+    id: "flow-run-1",
+    flowId: flow.id,
+    flowRevision: flow.revision,
+    flowSnapshot: flow,
+    trigger: "manual",
+    status: "waiting_for_approval",
+    stepCount: 1,
+    startedAt: "2026-07-30T00:00:00.000Z",
+    updatedAt: "2026-07-30T00:00:02.000Z",
   };
 }
 

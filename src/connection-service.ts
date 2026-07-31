@@ -208,6 +208,23 @@ export class ConnectionService {
         : undefined;
   }
 
+  async getConnectionSummaryById(connectionId: string): Promise<ConnectionSummary | undefined> {
+    return (await this.listConnections()).find((connection) => connection.id === connectionId);
+  }
+
+  async resolveForExecutionById(service: string, connectionId: string): Promise<ExecutionConnection> {
+    const summary = await this.getConnectionSummaryById(connectionId);
+    if (!summary || summary.service !== service) {
+      throw new ConnectionError("connection_not_found", `${service} connection not found: ${connectionId}.`);
+    }
+
+    const connection = await this.resolveForExecution(service, summary.connectionName);
+    if (connection.summary?.id !== connectionId) {
+      throw new ConnectionError("connection_not_found", `${service} connection changed: ${connectionId}.`);
+    }
+    return connection;
+  }
+
   async resolveForExecution(service: string, connectionName?: string): Promise<ExecutionConnection> {
     const provider = this.getProvider(service);
     const name = normalizeConnectionName(connectionName);

@@ -29,6 +29,7 @@
     "fix-check": "npm run fix && npm run typecheck"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.220",
     "@cfworker/json-schema": "^4.1.1",
     "@hono/node-server": "^2.0.10",
     "@modelcontextprotocol/sdk": "^1.30.0",

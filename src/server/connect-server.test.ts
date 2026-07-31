@@ -12,6 +12,7 @@ import type {
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../oauth/oauth-flow-service.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
+import type { AgentModelSource } from "./agents/agent-settings-service.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import type { Logger } from "./logger.ts";
@@ -37,6 +38,7 @@ import { OAuthClientConfigService } from "../oauth/oauth-client-config-service.t
 import { OAuthFlowService } from "../oauth/oauth-flow-service.ts";
 import { actionInputMaxDepth, hashActionRequest, hashIdempotencyKey } from "./actions/action-idempotency.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
+import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { TransitFileService } from "./files/transit-files.ts";
@@ -130,6 +132,50 @@ afterEach(() => {
 });
 
 describe("ConnectServer", () => {
+  it("reads and updates shared agent model settings", async () => {
+    const app = createTestServer([]).createApp();
+
+    const initial = await app.request("/api/agent-settings");
+    expect(initial.status).toBe(200);
+    await expect(initial.json()).resolves.toEqual([{ provider: "claude_code", model: "opus" }]);
+
+    const models = await app.request("/api/agent-settings/claude_code/models");
+    expect(models.status).toBe(200);
+    await expect(models.json()).resolves.toEqual([
+      { id: "opus", displayName: "Opus 5" },
+      { id: "sonnet", displayName: "Sonnet 5" },
+    ]);
+
+    const updated = await app.request("/api/agent-settings/claude_code", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "sonnet" }),
+    });
+    expect(updated.status).toBe(200);
+    await expect(updated.json()).resolves.toEqual({
+      provider: "claude_code",
+      model: "sonnet",
+    });
+    expect(
+      (
+        (await (await app.request("/api/agent-settings")).json()) as Array<{
+          provider: string;
+          model: string;
+        }>
+      ).find((settings) => settings.provider === "claude_code"),
+    ).toEqual({ provider: "claude_code", model: "sonnet" });
+
+    expect(
+      (
+        await app.request("/api/agent-settings/unknown", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "test" }),
+        })
+      ).status,
+    ).toBe(404);
+  });
+
   it("rejects connections for providers unavailable in the current runtime", async () => {
     const app = createTestServer([catalogOnlyProvider]).createApp();
 
@@ -2983,10 +3029,11 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const idempotency = options.idempotency ?? new MemoryIdempotencyStore();
   const runtimeTokens = options.runtimeTokens ?? new RuntimeTokenService(new MemoryRuntimeTokenStore());
   const runs = options.runs ?? new MemoryRunLogStore();
+  const connectionStore = new MemoryConnectionStore();
   const connections = new ConnectionService({
     catalog,
     providerLoader,
-    store: new MemoryConnectionStore(),
+    store: connectionStore,
   });
   const clientConfigs = new OAuthClientConfigService({
     catalog,
@@ -3017,6 +3064,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     catalog,
     providerLoader,
     connections,
+    agentSettings: new AgentSettingsService(connectionStore, new TestAgentModelSource()),
     oauthClientConfigs: clientConfigs,
     oauthFlow: new OAuthFlowService({
       clientConfigs,
@@ -3039,6 +3087,15 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     actionSearch: options.actionSearch,
     logger: options.logger,
   });
+}
+
+class TestAgentModelSource implements AgentModelSource {
+  async listModels() {
+    return [
+      { id: "sonnet", displayName: "Sonnet 5" },
+      { id: "opus", displayName: "Opus 5" },
+    ];
+  }
 }
 
 type TestLogEntry = {

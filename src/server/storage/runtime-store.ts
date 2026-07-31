@@ -3,7 +3,7 @@ import type { CredentialProfile } from "../../core/types.ts";
 
 export const DEFAULT_RUN_LIMIT = 5_000;
 
-export type RunLogCaller = "http" | "mcp" | "web";
+export type RunLogCaller = "http" | "mcp" | "web" | "flow";
 
 /**
  * One recent action run shown by the local runtime.
@@ -20,6 +20,9 @@ export interface RunLog {
   connectionId?: string;
   connectionProfile?: CredentialProfile;
   runtimeTokenId?: string;
+  flowId?: string;
+  flowRunId?: string;
+  flowStepId?: string;
   policy?: ActionPolicyDecision;
   inputSummary?: unknown;
   outputSummary?: unknown;

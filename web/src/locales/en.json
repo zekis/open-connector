@@ -41,6 +41,9 @@
     "overview": "Overview",
     "providers": "Providers",
     "actions": "Actions",
+    "agents": "Agents",
+    "flows": "Flows",
+    "approvals": "Approvals",
     "runs": "Runs",
     "access": "API Key",
     "docs": "Docs"
@@ -70,6 +73,18 @@
       "actions": {
         "title": "Actions",
         "subtitle": "Search, inspect, and debug local runtime actions."
+      },
+      "agents": {
+        "title": "Agents",
+        "subtitle": "Set up agent runtimes and their API credentials."
+      },
+      "flows": {
+        "title": "Flows",
+        "subtitle": "Run focused agent synchronizations between two connections."
+      },
+      "approvals": {
+        "title": "Approvals",
+        "subtitle": "Review and decide pending Flow tool requests."
       },
       "runs": {
         "title": "Runs",

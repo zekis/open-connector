@@ -3,6 +3,14 @@ import type { TokenPolicy } from "../../core/action-policy.ts";
 import type { ResolvedCredential, RuntimeLogger } from "../../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
+import type {
+  FlowApproval,
+  FlowApprovalStatus,
+  FlowDefinition,
+  FlowRun,
+  FlowStep,
+  IFlowStore,
+} from "../flows/flow-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type {
   CompleteIdempotencyInput,
@@ -58,6 +66,13 @@ interface RotatedIdempotencySecret {
   value: string;
 }
 
+interface RotatedIdSecret {
+  id: string;
+  value: string;
+}
+
+type FlowSecretTable = "flows" | "flow_runs" | "flow_steps" | "flow_approvals";
+
 /**
  * Shared SQLite connection for local runtime state.
  */
@@ -69,6 +84,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly runtimePolicyStore: SqliteRuntimePolicyStore;
   readonly runLogStore: SqliteRunLogStore;
   readonly idempotencyStore: SqliteIdempotencyStore;
+  readonly flowStore: SqliteFlowStore;
 
   private readonly database: DatabaseSync;
   private readonly secretCodec: ISecretCodec;
@@ -84,6 +100,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.runtimePolicyStore = new SqliteRuntimePolicyStore(this.database);
     this.runLogStore = new SqliteRunLogStore(this.database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new SqliteIdempotencyStore(this.database, this.secretCodec);
+    this.flowStore = new SqliteFlowStore(this.database, this.secretCodec);
   }
 
   close(): void {
@@ -99,10 +116,20 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       "oauth_client_configs",
     );
     const idempotencyResponses = await readRotatedIdempotencySecrets(this.database, this.secretCodec, nextSecretCodec);
+    const flowRecords = await Promise.all(
+      (["flows", "flow_runs", "flow_steps", "flow_approvals"] as FlowSecretTable[]).map((table) =>
+        readRotatedIdSecrets(this.database, this.secretCodec, nextSecretCodec, table),
+      ),
+    );
     runInTransaction(this.database, () => {
       writeRotatedConnectionSecrets(this.database, connections);
       writeRotatedServiceSecrets(this.database, "oauth_client_configs", oauthConfigs);
       writeRotatedIdempotencySecrets(this.database, idempotencyResponses);
+      for (const [index, table] of (
+        ["flows", "flow_runs", "flow_steps", "flow_approvals"] as FlowSecretTable[]
+      ).entries()) {
+        writeRotatedIdSecrets(this.database, table, flowRecords[index]!);
+      }
     });
   }
 
@@ -115,6 +142,10 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from runtime_policy;
       delete from runs;
       delete from idempotency_records;
+      delete from flow_approvals;
+      delete from flow_steps;
+      delete from flow_runs;
+      delete from flows;
     `);
   }
 
@@ -571,6 +602,158 @@ export class SqliteRunLogStore implements IRunLogStore {
   }
 }
 
+export class SqliteFlowStore implements IFlowStore {
+  private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setFlow(flow: FlowDefinition): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into flows (id, status, created_at, updated_at, value)
+        values (?, ?, ?, ?, ?)
+        on conflict(id) do update set
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .run(flow.id, flow.status, flow.createdAt, flow.updatedAt, await this.encode(flow));
+  }
+
+  async getFlow(id: string): Promise<FlowDefinition | undefined> {
+    return await this.getById<FlowDefinition>("flows", id);
+  }
+
+  async listFlows(): Promise<FlowDefinition[]> {
+    return await this.listValues<FlowDefinition>("select value from flows order by updated_at desc, id desc");
+  }
+
+  async deleteFlow(id: string): Promise<boolean> {
+    return this.database.prepare("delete from flows where id = ?").run(id).changes > 0;
+  }
+
+  async addRun(run: FlowRun): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into flow_runs (id, flow_id, status, started_at, updated_at, value)
+        values (?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(run.id, run.flowId, run.status, run.startedAt, run.updatedAt, await this.encode(run));
+  }
+
+  async updateRun(run: FlowRun): Promise<void> {
+    this.database
+      .prepare("update flow_runs set status = ?, updated_at = ?, value = ? where id = ?")
+      .run(run.status, run.updatedAt, await this.encode(run), run.id);
+  }
+
+  async getRun(id: string): Promise<FlowRun | undefined> {
+    return await this.getById<FlowRun>("flow_runs", id);
+  }
+
+  async listRuns(flowId?: string, limit = 100): Promise<FlowRun[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    return flowId
+      ? await this.listValues<FlowRun>(
+          "select value from flow_runs where flow_id = ? order by started_at desc, id desc limit ?",
+          flowId,
+          boundedLimit,
+        )
+      : await this.listValues<FlowRun>(
+          "select value from flow_runs order by started_at desc, id desc limit ?",
+          boundedLimit,
+        );
+  }
+
+  async addStep(step: FlowStep): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into flow_steps (id, run_id, sequence, status, started_at, value)
+        values (?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(step.id, step.runId, step.sequence, step.status, step.startedAt, await this.encode(step));
+  }
+
+  async updateStep(step: FlowStep): Promise<void> {
+    this.database
+      .prepare("update flow_steps set status = ?, value = ? where id = ?")
+      .run(step.status, await this.encode(step), step.id);
+  }
+
+  async listSteps(runId: string): Promise<FlowStep[]> {
+    return await this.listValues<FlowStep>(
+      "select value from flow_steps where run_id = ? order by sequence, id",
+      runId,
+    );
+  }
+
+  async addApproval(approval: FlowApproval): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into flow_approvals (id, flow_id, run_id, step_id, status, requested_at, value)
+        values (?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        approval.id,
+        approval.flowId,
+        approval.runId,
+        approval.stepId,
+        approval.status,
+        approval.requestedAt,
+        await this.encode(approval),
+      );
+  }
+
+  async getApproval(id: string): Promise<FlowApproval | undefined> {
+    return await this.getById<FlowApproval>("flow_approvals", id);
+  }
+
+  async listApprovals(status?: FlowApprovalStatus): Promise<FlowApproval[]> {
+    return status
+      ? await this.listValues<FlowApproval>(
+          "select value from flow_approvals where status = ? order by requested_at desc, id desc",
+          status,
+        )
+      : await this.listValues<FlowApproval>("select value from flow_approvals order by requested_at desc, id desc");
+  }
+
+  async updateApproval(approval: FlowApproval, expectedStatus: FlowApprovalStatus): Promise<boolean> {
+    return (
+      this.database
+        .prepare("update flow_approvals set status = ?, value = ? where id = ? and status = ?")
+        .run(approval.status, await this.encode(approval), approval.id, expectedStatus).changes > 0
+    );
+  }
+
+  private async getById<T>(table: FlowSecretTable, id: string): Promise<T | undefined> {
+    const row = this.database.prepare(`select value from ${table} where id = ?`).get(id);
+    return row ? parseJson<T>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  private async listValues<T>(query: string, ...parameters: Array<string | number>): Promise<T[]> {
+    const rows = this.database.prepare(query).all(...parameters);
+    return await Promise.all(
+      rows.map(async (row) => parseJson<T>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  private encode(value: unknown): Promise<string> {
+    return this.secretCodec.encode(JSON.stringify(value));
+  }
+}
+
 function insertRun(database: DatabaseSync, run: RunLog): void {
   database
     .prepare(
@@ -729,6 +912,28 @@ function writeRotatedIdempotencySecrets(database: DatabaseSync, responses: Rotat
   const statement = database.prepare("update idempotency_records set response_value = ? where key_hash = ?");
   for (const response of responses) {
     statement.run(response.value, response.keyHash);
+  }
+}
+
+async function readRotatedIdSecrets(
+  database: DatabaseSync,
+  currentCodec: ISecretCodec,
+  nextCodec: ISecretCodec,
+  table: FlowSecretTable,
+): Promise<RotatedIdSecret[]> {
+  const rows = database.prepare(`select id, value from ${table}`).all();
+  return await Promise.all(
+    rows.map(async (row) => ({
+      id: readString(row, "id"),
+      value: await nextCodec.encode(await currentCodec.decode(readString(row, "value"))),
+    })),
+  );
+}
+
+function writeRotatedIdSecrets(database: DatabaseSync, table: FlowSecretTable, records: RotatedIdSecret[]): void {
+  const statement = database.prepare(`update ${table} set value = ? where id = ?`);
+  for (const record of records) {
+    statement.run(record.value, record.id);
   }
 }
 

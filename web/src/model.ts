@@ -131,13 +131,16 @@ export interface RunLog {
   id: string;
   service: string;
   actionId: string;
-  caller: "http" | "mcp" | "web";
+  caller: "http" | "mcp" | "web" | "flow";
   startedAt: string;
   completedAt: string;
   durationMs: number;
   ok: boolean;
   connectionId?: string;
   runtimeTokenId?: string;
+  flowId?: string;
+  flowRunId?: string;
+  flowStepId?: string;
   policy?: PolicyDecision;
   connectionProfile?: {
     displayName?: string;
@@ -170,6 +173,102 @@ export interface RuntimeActionResponse {
   errorCode?: string;
 }
 
+export type FlowApprovalMode = "always_allow" | "require_approval";
+export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
+
+export interface FlowToolGrant {
+  actionId: string;
+  connectionId: string;
+  approval: FlowApprovalMode;
+}
+
+export interface FlowDefinition {
+  id: string;
+  revision: string;
+  name: string;
+  status: "active" | "paused";
+  sourceConnectionId: string;
+  destinationConnectionId: string;
+  instructions: string;
+  agent: {
+    provider?: "claude_code";
+    connectionId: string;
+    model: string;
+    reasoningEffort: "none" | "low" | "medium" | "high";
+  };
+  tools: FlowToolGrant[];
+  maxSteps: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConnectionSummary {
+  id: string;
+  provider: "claude_code";
+  authType: "subscription_oauth";
+  configured: true;
+  displayName: string;
+  updatedAt?: string;
+}
+
+export interface AgentRuntimeSettings {
+  provider: "claude_code";
+  model: string;
+}
+
+export interface AgentModelOption {
+  id: string;
+  displayName: string;
+}
+
+export interface FlowRun {
+  id: string;
+  flowId: string;
+  status: FlowRunStatus;
+  trigger: "manual";
+  stepCount: number;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  finalOutput?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface FlowStep {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: "agent" | "action";
+  status: "pending" | "completed" | "failed" | "denied";
+  actionId?: string;
+  connectionId?: string;
+  approvalId?: string;
+  input?: unknown;
+  output?: unknown;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface FlowApproval {
+  id: string;
+  flowId: string;
+  runId: string;
+  stepId: string;
+  status: "pending" | "approved" | "denied";
+  actionId: string;
+  connectionId: string;
+  input: unknown;
+  requestedAt: string;
+  resolvedAt?: string;
+}
+
+export interface FlowRunDetail {
+  run: FlowRun;
+  steps: FlowStep[];
+  approvals: FlowApproval[];
+}
+
 export interface AppData {
   providers: ProviderDefinition[];
   connections: ConnectionRecord[];
@@ -178,6 +277,12 @@ export interface AppData {
   runtimePolicy?: RuntimePolicyState;
   runs: RunLog[];
   runsNextCursor?: string;
+  flows?: FlowDefinition[];
+  flowRuns?: FlowRun[];
+  flowApprovals?: FlowApproval[];
+  agentConnections?: AgentConnectionSummary[];
+  agentSettings?: AgentRuntimeSettings[];
+  agentModels?: AgentModelOption[];
 }
 
 export interface OverviewSummary {
@@ -265,6 +370,12 @@ export const emptyData: AppData = {
     runtime: emptyPolicyRules(),
   },
   runs: [],
+  flows: [],
+  flowRuns: [],
+  flowApprovals: [],
+  agentConnections: [],
+  agentSettings: [],
+  agentModels: [],
 };
 
 function emptyPolicyRules(): PolicyRules {

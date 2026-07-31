@@ -3,9 +3,13 @@ import type { ConnectionService } from "../connection-service.ts";
 import type { ActionPolicySnapshot } from "../core/action-policy.ts";
 import type { ActionSearchIndexProvider, ActionSearchResult } from "../core/action-search.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
+import type { AgentCredentialService } from "./agents/agent-credential-service.ts";
+import type { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
+import type { FlowRunner } from "./flows/flow-runner.ts";
+import type { FlowService } from "./flows/flow-service.ts";
 import type { Logger } from "./logger.ts";
 import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
@@ -32,6 +36,8 @@ import {
   readIdempotencyKey,
 } from "./actions/action-idempotency.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
+import { AgentCredentialError } from "./agents/agent-credential-service.ts";
+import { AgentSettingsError } from "./agents/agent-settings-service.ts";
 import { renderActionMarkdown } from "./api/action-markdown.ts";
 import { clearLocalAuthCookie, createLocalAuthMiddleware, readLocalAuthSession, readRuntimeGrant } from "./api/auth.ts";
 import { getResponseCachePolicy } from "./api/cache-policy.ts";
@@ -52,6 +58,7 @@ import {
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
+import { FlowError } from "./flows/flow-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
 
@@ -62,10 +69,14 @@ export interface IConnectServerOptions {
   catalog: CatalogStore;
   providerLoader: IProviderLoader;
   connections: ConnectionService;
+  agentCredentials?: AgentCredentialService;
+  agentSettings?: AgentSettingsService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
   actions: ActionRunner;
+  flows?: FlowService;
+  flowRunner?: FlowRunner;
   idempotency: IIdempotencyStore;
   transitFiles: ITransitFileService;
   staticRoot?: string;
@@ -187,9 +198,42 @@ export class ConnectServer {
     app.get("/api/connections", (context) => this.listConnections(context));
     app.put("/api/connections/:service", (context) => this.upsertConnection(context, context.req.param("service")));
     app.delete("/api/connections/:service", (context) => this.disconnect(context, context.req.param("service")));
+    if (this.options.agentCredentials) {
+      app.get("/api/agent-connections", (context) => this.listAgentConnections(context));
+      app.put("/api/agent-connections/:provider", (context) =>
+        this.upsertAgentConnection(context, context.req.param("provider")),
+      );
+      app.delete("/api/agent-connections/:provider", (context) =>
+        this.deleteAgentConnection(context, context.req.param("provider")),
+      );
+    }
+    if (this.options.agentSettings) {
+      app.get("/api/agent-settings", (context) => this.listAgentSettings(context));
+      app.get("/api/agent-settings/:provider/models", (context) =>
+        this.listAgentModels(context, context.req.param("provider")),
+      );
+      app.put("/api/agent-settings/:provider", (context) =>
+        this.updateAgentSettings(context, context.req.param("provider")),
+      );
+    }
 
     app.get("/api/runs", (context) => this.listRuns(context));
     app.get("/api/runs/:id", (context) => this.getRun(context, context.req.param("id")));
+    if (this.options.flows && this.options.flowRunner) {
+      app.get("/api/flows", (context) => this.listFlows(context));
+      app.post("/api/flows", (context) => this.createFlow(context));
+      app.get("/api/flows/:id", (context) => this.getFlow(context, context.req.param("id")));
+      app.put("/api/flows/:id", (context) => this.updateFlow(context, context.req.param("id")));
+      app.delete("/api/flows/:id", (context) => this.deleteFlow(context, context.req.param("id")));
+      app.post("/api/flows/:id/runs", (context) => this.startFlowRun(context, context.req.param("id")));
+      app.get("/api/flow-runs", (context) => this.listFlowRuns(context));
+      app.get("/api/flow-runs/:id", (context) => this.getFlowRun(context, context.req.param("id")));
+      app.get("/api/flow-approvals", (context) => this.listFlowApprovals(context));
+      app.post("/api/flow-approvals/:id/approve", (context) =>
+        this.approveFlowAction(context, context.req.param("id")),
+      );
+      app.post("/api/flow-approvals/:id/deny", (context) => this.denyFlowAction(context, context.req.param("id")));
+    }
     app.post("/api/files", (context) => this.createTransitFile(context));
     app.get("/api/files/:fileId", (context) => this.getTransitFile(context, context.req.param("fileId")));
     app.delete("/api/files/:fileId", (context) => this.deleteTransitFile(context, context.req.param("fileId")));
@@ -718,6 +762,148 @@ export class ConnectServer {
 
   private async listConnections(context: Context): Promise<Response> {
     return context.json(await this.options.connections.listConnections());
+  }
+
+  private async listAgentConnections(context: Context): Promise<Response> {
+    return context.json(await this.options.agentCredentials!.list());
+  }
+
+  private async upsertAgentConnection(context: Context, provider: string): Promise<Response> {
+    if (provider !== "claude_code") {
+      return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
+    }
+    const body = await readJsonBody(context);
+    return await this.writeAgentCredentialResult(
+      context,
+      this.options.agentCredentials!.connectClaudeSubscription(body),
+    );
+  }
+
+  private async deleteAgentConnection(context: Context, provider: string): Promise<Response> {
+    if (provider !== "claude_code") {
+      return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
+    }
+    return await this.writeAgentCredentialResult(
+      context,
+      this.options.agentCredentials!.disconnectClaudeSubscription().then(() => ({ provider, deleted: true })),
+    );
+  }
+
+  private async writeAgentCredentialResult(context: Context, operation: Promise<unknown>): Promise<Response> {
+    try {
+      return context.json(await operation);
+    } catch (error) {
+      if (error instanceof AgentCredentialError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async listAgentSettings(context: Context): Promise<Response> {
+    return await this.writeAgentSettingsResult(context, this.options.agentSettings!.list());
+  }
+
+  private async listAgentModels(context: Context, provider: string): Promise<Response> {
+    return await this.writeAgentSettingsResult(context, this.options.agentSettings!.listModels(provider));
+  }
+
+  private async updateAgentSettings(context: Context, provider: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    return await this.writeAgentSettingsResult(context, this.options.agentSettings!.update(provider, body));
+  }
+
+  private async writeAgentSettingsResult(context: Context, operation: Promise<unknown>): Promise<Response> {
+    try {
+      return context.json(await operation);
+    } catch (error) {
+      if (error instanceof AgentSettingsError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async listFlows(context: Context): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowService().list());
+  }
+
+  private async createFlow(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    return this.writeFlowResult(context, this.requiredFlowService().create(body));
+  }
+
+  private async getFlow(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowService().getRequired(id));
+  }
+
+  private async updateFlow(context: Context, id: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    return this.writeFlowResult(context, this.requiredFlowService().update(id, body));
+  }
+
+  private async deleteFlow(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(
+      context,
+      this.requiredFlowService()
+        .delete(id)
+        .then(() => ({ id, deleted: true })),
+    );
+  }
+
+  private async startFlowRun(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowRunner().start(id));
+  }
+
+  private async listFlowRuns(context: Context): Promise<Response> {
+    const flowId = optionalString(context.req.query("flowId"));
+    const limitValue = optionalString(context.req.query("limit"));
+    const limit = limitValue === undefined ? undefined : Number(limitValue);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+      return jsonError(context, 400, "invalid_input", "limit must be an integer between 1 and 100.");
+    }
+    return this.writeFlowResult(context, this.requiredFlowRunner().listRuns(flowId, limit));
+  }
+
+  private async getFlowRun(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowRunner().getRunDetail(id));
+  }
+
+  private async listFlowApprovals(context: Context): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowRunner().listApprovals());
+  }
+
+  private async approveFlowAction(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowRunner().approve(id));
+  }
+
+  private async denyFlowAction(context: Context, id: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowRunner().deny(id));
+  }
+
+  private requiredFlowService(): FlowService {
+    if (!this.options.flows) {
+      throw new Error("Flow service is unavailable.");
+    }
+    return this.options.flows;
+  }
+
+  private requiredFlowRunner(): FlowRunner {
+    if (!this.options.flowRunner) {
+      throw new Error("Flow runner is unavailable.");
+    }
+    return this.options.flowRunner;
+  }
+
+  private async writeFlowResult(context: Context, operation: Promise<unknown>): Promise<Response> {
+    try {
+      return context.json(await operation);
+    } catch (error) {
+      if (error instanceof FlowError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
   }
 
   private async upsertConnection(context: Context, service: string): Promise<Response> {

@@ -203,6 +203,12 @@ describe("loadRuntimeData", () => {
       "/api/runtime-tokens",
       "/api/runtime-policy",
       "/api/runs",
+      "/api/flows",
+      "/api/flow-runs",
+      "/api/flow-approvals",
+      "/api/agent-connections",
+      "/api/agent-settings",
+      "/api/agent-settings/claude_code/models",
     ]);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer local-token");
     for (const call of calls.slice(1)) {

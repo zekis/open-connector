@@ -1,0 +1,253 @@
+.flows-page {
+  display: grid;
+  gap: 20px;
+}
+
+.flow-builder-page {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.flow-builder-page .flow-builder {
+  width: 100%;
+}
+
+.flows-toolbar,
+.flow-builder-heading,
+.flow-section-heading,
+.flow-card-heading,
+.flow-tools-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.flows-toolbar p,
+.flow-builder-heading p,
+.flow-card-heading p,
+.flow-tools-heading p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.flow-builder {
+  max-height: none;
+}
+
+.flow-builder-form,
+.flow-section {
+  display: grid;
+  gap: 16px;
+}
+
+.flow-builder-form {
+  margin-top: 20px;
+}
+
+.flow-endpoints,
+.flow-agent-fields {
+  display: grid;
+  align-items: end;
+  gap: 12px;
+}
+
+.flow-endpoints {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.flow-agent-fields {
+  grid-template-columns: minmax(0, 1fr) 180px;
+}
+
+.flow-direction {
+  padding-bottom: 9px;
+  color: var(--muted-foreground);
+  font-size: 22px;
+}
+
+.flow-native-select {
+  min-height: 36px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.flow-connection-select {
+  width: 100%;
+}
+
+.flow-instructions {
+  min-height: 110px;
+}
+
+.flow-tools-heading {
+  align-items: end;
+}
+
+.flow-tools-heading > div {
+  min-width: 250px;
+}
+
+.flow-tools-heading > input {
+  max-width: 360px;
+}
+
+.flow-tool-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.flow-tool-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 170px;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-tool-row:last-child {
+  border-bottom: 0;
+}
+
+.flow-tool-row:hover {
+  background: var(--accent);
+}
+
+.flow-tool-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.flow-tool-main small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-section-heading {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.flow-section-heading h2 {
+  font-size: 16px;
+}
+
+.flow-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+.flow-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.flow-card-heading {
+  min-width: 0;
+}
+
+.flow-card-heading h3 {
+  font-size: 15px;
+}
+
+.flow-card-heading p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.flow-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.flow-path span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.flow-run-output {
+  margin: 0;
+  padding: 10px;
+  border-left: 3px solid var(--success);
+  background: var(--muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.flow-delete-button {
+  margin-left: auto;
+  color: var(--destructive);
+}
+
+@media (max-width: 820px) {
+  .flow-agent-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-tool-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .flow-tool-row .flow-native-select {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 620px) {
+  .flows-toolbar,
+  .flow-builder-heading,
+  .flow-tools-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .flow-endpoints {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-direction {
+    display: none;
+  }
+
+  .flow-card-grid {
+    grid-template-columns: 1fr;
+  }
+}

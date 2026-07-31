@@ -4,6 +4,14 @@ import type { ResolvedCredential } from "../../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
 import type { D1DatabaseBinding } from "../cloudflare/cloudflare-bindings.ts";
+import type {
+  FlowApproval,
+  FlowApprovalStatus,
+  FlowDefinition,
+  FlowRun,
+  FlowStep,
+  IFlowStore,
+} from "../flows/flow-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type {
   CompleteIdempotencyInput,
@@ -36,6 +44,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly runtimePolicyStore: D1RuntimePolicyStore;
   readonly runLogStore: D1RunLogStore;
   readonly idempotencyStore: D1IdempotencyStore;
+  readonly flowStore: D1FlowStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -46,6 +55,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.runtimePolicyStore = new D1RuntimePolicyStore(database);
     this.runLogStore = new D1RunLogStore(database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new D1IdempotencyStore(database, secretCodec);
+    this.flowStore = new D1FlowStore(database, secretCodec);
   }
 }
 
@@ -533,6 +543,171 @@ export class D1RunLogStore implements IRunLogStore {
       items,
       nextCursor: runs.length > limit && items.length > 0 ? encodeRunLogCursor(items[items.length - 1]) : undefined,
     };
+  }
+}
+
+export class D1FlowStore implements IFlowStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setFlow(flow: FlowDefinition): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into flows (id, status, created_at, updated_at, value)
+        values (?, ?, ?, ?, ?)
+        on conflict(id) do update set
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .bind(flow.id, flow.status, flow.createdAt, flow.updatedAt, await this.encode(flow))
+      .run();
+  }
+
+  async getFlow(id: string): Promise<FlowDefinition | undefined> {
+    return await this.getById<FlowDefinition>("flows", id);
+  }
+
+  async listFlows(): Promise<FlowDefinition[]> {
+    return await this.listValues<FlowDefinition>("select value from flows order by updated_at desc, id desc");
+  }
+
+  async deleteFlow(id: string): Promise<boolean> {
+    const result = await this.database.prepare("delete from flows where id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async addRun(run: FlowRun): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into flow_runs (id, flow_id, status, started_at, updated_at, value)
+        values (?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .bind(run.id, run.flowId, run.status, run.startedAt, run.updatedAt, await this.encode(run))
+      .run();
+  }
+
+  async updateRun(run: FlowRun): Promise<void> {
+    await this.database
+      .prepare("update flow_runs set status = ?, updated_at = ?, value = ? where id = ?")
+      .bind(run.status, run.updatedAt, await this.encode(run), run.id)
+      .run();
+  }
+
+  async getRun(id: string): Promise<FlowRun | undefined> {
+    return await this.getById<FlowRun>("flow_runs", id);
+  }
+
+  async listRuns(flowId?: string, limit = 100): Promise<FlowRun[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    return flowId
+      ? await this.listValues<FlowRun>(
+          "select value from flow_runs where flow_id = ? order by started_at desc, id desc limit ?",
+          flowId,
+          boundedLimit,
+        )
+      : await this.listValues<FlowRun>(
+          "select value from flow_runs order by started_at desc, id desc limit ?",
+          boundedLimit,
+        );
+  }
+
+  async addStep(step: FlowStep): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into flow_steps (id, run_id, sequence, status, started_at, value)
+        values (?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .bind(step.id, step.runId, step.sequence, step.status, step.startedAt, await this.encode(step))
+      .run();
+  }
+
+  async updateStep(step: FlowStep): Promise<void> {
+    await this.database
+      .prepare("update flow_steps set status = ?, value = ? where id = ?")
+      .bind(step.status, await this.encode(step), step.id)
+      .run();
+  }
+
+  async listSteps(runId: string): Promise<FlowStep[]> {
+    return await this.listValues<FlowStep>(
+      "select value from flow_steps where run_id = ? order by sequence, id",
+      runId,
+    );
+  }
+
+  async addApproval(approval: FlowApproval): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into flow_approvals (id, flow_id, run_id, step_id, status, requested_at, value)
+        values (?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .bind(
+        approval.id,
+        approval.flowId,
+        approval.runId,
+        approval.stepId,
+        approval.status,
+        approval.requestedAt,
+        await this.encode(approval),
+      )
+      .run();
+  }
+
+  async getApproval(id: string): Promise<FlowApproval | undefined> {
+    return await this.getById<FlowApproval>("flow_approvals", id);
+  }
+
+  async listApprovals(status?: FlowApprovalStatus): Promise<FlowApproval[]> {
+    return status
+      ? await this.listValues<FlowApproval>(
+          "select value from flow_approvals where status = ? order by requested_at desc, id desc",
+          status,
+        )
+      : await this.listValues<FlowApproval>("select value from flow_approvals order by requested_at desc, id desc");
+  }
+
+  async updateApproval(approval: FlowApproval, expectedStatus: FlowApprovalStatus): Promise<boolean> {
+    const result = await this.database
+      .prepare("update flow_approvals set status = ?, value = ? where id = ? and status = ?")
+      .bind(approval.status, await this.encode(approval), approval.id, expectedStatus)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  private async getById<T>(
+    table: "flows" | "flow_runs" | "flow_steps" | "flow_approvals",
+    id: string,
+  ): Promise<T | undefined> {
+    const row = await this.database.prepare(`select value from ${table} where id = ?`).bind(id).first<RuntimeRow>();
+    return row ? parseJson<T>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  private async listValues<T>(query: string, ...parameters: Array<string | number>): Promise<T[]> {
+    const { results } = await this.database
+      .prepare(query)
+      .bind(...parameters)
+      .all<RuntimeRow>();
+    return await Promise.all(
+      results.map(async (row) => parseJson<T>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  private encode(value: unknown): Promise<string> {
+    return this.secretCodec.encode(JSON.stringify(value));
   }
 }
 

@@ -41,6 +41,9 @@
     "overview": "Vue d’ensemble",
     "providers": "Fournisseurs",
     "actions": "Actions",
+    "agents": "Agents",
+    "flows": "Flux",
+    "approvals": "Approbations",
     "runs": "Exécutions",
     "access": "API Key",
     "docs": "Docs"
@@ -70,6 +73,18 @@
       "actions": {
         "title": "Actions",
         "subtitle": "Recherchez, inspectez et déboguez les actions du runtime local."
+      },
+      "agents": {
+        "title": "Agents",
+        "subtitle": "Configurez les runtimes d’agents et leurs identifiants API."
+      },
+      "flows": {
+        "title": "Flux",
+        "subtitle": "Exécutez des synchronisations ciblées par agent entre deux connexions."
+      },
+      "approvals": {
+        "title": "Approbations",
+        "subtitle": "Examinez et décidez des demandes d’outils de Flux en attente."
       },
       "runs": {
         "title": "Exécutions",

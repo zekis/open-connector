@@ -25,8 +25,12 @@ export interface RunActionInput {
   input: unknown;
   caller: RunLogCaller;
   connectionName?: string;
+  connectionId?: string;
   policy?: ActionPolicySnapshot;
   runtimeTokenId?: string;
+  flowId?: string;
+  flowRunId?: string;
+  flowStepId?: string;
 }
 
 export interface ActionRunResult {
@@ -36,10 +40,14 @@ export interface ActionRunResult {
   connection?: ConnectionSummary;
 }
 
+export interface IActionRunner {
+  run(input: RunActionInput): Promise<ActionRunResult | undefined>;
+}
+
 /**
  * Shared execution boundary for HTTP, MCP, and future local callers.
  */
-export class ActionRunner {
+export class ActionRunner implements IActionRunner {
   private readonly options: ActionRunnerOptions;
 
   constructor(options: ActionRunnerOptions) {
@@ -79,7 +87,9 @@ export class ActionRunner {
       result = { ok: false, error: { code: policy.code, message: policy.message } };
     } else {
       try {
-        connection = await this.options.connections.resolveForExecution(action.service, input.connectionName);
+        connection = input.connectionId
+          ? await this.options.connections.resolveForExecutionById(action.service, input.connectionId)
+          : await this.options.connections.resolveForExecution(action.service, input.connectionName);
         const executor = action.execution.locallyExecutable
           ? await this.options.providerLoader.loadActionExecutor(
               action.service,
@@ -118,6 +128,9 @@ export class ActionRunner {
       connectionId: connection?.summary?.id,
       connectionProfile: connection?.summary?.profile,
       runtimeTokenId: input.runtimeTokenId,
+      flowId: input.flowId,
+      flowRunId: input.flowRunId,
+      flowStepId: input.flowStepId,
       policy,
       inputSummary: this.summarizeAuditValue(input.input, logContext),
       outputSummary: result.ok ? this.summarizeAuditValue(result.output, logContext) : undefined,

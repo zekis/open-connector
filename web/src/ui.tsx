@@ -1,7 +1,13 @@
 import type { AppLang } from "./i18n";
 import type {
   AppData,
+  AgentConnectionSummary,
+  AgentModelOption,
+  AgentRuntimeSettings,
   ConnectionRecord,
+  FlowApproval,
+  FlowDefinition,
+  FlowRun,
   OAuthConfig,
   ProviderDefinition,
   RunLogPage,
@@ -14,9 +20,11 @@ import type { FormEvent, ReactNode } from "react";
 import { useI18n, useLang, useTranslate } from "@embra/i18n/react";
 import {
   Activity,
+  Bot,
   BookOpen,
   Cable,
   Home,
+  Inbox,
   KeyRound,
   Loader2,
   Monitor,
@@ -24,13 +32,18 @@ import {
   RefreshCw,
   Sun,
   TerminalSquare,
+  Workflow,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import { AccessPage } from "./access-page";
 import { ActionsPage } from "./actions-page";
+import { AgentsPage } from "./agents-page";
 import { ApiError, apiGet, apiPost } from "./api";
+import { ApprovalsPage } from "./approvals-page";
 import oomolConnectLogoUrl from "./assets/oomol-connect-logo.png";
+import { FlowBuilderPage } from "./flow-builder-page";
+import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
 import { emptyData } from "./model";
 import { OverviewPage } from "./overview-page";
@@ -48,6 +61,9 @@ const navItems = [
   { path: "/overview", labelKey: "nav.overview", icon: Home },
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
+  { path: "/agents", labelKey: "nav.agents", icon: Bot },
+  { path: "/flows", labelKey: "nav.flows", icon: Workflow },
+  { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
   { path: "/runs", labelKey: "nav.runs", icon: Activity },
   { path: "/access", labelKey: "nav.access", icon: KeyRound },
   { path: "/resources", labelKey: "nav.docs", icon: BookOpen },
@@ -146,13 +162,32 @@ export async function loadRuntimeData(
   const catalogRequest =
     cachedProviders !== undefined ? Promise.resolve(cachedProviders) : apiGet<ProviderDefinition[]>("/api/providers");
 
-  const [providers, connections, oauthConfigs, runtimeTokens, runtimePolicy, runPage] = await Promise.all([
+  const [
+    providers,
+    connections,
+    oauthConfigs,
+    runtimeTokens,
+    runtimePolicy,
+    runPage,
+    flows,
+    flowRuns,
+    flowApprovals,
+    agentConnections,
+    agentSettings,
+    agentModels,
+  ] = await Promise.all([
     catalogRequest,
     apiGet<ConnectionRecord[]>("/api/connections"),
     apiGet<OAuthConfig[]>("/api/oauth/configs"),
     apiGet<RuntimeTokenSummary[]>("/api/runtime-tokens"),
     apiGet<RuntimePolicyState>("/api/runtime-policy"),
     apiGet<RunLogPage>("/api/runs"),
+    apiGet<FlowDefinition[]>("/api/flows"),
+    apiGet<FlowRun[]>("/api/flow-runs"),
+    apiGet<FlowApproval[]>("/api/flow-approvals"),
+    apiGet<AgentConnectionSummary[]>("/api/agent-connections"),
+    apiGet<AgentRuntimeSettings[]>("/api/agent-settings"),
+    apiGet<AgentModelOption[]>("/api/agent-settings/claude_code/models"),
   ]);
 
   return {
@@ -165,6 +200,12 @@ export async function loadRuntimeData(
       runtimePolicy,
       runs: runPage.items,
       runsNextCursor: runPage.nextCursor,
+      flows,
+      flowRuns,
+      flowApprovals,
+      agentConnections,
+      agentSettings,
+      agentModels,
     },
   };
 }
@@ -320,6 +361,9 @@ function AppShell(props: {
   const isOverviewPage = heading === "overview";
   const isBrowserPage = section === "actions" || section === "runs";
   const isRunsPage = section === "runs";
+  const pendingApprovalCount = (props.data.flowApprovals ?? []).filter(
+    (approval) => approval.status === "pending",
+  ).length;
   const mainClassName = [
     isBrowserPage ? "main main-browser" : "main",
     isOverviewPage ? "overview-main" : "",
@@ -352,6 +396,9 @@ function AppShell(props: {
               >
                 <Icon size={16} />
                 <span>{t(item.labelKey)}</span>
+                {item.path === "/approvals" && pendingApprovalCount > 0 ? (
+                  <strong className="nav-count">{pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}</strong>
+                ) : null}
               </NavLink>
             );
           })}
@@ -404,9 +451,17 @@ function AppShell(props: {
             />
             <Route path="/actions" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
+            />
+            <Route path="/flows" element={<FlowsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/approvals" element={<ApprovalsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/flows/new" element={<FlowBuilderPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route
+              path="/flows/:flowId/edit"
+              element={<FlowBuilderPage data={props.data} onRefresh={props.onRefresh} />}
             />
             <Route
               path="/access"
@@ -565,6 +620,15 @@ function headingForPath(pathname: string): string {
   }
   if (section === "runs") {
     return "runs";
+  }
+  if (section === "flows") {
+    return "flows";
+  }
+  if (section === "approvals") {
+    return "approvals";
+  }
+  if (section === "agents") {
+    return "agents";
   }
   if (section === "access") {
     return "access";

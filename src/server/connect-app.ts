@@ -1,5 +1,4 @@
 import type { CatalogStore } from "../catalog-store.ts";
-import type { ActionPolicyService } from "../core/action-policy.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
@@ -9,11 +8,18 @@ import type { RuntimeDatabase } from "./storage/runtime-database.ts";
 import type { Hono } from "hono";
 
 import { ConnectionService } from "../connection-service.ts";
+import { ActionPolicyService, emptyPolicyRules } from "../core/action-policy.ts";
 import { OAuthClientConfigService } from "../oauth/oauth-client-config-service.ts";
 import { OAuthCredentialRefreshService } from "../oauth/oauth-credential-refresh-service.ts";
 import { OAuthFlowService } from "../oauth/oauth-flow-service.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
+import { AgentCredentialService } from "./agents/agent-credential-service.ts";
+import { AgentSettingsService } from "./agents/agent-settings-service.ts";
+import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
 import { ConnectServer } from "./connect-server.ts";
+import { ClaudeCodeFlowAgent } from "./flows/claude-code-flow-agent.ts";
+import { FlowRunner } from "./flows/flow-runner.ts";
+import { FlowService } from "./flows/flow-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 
 export interface ConnectAppOptions {
@@ -53,13 +59,38 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     store: options.runtimeDatabase.connectionStore,
     logger: options.logger,
   });
+  const claudeCode = new ClaudeCodeClient();
+  const agentCredentials = new AgentCredentialService(options.runtimeDatabase.connectionStore, claudeCode);
+  const agentSettings = new AgentSettingsService(options.runtimeDatabase.connectionStore, claudeCode);
+  const actionPolicy = options.actionPolicy ?? new ActionPolicyService();
   const actions = new ActionRunner({
     catalog: options.catalog,
     providerLoader: options.providerLoader,
     connections,
     runs: options.runtimeDatabase.runLogStore,
     transitFiles: options.transitFiles,
-    actionPolicy: options.actionPolicy,
+    actionPolicy,
+    logger: options.logger,
+  });
+  const flows = new FlowService({
+    catalog: options.catalog,
+    connections,
+    agents: agentCredentials,
+    agentSettings,
+    store: options.runtimeDatabase.flowStore,
+  });
+  const flowRunner = new FlowRunner({
+    catalog: options.catalog,
+    connections,
+    flows,
+    store: options.runtimeDatabase.flowStore,
+    actions,
+    agentSettings,
+    claudeCodeAgent: new ClaudeCodeFlowAgent(agentCredentials, claudeCode),
+    getPolicySnapshot: async () => {
+      const record = await options.runtimeDatabase.runtimePolicyStore.get();
+      return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
+    },
     logger: options.logger,
   });
 
@@ -68,6 +99,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       catalog: options.catalog,
       providerLoader: options.providerLoader,
       connections,
+      agentCredentials,
+      agentSettings,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,
@@ -75,6 +108,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
         states: options.runtimeDatabase.oauthStateStore,
       }),
       actions,
+      flows,
+      flowRunner,
       idempotency: options.runtimeDatabase.idempotencyStore,
       transitFiles: options.transitFiles,
       runtimeTokens,
@@ -87,7 +122,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
         resolveRuntimeToken: (token) => runtimeTokens.resolveToken(token),
         verifyRuntimeJwt: options.verifyRuntimeJwt,
       },
-      actionPolicy: options.actionPolicy,
+      actionPolicy,
       logger: options.logger,
       compressApiResponses: options.compressApiResponses,
     }).createApp(),

@@ -41,6 +41,9 @@
     "overview": "概览",
     "providers": "提供商",
     "actions": "操作",
+    "agents": "智能体",
+    "flows": "流程",
+    "approvals": "审批",
     "runs": "运行记录",
     "access": "API Key",
     "docs": "文档"
@@ -70,6 +73,18 @@
       "actions": {
         "title": "操作",
         "subtitle": "搜索、检查并调试本地运行时操作。"
+      },
+      "agents": {
+        "title": "智能体",
+        "subtitle": "设置智能体运行时及其 API 凭据。"
+      },
+      "flows": {
+        "title": "流程",
+        "subtitle": "在两个连接之间运行聚焦的 Agent 同步。"
+      },
+      "approvals": {
+        "title": "审批",
+        "subtitle": "查看并处理待定的流程工具请求。"
       },
       "runs": {
         "title": "运行记录",
