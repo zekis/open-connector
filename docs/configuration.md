@@ -76,13 +76,14 @@ currently available only on the Node server, not Cloudflare Workers.
 
 By default OpenConnector applies a public-only SSRF guard to every user-supplied
 URL, including self-hosted provider instance URLs (for example the Dokploy
-**Instance URL**). Connections may therefore only target public addresses, and
-private targets are rejected during connection setup.
+**Instance URL** or Obsidian **Server URL**). Connections may therefore only
+target public addresses, and private targets are rejected during connection
+setup.
 
 Some self-hosted services are only reachable over a LAN or an overlay network
 such as Tailscale or NetBird. To allow those connections, set
 `OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK=true`. When enabled, provider connections
-that opt in (currently **Dokploy**) may target:
+that explicitly opt in, including **Dokploy** and **Obsidian**, may target:
 
 - RFC 1918 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - Carrier-grade NAT / shared address space `100.64.0.0/10` (Tailscale, NetBird)
