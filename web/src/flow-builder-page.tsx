@@ -1,11 +1,18 @@
-import type { AppData, ConnectionRecord, FlowApprovalMode, FlowDefinition, FlowToolGrant } from "./model";
+import type {
+  AppData,
+  ConnectionRecord,
+  FlowApprovalMode,
+  FlowDefinition,
+  FlowToolGrant,
+  ProviderDefinition,
+} from "./model";
 import type { FormEvent, ReactNode } from "react";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, Cable, Workflow } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { apiPost, apiPut } from "./api";
-import { Badge, EmptyState, InlineError } from "./shared-ui";
+import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -118,6 +125,12 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
     const approval = selectedTools[choice.key];
     return approval ? [{ actionId: choice.actionId, connectionId: choice.connectionId, approval }] : [];
   });
+  const sourceConnection = connections.find((connection) => connection.id === sourceId);
+  const destinationConnection = connections.find((connection) => connection.id === destinationId);
+  const sourceProvider = props.data.providers.find((provider) => provider.service === sourceConnection?.service);
+  const destinationProvider = props.data.providers.find(
+    (provider) => provider.service === destinationConnection?.service,
+  );
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -189,14 +202,45 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               required
             />
           </Label>
-          <div className="flow-endpoints">
-            <ConnectionSelect label="Source" value={sourceId} connections={connections} onChange={setSourceId} />
-            <span className="flow-direction" aria-hidden="true">
-              →
-            </span>
-            <ConnectionSelect
-              label="Destination"
+          <div className="flow-composer">
+            <ConnectionNode
+              role="source"
+              value={sourceId}
+              connection={sourceConnection}
+              provider={sourceProvider}
+              connections={connections}
+              onChange={setSourceId}
+            />
+            <FlowDirection label="Read" />
+            <section className="flow-instruction-node">
+              <div className="flow-instruction-heading">
+                <span className="flow-instruction-icon">
+                  <Workflow size={20} />
+                </span>
+                <div>
+                  <span>Agent instructions</span>
+                  <strong>Describe the synchronization</strong>
+                  <small>Define what to select, transform, name, and write.</small>
+                </div>
+              </div>
+              <Label className="field flow-instructions-field">
+                <span className="sr-only">Agent instructions</span>
+                <Textarea
+                  className="flow-instructions"
+                  value={instructions}
+                  maxLength={20_000}
+                  placeholder="Search Outlook for emails received today, then create an Excel spreadsheet in SharePoint with one row per message."
+                  onChange={(event) => setInstructions(event.target.value)}
+                  required
+                />
+              </Label>
+            </section>
+            <FlowDirection label="Write" />
+            <ConnectionNode
+              role="destination"
               value={destinationId}
+              connection={destinationConnection}
+              provider={destinationProvider}
               connections={connections}
               onChange={setDestinationId}
             />
@@ -219,17 +263,6 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               />
             </Label>
           </div>
-          <Label className="field">
-            <span>Agent instructions</span>
-            <Textarea
-              className="flow-instructions"
-              value={instructions}
-              maxLength={20_000}
-              placeholder="Search Outlook for emails received today, then create an Excel spreadsheet in SharePoint with one row per message."
-              onChange={(event) => setInstructions(event.target.value)}
-              required
-            />
-          </Label>
           <div className="flow-tools-heading">
             <div>
               <strong>Allowed tools</strong>
@@ -314,6 +347,52 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   );
 }
 
+function ConnectionNode(props: {
+  role: "source" | "destination";
+  value: string;
+  connection: (ConnectionRecord & { id: string }) | undefined;
+  provider: ProviderDefinition | undefined;
+  connections: Array<ConnectionRecord & { id: string }>;
+  onChange(value: string): void;
+}): ReactNode {
+  const title = props.role === "source" ? "Source connector" : "Destination connector";
+  return (
+    <section className={`flow-connector-node ${props.role}`}>
+      <div className="flow-connector-heading">
+        {props.provider ? (
+          <ProviderIcon provider={props.provider} large />
+        ) : (
+          <span className="flow-connector-placeholder" aria-hidden="true">
+            <Cable size={20} />
+          </span>
+        )}
+        <div>
+          <span>{title}</span>
+          <strong>{props.connection ? connectionDisplayName(props.connection) : "Choose a connection"}</strong>
+          <small>{props.provider?.displayName ?? "Connected application"}</small>
+        </div>
+      </div>
+      <ConnectionSelect
+        label="Connection"
+        value={props.value}
+        connections={props.connections}
+        onChange={props.onChange}
+      />
+    </section>
+  );
+}
+
+function FlowDirection(props: { label: string }): ReactNode {
+  return (
+    <div className="flow-direction" aria-label={`${props.label} flow direction`}>
+      <small>{props.label}</small>
+      <span className="flow-direction-track" aria-hidden="true">
+        <ArrowRight size={18} />
+      </span>
+    </div>
+  );
+}
+
 function AgentSelect(props: { value: string; choices: AgentChoice[]; onChange(choice: AgentChoice): void }): ReactNode {
   return (
     <Label className="field">
@@ -393,9 +472,14 @@ function choicesForConnection(data: AppData, connectionId: string, role: "source
 }
 
 function connectionLabel(connection: ConnectionRecord): string {
-  const displayName =
-    connection.profile && typeof connection.profile.displayName === "string" && connection.profile.displayName.trim()
-      ? connection.profile.displayName
-      : connection.connectionName;
+  const displayName = connectionDisplayName(connection);
   return displayName ? `${displayName} · ${connection.service}` : connection.service;
+}
+
+function connectionDisplayName(connection: ConnectionRecord): string {
+  return connection.profile &&
+    typeof connection.profile.displayName === "string" &&
+    connection.profile.displayName.trim()
+    ? connection.profile.displayName
+    : connection.connectionName || connection.service;
 }

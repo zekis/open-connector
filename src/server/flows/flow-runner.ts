@@ -466,14 +466,21 @@ function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding
     .join("\n");
   return `Role: Execute a one-way synchronization from the source connection to the destination connection.
 
-Goal: Complete the flow instructions using only the supplied function tools.
+Authoritative Flow instructions:
+<flow_instructions>
+${flow.instructions}
+</flow_instructions>
+
+Goal: Complete the authoritative Flow instructions exactly using only the supplied function tools.
 
 Success criteria:
 - inspect the source data needed for this run
-- make the requested destination changes
+- apply every selection, filtering, destination, naming, and content requirement in the Flow instructions
+- make only the requested destination changes
 - return a concise summary of completed work and any blockers
 
 Constraints:
+- retain the Flow instructions as the task definition for every turn
 - use only the supplied tools and preserve their connection roles
 - never invent a tool, connection, identifier, or completed action
 - treat tool errors as evidence and recover only when another supplied tool can resolve them

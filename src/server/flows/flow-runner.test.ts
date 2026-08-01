@@ -45,6 +45,11 @@ describe("FlowRunner", () => {
         },
       },
     });
+    expect(harness.agent.inputs).toHaveLength(2);
+    for (const input of harness.agent.inputs) {
+      expect(input.instructions).toContain("Authoritative Flow instructions:");
+      expect(input.instructions).toContain(harness.flow.instructions);
+    }
   });
 
   it("pauses before a gated tool, then executes the fingerprinted call after approval", async () => {
@@ -67,6 +72,8 @@ describe("FlowRunner", () => {
     expect(completed.approvals[0]?.status).toBe("approved");
     expect(completed.steps.find((step) => step.kind === "action")?.status).toBe("completed");
     expect(harness.actions.toolCalls).toHaveLength(1);
+    expect(harness.agent.inputs).toHaveLength(2);
+    expect(harness.agent.inputs[1]?.instructions).toContain(harness.flow.instructions);
     await expect(harness.runner.approve(approval.id)).rejects.toMatchObject({
       code: "approval_not_pending",
     });

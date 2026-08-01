@@ -1,4 +1,4 @@
-import type { FlowDefinition } from "./model";
+import type { AppData, FlowDefinition } from "./model";
 import type { ReactNode } from "react";
 
 import { renderToStaticMarkup } from "react-dom/server";
@@ -33,6 +33,58 @@ const flow: FlowDefinition = {
   updatedAt: "2026-07-30T00:00:00.000Z",
 };
 
+const editorData: AppData = {
+  ...emptyData,
+  flows: [flow],
+  providers: [
+    {
+      service: "outlook",
+      displayName: "Outlook",
+      categories: [],
+      authTypes: ["oauth2"],
+      auth: [{ type: "oauth2", scopes: [] }],
+      iconUrl: "https://example.com/outlook.svg",
+      actions: [],
+    },
+    {
+      service: "sharepoint",
+      displayName: "SharePoint",
+      categories: [],
+      authTypes: ["oauth2"],
+      auth: [{ type: "oauth2", scopes: [] }],
+      iconUrl: "https://example.com/sharepoint.svg",
+      actions: [],
+    },
+  ],
+  connections: [
+    {
+      id: "outlook-1",
+      service: "outlook",
+      connectionName: "work",
+      authType: "oauth2",
+      profile: { displayName: "zeke@example.com" },
+      metadata: {},
+    },
+    {
+      id: "sharepoint-1",
+      service: "sharepoint",
+      connectionName: "projects",
+      authType: "oauth2",
+      profile: { displayName: "Projects" },
+      metadata: {},
+    },
+  ],
+  agentConnections: [
+    {
+      id: "claude-subscription-1",
+      provider: "claude_code",
+      authType: "subscription_oauth",
+      configured: true,
+      displayName: "Claude Code",
+    },
+  ],
+};
+
 describe("FlowBuilderPage", () => {
   it("renders a dedicated create route", () => {
     const html = renderBuilder(
@@ -47,10 +99,9 @@ describe("FlowBuilderPage", () => {
   });
 
   it("loads an existing Flow on its edit route", () => {
-    const data = { ...emptyData, flows: [flow] };
     const html = renderBuilder(
       "/flows/flow-1/edit",
-      <Route path="/flows/:flowId/edit" element={<FlowBuilderPage data={data} onRefresh={() => {}} />} />,
+      <Route path="/flows/:flowId/edit" element={<FlowBuilderPage data={editorData} onRefresh={() => {}} />} />,
     );
 
     expect(html).toContain("Edit Daily inbox sync");
@@ -59,6 +110,23 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain("Save changes");
     expect(html).not.toContain(">Model<");
     expect(html).not.toContain("opus");
+  });
+
+  it("lays out provider connectors around the Flow instructions", () => {
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route path="/flows/:flowId/edit" element={<FlowBuilderPage data={editorData} onRefresh={() => {}} />} />,
+    );
+
+    const sourceIndex = html.indexOf("Source connector");
+    const instructionsIndex = html.indexOf("Agent instructions");
+    const destinationIndex = html.indexOf("Destination connector");
+    expect(sourceIndex).toBeGreaterThan(-1);
+    expect(sourceIndex).toBeLessThan(instructionsIndex);
+    expect(instructionsIndex).toBeLessThan(destinationIndex);
+    expect(html).toContain("flow-direction-track");
+    expect(html).toContain("https://example.com/outlook.svg");
+    expect(html).toContain("https://example.com/sharepoint.svg");
   });
 });
 

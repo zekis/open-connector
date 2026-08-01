@@ -36,6 +36,7 @@ describe("ClaudeCodeFlowAgent", () => {
       oauthToken: "secret-subscription-token",
       model: "sonnet",
       effort: "medium",
+      systemPrompt: "Use only supplied tools.",
     });
     expect(client.inputs[0]?.prompt).toContain("flow_1_source_read");
     expect(client.inputs[0]?.prompt).toContain("previous source result");
