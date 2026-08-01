@@ -26,8 +26,15 @@ export interface IClaudeCodeClient {
   completeTurn(input: ClaudeCodeTurnInput): Promise<ClaudeCodeTurnResult>;
 }
 
+export interface ClaudeCodeCommandInput {
+  args: string[];
+  oauthToken: string;
+  timeoutMs: number;
+  stdin?: string;
+}
+
 export interface ClaudeCodeCommandRunner {
-  run(args: string[], oauthToken: string, timeoutMs: number): Promise<ClaudeCodeCommandResult>;
+  run(input: ClaudeCodeCommandInput): Promise<ClaudeCodeCommandResult>;
 }
 
 const maxCommandOutputBytes = 4 * 1024 * 1024;
@@ -44,7 +51,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async inspectSubscriptionToken(oauthToken: string): Promise<void> {
-    const result = await this.runner.run(["auth", "status"], oauthToken, 15_000);
+    const result = await this.runner.run({ args: ["auth", "status"], oauthToken, timeoutMs: 15_000 });
     if (result.exitCode !== 0) {
       throw commandError("claude_auth_failed", "Claude Code did not accept the subscription credential.", result);
     }
@@ -55,7 +62,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async listModels(): Promise<AgentModelOption[]> {
-    const result = await this.runner.run(["--help"], "", 15_000);
+    const result = await this.runner.run({ args: ["--help"], oauthToken: "", timeoutMs: 15_000 });
     if (result.exitCode !== 0) {
       throw commandError("claude_models_unavailable", "Claude Code could not list Anthropic models.", result);
     }
@@ -63,8 +70,8 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async completeTurn(input: ClaudeCodeTurnInput): Promise<ClaudeCodeTurnResult> {
-    const result = await this.runner.run(
-      [
+    const result = await this.runner.run({
+      args: [
         "-p",
         "--output-format",
         "json",
@@ -85,11 +92,11 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
         "--safe-mode",
         "--max-turns",
         "3",
-        input.prompt,
       ],
-      input.oauthToken,
-      120_000,
-    );
+      oauthToken: input.oauthToken,
+      timeoutMs: 120_000,
+      stdin: input.prompt,
+    });
     if (result.exitCode !== 0) {
       throw commandError("claude_agent_failed", "Claude Code could not complete the Flow turn.", result);
     }
@@ -120,7 +127,7 @@ export class ClaudeCodeError extends Error {
 }
 
 class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
-  async run(args: string[], oauthToken: string, timeoutMs: number): Promise<ClaudeCodeCommandResult> {
+  async run(input: ClaudeCodeCommandInput): Promise<ClaudeCodeCommandResult> {
     const runtimeProcess = (globalThis as { process?: NodeJS.Process }).process;
     if (!runtimeProcess?.versions.node) {
       throw new ClaudeCodeError(
@@ -140,15 +147,15 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
     delete environment.CLAUDE_CODE_USE_BEDROCK;
     delete environment.CLAUDE_CODE_USE_FOUNDRY;
     delete environment.CLAUDE_CODE_USE_VERTEX;
-    environment.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+    environment.CLAUDE_CODE_OAUTH_TOKEN = input.oauthToken;
     environment.CLAUDE_CODE_SKIP_PROMPT_HISTORY = "1";
     environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
     environment.DISABLE_AUTOUPDATER = "1";
 
     return await new Promise<ClaudeCodeCommandResult>((resolve, reject) => {
-      const child = spawn(executable, args, {
+      const child = spawn(executable, input.args, {
         env: environment,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
       let stdout = "";
@@ -157,7 +164,7 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
       const timeout = setTimeout(() => {
         child.kill();
         finishReject(new ClaudeCodeError("claude_agent_timeout", "Claude Code exceeded the Flow turn timeout."));
-      }, timeoutMs);
+      }, input.timeoutMs);
 
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -187,10 +194,16 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
         clearTimeout(timeout);
         resolve({
           exitCode: exitCode ?? 1,
-          stdout: redact(stdout, oauthToken),
-          stderr: redact(stderr, oauthToken),
+          stdout: redact(stdout, input.oauthToken),
+          stderr: redact(stderr, input.oauthToken),
         });
       });
+      child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EPIPE") {
+          finishReject(new ClaudeCodeError("claude_agent_failed", `Claude Code stdin failed: ${error.message}`));
+        }
+      });
+      child.stdin.end(input.stdin ?? "", "utf8");
 
       function enforceOutputLimit(): void {
         if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) <= maxCommandOutputBytes) {

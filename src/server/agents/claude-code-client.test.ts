@@ -1,4 +1,4 @@
-import type { ClaudeCodeCommandRunner } from "./claude-code-client.ts";
+import type { ClaudeCodeCommandInput, ClaudeCodeCommandRunner } from "./claude-code-client.ts";
 
 import { describe, expect, it } from "vitest";
 import { ClaudeCodeClient } from "./claude-code-client.ts";
@@ -68,13 +68,14 @@ describe("ClaudeCodeClient", () => {
       },
     ]);
     const client = new ClaudeCodeClient(runner);
+    const prompt = "Choose the next action.".repeat(10_000);
 
     const result = await client.completeTurn({
       oauthToken: "secret-subscription-token",
       model: "sonnet",
       effort: "medium",
       systemPrompt: "Run the synchronization.",
-      prompt: "Choose the next action.",
+      prompt,
       outputSchema: { type: "object" },
     });
 
@@ -83,6 +84,7 @@ describe("ClaudeCodeClient", () => {
       text: "Synchronization complete.",
     });
     expect(runner.calls[0]?.oauthToken).toBe("secret-subscription-token");
+    expect(runner.calls[0]?.stdin).toBe(prompt);
     expect(runner.calls[0]?.args).toEqual(
       expect.arrayContaining([
         "--output-format",
@@ -95,6 +97,7 @@ describe("ClaudeCodeClient", () => {
         "--safe-mode",
       ]),
     );
+    expect(runner.calls[0]?.args).not.toContain(prompt);
     expect(runner.calls[0]?.args).not.toContain("secret-subscription-token");
   });
 });
@@ -106,15 +109,15 @@ interface FakeCommandResult {
 }
 
 class FakeCommandRunner implements ClaudeCodeCommandRunner {
-  readonly calls: Array<{ args: string[]; oauthToken: string; timeoutMs: number }> = [];
+  readonly calls: ClaudeCodeCommandInput[] = [];
   private readonly results: FakeCommandResult[];
 
   constructor(results: FakeCommandResult[]) {
     this.results = results;
   }
 
-  async run(args: string[], oauthToken: string, timeoutMs: number): Promise<FakeCommandResult> {
-    this.calls.push({ args, oauthToken, timeoutMs });
+  async run(input: ClaudeCodeCommandInput): Promise<FakeCommandResult> {
+    this.calls.push(input);
     return this.results.shift()!;
   }
 }
