@@ -219,12 +219,14 @@ export class ConnectServer {
 
     app.get("/api/runs", (context) => this.listRuns(context));
     app.get("/api/runs/:id", (context) => this.getRun(context, context.req.param("id")));
-    if (this.options.flows && this.options.flowRunner) {
+    if (this.options.flows) {
       app.get("/api/flows", (context) => this.listFlows(context));
       app.post("/api/flows", (context) => this.createFlow(context));
       app.get("/api/flows/:id", (context) => this.getFlow(context, context.req.param("id")));
       app.put("/api/flows/:id", (context) => this.updateFlow(context, context.req.param("id")));
       app.delete("/api/flows/:id", (context) => this.deleteFlow(context, context.req.param("id")));
+    }
+    if (this.options.flowRunner) {
       app.post("/api/flows/:id/runs", (context) => this.startFlowRun(context, context.req.param("id")));
       app.get("/api/flow-runs", (context) => this.listFlowRuns(context));
       app.get("/api/flow-runs/:id", (context) => this.getFlowRun(context, context.req.param("id")));

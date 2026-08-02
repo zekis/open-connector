@@ -110,4 +110,63 @@ describe("action execution OpenAPI", () => {
     expect(runLog.properties).toHaveProperty("policy");
     expect(runLog.properties).toHaveProperty("runtimeTokenId");
   });
+
+  it("documents authenticated Flow creation and complete replacement without accepting a model", () => {
+    const document = createOpenApiDocument([provider]);
+    const flowsPath = document.paths["/api/flows"] as {
+      post: {
+        description: string;
+        requestBody: { content: { "application/json": { schema: { $ref: string } } } };
+        responses: Record<string, unknown>;
+      };
+    };
+    const flowPath = document.paths["/api/flows/{id}"] as {
+      put: {
+        description: string;
+        parameters: Array<{ name: string; required: boolean }>;
+        requestBody: { content: { "application/json": { schema: { $ref: string } } } };
+        responses: Record<string, unknown>;
+      };
+    };
+    const input = document.components.schemas.FlowDefinitionInput as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    const agent = document.components.schemas.FlowAgentInput as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    const definition = document.components.schemas.FlowDefinition as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+
+    expect(flowsPath.post.requestBody.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/FlowDefinitionInput",
+    );
+    expect(flowsPath.post.responses["200"]).toBeDefined();
+    expect(flowsPath.post.responses["400"]).toBeDefined();
+    expect(flowsPath.post.responses["401"]).toBeDefined();
+    expect(flowsPath.post.description).toContain("local admin authentication");
+    expect(flowPath.put.requestBody.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/FlowDefinitionInput",
+    );
+    expect(flowPath.put.parameters).toContainEqual(expect.objectContaining({ name: "id", required: true }));
+    expect(flowPath.put.responses["404"]).toBeDefined();
+    expect(flowPath.put.description).toContain("Replaces all editable fields");
+    expect(input.required).toEqual(
+      expect.arrayContaining([
+        "name",
+        "sourceConnectionId",
+        "destinationConnectionId",
+        "instructions",
+        "agent",
+        "tools",
+      ]),
+    );
+    expect(input.properties).not.toHaveProperty("model");
+    expect(agent.required).toEqual(["connectionId"]);
+    expect(agent.properties).not.toHaveProperty("model");
+    expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
+  });
 });

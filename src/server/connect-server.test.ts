@@ -1,4 +1,4 @@
-import type { IConnectionStore, StoredConnection } from "../connection-service.ts";
+import type { ConnectionSummary, IConnectionStore, StoredConnection } from "../connection-service.ts";
 import type { ActionPolicyService } from "../core/action-policy.ts";
 import type { TokenPolicy } from "../core/action-policy.ts";
 import type { ActionSearchIndexProvider } from "../core/action-search.ts";
@@ -15,6 +15,14 @@ import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { AgentModelSource } from "./agents/agent-settings-service.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
+import type {
+  FlowApproval,
+  FlowApprovalStatus,
+  FlowDefinition,
+  FlowRun,
+  FlowStep,
+  IFlowStore,
+} from "./flows/flow-types.ts";
 import type { Logger } from "./logger.ts";
 import type {
   CompleteIdempotencyInput,
@@ -42,6 +50,7 @@ import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { TransitFileService } from "./files/transit-files.ts";
+import { FlowService } from "./flows/flow-service.ts";
 import { decodeRunLogCursor, encodeRunLogCursor } from "./storage/runtime-store.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 
@@ -2999,6 +3008,103 @@ describe("ConnectServer", () => {
     expect((await app.request("/api/runs?ok=maybe")).status).toBe(400);
     expect((await app.request(`/api/runs?actionId=${"a".repeat(257)}`)).status).toBe(400);
   });
+
+  it("creates and replaces Flow definitions through the authenticated admin API", async () => {
+    const flows = createTestFlowService();
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
+      auth: { adminToken: "local-token" },
+      flows,
+    }).createApp();
+    const authorization = "Bearer local-token";
+    const input = {
+      name: "Archive project messages",
+      status: "active",
+      sourceConnectionId: "source-connection",
+      destinationConnectionId: "destination-connection",
+      instructions: "Read new messages from the source and archive them in the destination.",
+      agent: {
+        provider: "claude_code",
+        connectionId: "claude-subscription",
+        reasoningEffort: "medium",
+      },
+      tools: [
+        {
+          actionId: "example.echo",
+          connectionId: "source-connection",
+          approval: "always_allow",
+        },
+      ],
+      maxSteps: 8,
+    };
+
+    const unauthorized = await app.request("/api/flows", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const createResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    expect(createResponse.status).toBe(200);
+    const created = (await createResponse.json()) as FlowDefinition;
+    expect(created).toMatchObject({
+      ...input,
+      agent: {
+        ...input.agent,
+        model: "opus",
+      },
+    });
+    expect(created.id).toBeTruthy();
+    expect(created.revision).toBeTruthy();
+
+    const updateInput = {
+      ...input,
+      name: "Archive priority project messages",
+      status: "paused",
+      instructions: "Archive only priority messages from the source in the destination.",
+      tools: [
+        {
+          ...input.tools[0],
+          approval: "require_approval",
+        },
+      ],
+      maxSteps: 12,
+    };
+    const updateResponse = await app.request(`/api/flows/${created.id}`, {
+      method: "PUT",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(updateInput),
+    });
+    expect(updateResponse.status).toBe(200);
+    const updated = (await updateResponse.json()) as FlowDefinition;
+    expect(updated).toMatchObject({
+      id: created.id,
+      name: updateInput.name,
+      status: "paused",
+      instructions: updateInput.instructions,
+      maxSteps: 12,
+      createdAt: created.createdAt,
+      agent: { model: "opus" },
+      tools: [{ approval: "require_approval" }],
+    });
+    expect(updated.revision).not.toBe(created.revision);
+
+    const listResponse = await app.request("/api/flows", { headers: { authorization } });
+    expect(listResponse.status).toBe(200);
+    await expect(listResponse.json()).resolves.toMatchObject([{ id: created.id, revision: updated.revision }]);
+
+    const invalidUpdate = await app.request(`/api/flows/${created.id}`, {
+      method: "PUT",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ ...updateInput, name: "" }),
+    });
+    expect(invalidUpdate.status).toBe(400);
+    await expect(invalidUpdate.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+  });
 });
 
 interface TestAuthOptions {
@@ -3014,6 +3120,7 @@ interface CreateTestServerOptions {
   providerLoader?: IProviderLoader;
   logger?: Logger;
   idempotency?: IIdempotencyStore;
+  flows?: FlowService;
   runtimeTokens?: RuntimeTokenService;
   runtimePolicyStore?: IRuntimePolicyStore;
   runs?: MemoryRunLogStore;
@@ -3072,6 +3179,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
       states: new MemoryOAuthStateStore(),
     }),
     actions: actionRunner,
+    flows: options.flows,
     idempotency,
     transitFiles,
     runtimeTokens,
@@ -3087,6 +3195,131 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     actionSearch: options.actionSearch,
     logger: options.logger,
   });
+}
+
+function createTestFlowService(): FlowService {
+  const catalog = createCatalogStore([{ ...apiKeyProvider, actions: [echoAction] }], {
+    executableActionIds: [echoAction.id],
+  });
+  const connections: ConnectionSummary[] = [
+    createFlowConnection("source-connection", "source"),
+    createFlowConnection("destination-connection", "destination"),
+  ];
+  return new FlowService({
+    catalog,
+    connections: {
+      async listConnections(): Promise<ConnectionSummary[]> {
+        return connections;
+      },
+    },
+    agents: {
+      async getSummaryById(id: string) {
+        return id === "claude-subscription"
+          ? {
+              id,
+              provider: "claude_code" as const,
+              authType: "subscription_oauth" as const,
+              configured: true as const,
+              displayName: "Claude subscription",
+            }
+          : undefined;
+      },
+    },
+    agentSettings: {
+      async get() {
+        return { provider: "claude_code" as const, model: "opus" };
+      },
+    },
+    store: new MemoryFlowStore(),
+  });
+}
+
+function createFlowConnection(id: string, connectionName: string): ConnectionSummary {
+  return {
+    id,
+    service: "example",
+    connectionName,
+    authType: "api_key",
+    configured: true,
+    virtual: false,
+    default: connectionName === "source",
+    profile: {
+      accountId: `${connectionName}-account`,
+      displayName: `${connectionName} connection`,
+      grantedScopes: [],
+    },
+  };
+}
+
+class MemoryFlowStore implements IFlowStore {
+  private readonly flows = new Map<string, FlowDefinition>();
+  private readonly runs = new Map<string, FlowRun>();
+  private readonly steps = new Map<string, FlowStep>();
+  private readonly approvals = new Map<string, FlowApproval>();
+
+  async setFlow(flow: FlowDefinition): Promise<void> {
+    this.flows.set(flow.id, flow);
+  }
+
+  async getFlow(id: string): Promise<FlowDefinition | undefined> {
+    return this.flows.get(id);
+  }
+
+  async listFlows(): Promise<FlowDefinition[]> {
+    return [...this.flows.values()];
+  }
+
+  async deleteFlow(id: string): Promise<boolean> {
+    return this.flows.delete(id);
+  }
+
+  async addRun(run: FlowRun): Promise<void> {
+    this.runs.set(run.id, run);
+  }
+
+  async updateRun(run: FlowRun): Promise<void> {
+    this.runs.set(run.id, run);
+  }
+
+  async getRun(id: string): Promise<FlowRun | undefined> {
+    return this.runs.get(id);
+  }
+
+  async listRuns(flowId?: string, limit = 100): Promise<FlowRun[]> {
+    return [...this.runs.values()].filter((run) => !flowId || run.flowId === flowId).slice(0, limit);
+  }
+
+  async addStep(step: FlowStep): Promise<void> {
+    this.steps.set(step.id, step);
+  }
+
+  async updateStep(step: FlowStep): Promise<void> {
+    this.steps.set(step.id, step);
+  }
+
+  async listSteps(runId: string): Promise<FlowStep[]> {
+    return [...this.steps.values()].filter((step) => step.runId === runId);
+  }
+
+  async addApproval(approval: FlowApproval): Promise<void> {
+    this.approvals.set(approval.id, approval);
+  }
+
+  async getApproval(id: string): Promise<FlowApproval | undefined> {
+    return this.approvals.get(id);
+  }
+
+  async listApprovals(status?: FlowApprovalStatus): Promise<FlowApproval[]> {
+    return [...this.approvals.values()].filter((approval) => !status || approval.status === status);
+  }
+
+  async updateApproval(approval: FlowApproval, expectedStatus: FlowApprovalStatus): Promise<boolean> {
+    if (this.approvals.get(approval.id)?.status !== expectedStatus) {
+      return false;
+    }
+    this.approvals.set(approval.id, approval);
+    return true;
+  }
 }
 
 class TestAgentModelSource implements AgentModelSource {

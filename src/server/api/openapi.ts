@@ -115,6 +115,13 @@ const actionIdParameter = {
   schema: jsonSchema.string({ description: "Action id, usually <service>.<name>." }),
 };
 
+const flowIdParameter = {
+  name: "id",
+  in: "path",
+  required: true,
+  schema: jsonSchema.uuid("Flow definition identifier."),
+};
+
 const idempotencyKeyParameter = {
   name: "Idempotency-Key",
   in: "header",
@@ -201,6 +208,8 @@ export function createOpenApiDocument(
       items: { $ref: "#/components/schemas/ConnectionSummary" },
     }),
     "/api/connections/{service}": createConnectionPath(),
+    "/api/flows": createFlowsPath(),
+    "/api/flows/{id}": createFlowPath(),
     "/api/oauth/configs": getOperation("OAuth", "List local OAuth client configurations.", {
       type: "array",
       items: { $ref: "#/components/schemas/OAuthClientConfigSummary" },
@@ -236,6 +245,7 @@ export function createOpenApiDocument(
       { name: "System", description: "Runtime health and server-level status." },
       { name: "Catalog", description: "Provider and action metadata used by users and agents." },
       { name: "Connections", description: "Local provider credentials and connection state." },
+      { name: "Flows", description: "Directional agent Flow definitions managed by the local admin API." },
       { name: "OAuth", description: "Local OAuth client configuration and authorization flow." },
       { name: "Access", description: "Runtime execution policy and bearer tokens for /v1 and MCP clients." },
       { name: "Files", description: "Local temporary file transit for provider actions." },
@@ -328,6 +338,11 @@ export function createOpenApiDocument(
             description: "Local provider connection summary.",
           },
         ),
+        FlowToolGrant: createFlowToolGrantSchema(),
+        FlowAgentInput: createFlowAgentInputSchema(),
+        FlowDefinitionInput: createFlowDefinitionInputSchema(),
+        FlowAgentConfig: createFlowAgentConfigSchema(),
+        FlowDefinition: createFlowDefinitionSchema(),
         ErrorResponse: errorResponseSchema,
         ConnectionUpsertRequest: createConnectionUpsertRequestSchema(),
         OAuthClientConfigSummary: jsonSchema.object(
@@ -497,6 +512,207 @@ export function createOpenApiDocument(
         ),
       },
     },
+  };
+}
+
+function createFlowsPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Flows"],
+      summary: "List Flow definitions.",
+      description: "Lists every locally configured Flow. Requires local admin authentication when configured.",
+      responses: {
+        200: jsonResponse(jsonSchema.array({ $ref: "#/components/schemas/FlowDefinition" })),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+    post: {
+      tags: ["Flows"],
+      summary: "Create a Flow definition.",
+      description:
+        "Creates one directional Flow between two connector connections. The agent model is selected globally on the Agents page and is not accepted in this request. Requires local admin authentication when configured.",
+      requestBody: flowDefinitionRequestBody(),
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }, "Created Flow definition."),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createFlowPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Flows"],
+      summary: "Get a Flow definition.",
+      parameters: [flowIdParameter],
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+    put: {
+      tags: ["Flows"],
+      summary: "Replace a Flow definition.",
+      description:
+        "Replaces all editable fields on an existing Flow and creates a new revision. The id and creation timestamp remain unchanged. The agent model is selected globally on the Agents page and is not accepted in this request. Requires local admin authentication when configured.",
+      parameters: [flowIdParameter],
+      requestBody: flowDefinitionRequestBody(),
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }, "Updated Flow definition."),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+    delete: {
+      tags: ["Flows"],
+      summary: "Delete a Flow definition.",
+      parameters: [flowIdParameter],
+      responses: {
+        200: jsonResponse(
+          jsonSchema.object(
+            {
+              id: jsonSchema.uuid("Deleted Flow definition identifier."),
+              deleted: jsonSchema.literal(true, { description: "Whether the Flow was deleted." }),
+            },
+            { required: ["id", "deleted"], description: "Deleted Flow definition result." },
+          ),
+        ),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function flowDefinitionRequestBody(): Record<string, unknown> {
+  return {
+    required: true,
+    content: {
+      "application/json": {
+        schema: { $ref: "#/components/schemas/FlowDefinitionInput" },
+      },
+    },
+  };
+}
+
+function createFlowToolGrantSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      actionId: jsonSchema.nonWhitespaceString("Catalog action granted to the Flow agent.", { maxLength: 200 }),
+      connectionId: jsonSchema.nonWhitespaceString("Source or destination connection used by the action.", {
+        maxLength: 200,
+      }),
+      approval: jsonSchema.stringEnum("Permission mode applied whenever the Flow agent requests this action.", [
+        "always_allow",
+        "require_approval",
+      ]),
+    },
+    {
+      required: ["actionId", "connectionId", "approval"],
+      description: "One action permission granted to the Flow agent.",
+    },
+  );
+}
+
+function createFlowAgentInputSchema(): JsonSchema {
+  return jsonSchema.object(flowAgentProperties(), {
+    required: ["connectionId"],
+    description:
+      "Claude Code subscription used by the Flow. Model selection belongs to the Agents configuration and is intentionally absent.",
+  });
+}
+
+function createFlowAgentConfigSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      ...flowAgentProperties(),
+      model: jsonSchema.nonWhitespaceString(
+        "Anthropic model captured from the Agents configuration when this Flow revision was saved.",
+        { maxLength: 200 },
+      ),
+    },
+    {
+      required: ["connectionId", "model", "reasoningEffort"],
+      description: "Resolved agent configuration stored with a Flow definition.",
+    },
+  );
+}
+
+function flowAgentProperties(): Record<string, JsonSchema> {
+  return {
+    provider: jsonSchema.literal("claude_code", {
+      description: "Agent runtime provider. Defaults to claude_code when omitted.",
+    }),
+    connectionId: jsonSchema.nonWhitespaceString("Configured Claude subscription connection identifier.", {
+      maxLength: 200,
+    }),
+    reasoningEffort: jsonSchema.stringEnum("Reasoning effort for agent turns. Defaults to medium when omitted.", [
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]),
+  };
+}
+
+function createFlowDefinitionInputSchema(): JsonSchema {
+  return jsonSchema.object(flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentInput" }), {
+    required: ["name", "sourceConnectionId", "destinationConnectionId", "instructions", "agent", "tools"],
+    description:
+      "Complete set of editable Flow fields. POST creates a Flow and PUT replaces the editable fields of an existing Flow.",
+  });
+}
+
+function createFlowDefinitionSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      id: jsonSchema.uuid("Stable Flow definition identifier."),
+      revision: jsonSchema.uuid("Revision identifier regenerated after every update."),
+      ...flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentConfig" }),
+      createdAt: jsonSchema.dateTime("Flow creation timestamp."),
+      updatedAt: jsonSchema.dateTime("Latest Flow update timestamp."),
+    },
+    {
+      required: [
+        "id",
+        "revision",
+        "name",
+        "status",
+        "sourceConnectionId",
+        "destinationConnectionId",
+        "instructions",
+        "agent",
+        "tools",
+        "maxSteps",
+        "createdAt",
+        "updatedAt",
+      ],
+      description: "Durable directional Flow definition returned by the local admin API.",
+    },
+  );
+}
+
+function flowDefinitionProperties(agent: JsonSchema): Record<string, JsonSchema> {
+  return {
+    name: jsonSchema.nonWhitespaceString("User-facing Flow name.", { maxLength: 120 }),
+    status: jsonSchema.stringEnum("Flow availability. Defaults to active when omitted.", ["active", "paused"]),
+    sourceConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow reads from.", { maxLength: 200 }),
+    destinationConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow writes to.", {
+      maxLength: 200,
+    }),
+    instructions: jsonSchema.nonWhitespaceString("Instructions given to the Flow agent.", { maxLength: 20_000 }),
+    agent,
+    tools: jsonSchema.array({ $ref: "#/components/schemas/FlowToolGrant" }, { minItems: 1, maxItems: 32 }),
+    maxSteps: jsonSchema.integer({
+      minimum: 1,
+      maximum: 20,
+      default: 8,
+      description: "Maximum agent turns for one Flow run. Defaults to 8 when omitted.",
+    }),
   };
 }
 

@@ -44,7 +44,22 @@ const editorData: AppData = {
       authTypes: ["oauth2"],
       auth: [{ type: "oauth2", scopes: [] }],
       iconUrl: "https://example.com/outlook.svg",
-      actions: [],
+      actions: [
+        {
+          id: "outlook.search_emails",
+          service: "outlook",
+          name: "Search emails",
+          description: "Search Outlook messages.",
+          requiredScopes: [],
+          execution: {
+            locallyExecutable: true,
+            catalogOnly: false,
+            requiredAuthTypes: ["oauth2"],
+            noAuthRunnable: false,
+            needsCredential: true,
+          },
+        },
+      ],
     },
     {
       service: "sharepoint",
@@ -53,7 +68,22 @@ const editorData: AppData = {
       authTypes: ["oauth2"],
       auth: [{ type: "oauth2", scopes: [] }],
       iconUrl: "https://example.com/sharepoint.svg",
-      actions: [],
+      actions: [
+        {
+          id: "sharepoint.create_file",
+          service: "sharepoint",
+          name: "Create file",
+          description: "Create a SharePoint file.",
+          requiredScopes: [],
+          execution: {
+            locallyExecutable: true,
+            catalogOnly: false,
+            requiredAuthTypes: ["oauth2"],
+            noAuthRunnable: false,
+            needsCredential: true,
+          },
+        },
+      ],
     },
   ],
   connections: [
@@ -127,6 +157,26 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain("flow-direction-track");
     expect(html).toContain("https://example.com/outlook.svg");
     expect(html).toContain("https://example.com/sharepoint.svg");
+    expect(html).toContain('aria-label="Choose source connector"');
+    expect(html).toContain('aria-label="Choose destination connector"');
+  });
+
+  it("groups permissions under their source and destination connectors", () => {
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route path="/flows/:flowId/edit" element={<FlowBuilderPage data={editorData} onRefresh={() => {}} />} />,
+    );
+
+    const sourceIndex = html.indexOf("Source permissions");
+    const sourceActionIndex = html.indexOf("Search emails");
+    const destinationIndex = html.indexOf("Destination permissions");
+    const destinationActionIndex = html.indexOf("Create file");
+    expect(sourceIndex).toBeGreaterThan(-1);
+    expect(sourceIndex).toBeLessThan(sourceActionIndex);
+    expect(sourceActionIndex).toBeLessThan(destinationIndex);
+    expect(destinationIndex).toBeLessThan(destinationActionIndex);
+    expect(html).toContain("1/1 allowed");
+    expect(html).toContain("0/1 allowed");
   });
 });
 

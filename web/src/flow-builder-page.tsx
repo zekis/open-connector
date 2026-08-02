@@ -1,3 +1,4 @@
+import type { FlowToolPermissionChoice } from "./flow-tool-permission-group";
 import type {
   AppData,
   ConnectionRecord,
@@ -12,6 +13,8 @@ import { ArrowLeft, ArrowRight, Cable, Workflow } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { apiPost, apiPut } from "./api";
+import { FlowConnectionPicker, flowConnectionDisplayName } from "./flow-connection-picker";
+import { FlowToolPermissionGroup } from "./flow-tool-permission-group";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,16 +24,6 @@ import { Textarea } from "@/components/ui/textarea";
 interface FlowBuilderPageProps {
   data: AppData;
   onRefresh(): void;
-}
-
-interface ToolChoice {
-  key: string;
-  connectionId: string;
-  connectionLabel: string;
-  role: "source" | "destination";
-  actionId: string;
-  actionName: string;
-  actionDescription: string;
 }
 
 interface AgentChoice {
@@ -131,6 +124,26 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const destinationProvider = props.data.providers.find(
     (provider) => provider.service === destinationConnection?.service,
   );
+  const sourceChoices = choices.filter((choice) => choice.role === "source");
+  const destinationChoices = choices.filter((choice) => choice.role === "destination");
+  const visibleSourceChoices = visibleChoices.filter((choice) => choice.role === "source");
+  const visibleDestinationChoices = visibleChoices.filter((choice) => choice.role === "destination");
+
+  function toggleTool(key: string, enabled: boolean): void {
+    setSelectedTools((current) => {
+      const next = { ...current };
+      if (enabled) {
+        next[key] = "require_approval";
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }
+
+  function changeApproval(key: string, approval: FlowApprovalMode): void {
+    setSelectedTools((current) => ({ ...current, [key]: approval }));
+  }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -209,6 +222,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               connection={sourceConnection}
               provider={sourceProvider}
               connections={connections}
+              providers={props.data.providers}
               onChange={setSourceId}
             />
             <FlowDirection label="Read" />
@@ -242,6 +256,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               connection={destinationConnection}
               provider={destinationProvider}
               connections={connections}
+              providers={props.data.providers}
               onChange={setDestinationId}
             />
           </div>
@@ -265,8 +280,8 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
           </div>
           <div className="flow-tools-heading">
             <div>
-              <strong>Allowed tools</strong>
-              <p>Always allow safe reads; require approval for writes or deletions.</p>
+              <strong>Connector permissions</strong>
+              <p>Choose what the agent can do through each side of the Flow.</p>
             </div>
             <Input
               value={toolSearch}
@@ -274,54 +289,27 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               onChange={(event) => setToolSearch(event.target.value)}
             />
           </div>
-          <div className="flow-tool-list">
-            {visibleChoices.length === 0 ? (
-              <p className="muted-copy">No executable actions match these endpoints.</p>
-            ) : (
-              visibleChoices.map((choice) => {
-                const approval = selectedTools[choice.key];
-                return (
-                  <label className="flow-tool-row" key={choice.key}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(approval)}
-                      onChange={(event) =>
-                        setSelectedTools((current) => {
-                          const next = { ...current };
-                          if (event.target.checked) {
-                            next[choice.key] = "require_approval";
-                          } else {
-                            delete next[choice.key];
-                          }
-                          return next;
-                        })
-                      }
-                    />
-                    <span className="flow-tool-main">
-                      <strong>{choice.actionName}</strong>
-                      <small>
-                        {choice.role} · {choice.connectionLabel} · {choice.actionId}
-                      </small>
-                    </span>
-                    <select
-                      className="flow-native-select"
-                      aria-label={`Approval policy for ${choice.actionName}`}
-                      value={approval ?? "require_approval"}
-                      disabled={!approval}
-                      onChange={(event) =>
-                        setSelectedTools((current) => ({
-                          ...current,
-                          [choice.key]: event.target.value as FlowApprovalMode,
-                        }))
-                      }
-                    >
-                      <option value="require_approval">Require approval</option>
-                      <option value="always_allow">Always allow</option>
-                    </select>
-                  </label>
-                );
-              })
-            )}
+          <div className="flow-permission-groups">
+            <FlowToolPermissionGroup
+              role="source"
+              connection={sourceConnection}
+              provider={sourceProvider}
+              choices={sourceChoices}
+              visibleChoices={visibleSourceChoices}
+              selectedTools={selectedTools}
+              onToggle={toggleTool}
+              onApprovalChange={changeApproval}
+            />
+            <FlowToolPermissionGroup
+              role="destination"
+              connection={destinationConnection}
+              provider={destinationProvider}
+              choices={destinationChoices}
+              visibleChoices={visibleDestinationChoices}
+              selectedTools={selectedTools}
+              onToggle={toggleTool}
+              onApprovalChange={changeApproval}
+            />
           </div>
           <div className="button-row">
             <Button
@@ -330,6 +318,8 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
                 saving ||
                 connections.length < 2 ||
                 !agentConnectionId ||
+                !sourceId ||
+                !destinationId ||
                 sourceId === destinationId ||
                 grants.length === 0
               }
@@ -353,6 +343,7 @@ function ConnectionNode(props: {
   connection: (ConnectionRecord & { id: string }) | undefined;
   provider: ProviderDefinition | undefined;
   connections: Array<ConnectionRecord & { id: string }>;
+  providers: ProviderDefinition[];
   onChange(value: string): void;
 }): ReactNode {
   const title = props.role === "source" ? "Source connector" : "Destination connector";
@@ -368,16 +359,20 @@ function ConnectionNode(props: {
         )}
         <div>
           <span>{title}</span>
-          <strong>{props.connection ? connectionDisplayName(props.connection) : "Choose a connection"}</strong>
+          <strong>{props.connection ? flowConnectionDisplayName(props.connection) : "Choose a connection"}</strong>
           <small>{props.provider?.displayName ?? "Connected application"}</small>
         </div>
       </div>
-      <ConnectionSelect
-        label="Connection"
-        value={props.value}
-        connections={props.connections}
-        onChange={props.onChange}
-      />
+      <div className="field">
+        <span>Connection</span>
+        <FlowConnectionPicker
+          role={props.role}
+          value={props.value}
+          connections={props.connections}
+          providers={props.providers}
+          onChange={props.onChange}
+        />
+      </div>
     </section>
   );
 }
@@ -419,40 +414,18 @@ function AgentSelect(props: { value: string; choices: AgentChoice[]; onChange(ch
   );
 }
 
-function ConnectionSelect(props: {
-  label: string;
-  value: string;
-  connections: Array<ConnectionRecord & { id: string }>;
-  onChange(value: string): void;
-}): ReactNode {
-  return (
-    <Label className="field">
-      <span>{props.label}</span>
-      <select
-        className="flow-native-select flow-connection-select"
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        required
-      >
-        <option value="">Choose a connection</option>
-        {props.connections.map((connection) => (
-          <option key={connection.id} value={connection.id}>
-            {connectionLabel(connection)}
-          </option>
-        ))}
-      </select>
-    </Label>
-  );
-}
-
-function createToolChoices(data: AppData, sourceId: string, destinationId: string): ToolChoice[] {
+function createToolChoices(data: AppData, sourceId: string, destinationId: string): FlowToolPermissionChoice[] {
   return [
     ...choicesForConnection(data, sourceId, "source"),
     ...choicesForConnection(data, destinationId, "destination"),
   ];
 }
 
-function choicesForConnection(data: AppData, connectionId: string, role: "source" | "destination"): ToolChoice[] {
+function choicesForConnection(
+  data: AppData,
+  connectionId: string,
+  role: "source" | "destination",
+): FlowToolPermissionChoice[] {
   const connection = data.connections.find((item) => item.id === connectionId);
   const provider = data.providers.find((item) => item.service === connection?.service);
   if (!connection || !provider) {
@@ -463,23 +436,9 @@ function choicesForConnection(data: AppData, connectionId: string, role: "source
     .map((action) => ({
       key: `${connectionId}\0${action.id}`,
       connectionId,
-      connectionLabel: connectionLabel(connection),
       role,
       actionId: action.id,
       actionName: action.name,
       actionDescription: action.description,
     }));
-}
-
-function connectionLabel(connection: ConnectionRecord): string {
-  const displayName = connectionDisplayName(connection);
-  return displayName ? `${displayName} · ${connection.service}` : connection.service;
-}
-
-function connectionDisplayName(connection: ConnectionRecord): string {
-  return connection.profile &&
-    typeof connection.profile.displayName === "string" &&
-    connection.profile.displayName.trim()
-    ? connection.profile.displayName
-    : connection.connectionName || connection.service;
 }
