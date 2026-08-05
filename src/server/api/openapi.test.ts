@@ -140,6 +140,10 @@ describe("action execution OpenAPI", () => {
       required: string[];
       properties: Record<string, unknown>;
     };
+    const trigger = document.components.schemas.FlowTrigger as { oneOf: unknown[] };
+    const triggerPath = document.paths["/v1/flows/{id}/trigger"] as {
+      post: { description: string; responses: Record<string, unknown> };
+    };
 
     expect(flowsPath.post.requestBody.content["application/json"].schema.$ref).toBe(
       "#/components/schemas/FlowDefinitionInput",
@@ -168,6 +172,46 @@ describe("action execution OpenAPI", () => {
     expect(agent.required).toEqual(["connectionId"]);
     expect(agent.properties).not.toHaveProperty("model");
     expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
+    expect(definition.required).toContain("trigger");
+    expect(input.properties).toHaveProperty("trigger");
+    expect(trigger.oneOf).toHaveLength(5);
+    expect(triggerPath.post.description).toContain("runtime bearer token");
+    expect(triggerPath.post.responses["200"]).toBeDefined();
+    expect(triggerPath.post.responses["401"]).toBeDefined();
+  });
+
+  it("documents connector-wide defaults, Flow overrides, and one-time approval retries", () => {
+    const document = createOpenApiDocument([provider]);
+    const permissionsPath = document.paths["/api/connection-permissions/{connectionId}"] as {
+      put: { description: string; responses: Record<string, unknown> };
+    };
+    const approvalsPath = document.paths["/api/action-approvals"] as {
+      get: { responses: Record<string, unknown> };
+    };
+    const approvePath = document.paths["/api/action-approvals/{id}/approve"] as {
+      post: { description: string; responses: Record<string, unknown> };
+    };
+    const flowGrant = document.components.schemas.FlowToolGrant as {
+      description: string;
+      properties: { approval: { enum: string[] } };
+    };
+    const actionApproval = document.components.schemas.ActionApproval as {
+      description: string;
+      properties: Record<string, unknown>;
+    };
+
+    expect(permissionsPath.put.description).toContain("Chat, runtime API, MCP, and console requests");
+    expect(permissionsPath.put.description).toContain("Flow explicitly overrides");
+    expect(permissionsPath.put.responses).toEqual(
+      expect.objectContaining({ 200: expect.anything(), 400: expect.anything(), 404: expect.anything() }),
+    );
+    expect(approvalsPath.get.responses["200"]).toBeDefined();
+    expect(approvePath.post.description).toContain("one identical retry");
+    expect(approvePath.post.description).toContain("does not execute");
+    expect(flowGrant.properties.approval.enum).toEqual(["inherit", "always_allow", "require_approval"]);
+    expect(flowGrant.description).toContain("override");
+    expect(actionApproval.description).toContain("15 minutes");
+    expect(actionApproval.properties).not.toHaveProperty("requestHash");
   });
 
   it("documents authenticated agent Chat with bounded stateless history and connector activity", () => {

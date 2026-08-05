@@ -1,6 +1,7 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
 import type { ActionDefinition, ActionExecutor, ProviderDefinition, ResolvedCredential } from "../../core/types.ts";
 import type { IProviderLoader } from "../../providers/provider-loader.ts";
+import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { Logger } from "../logger.ts";
 import type { IRunLogStore, RunLog, RunLogListInput, RunLogPage } from "../storage/runtime-store.ts";
 
@@ -148,6 +149,68 @@ describe("ActionRunner", () => {
       },
     });
   });
+
+  it("blocks globally gated actions before loading an executor and exposes the approval id", async () => {
+    const runs = new MemoryRunLogStore();
+    const { logger } = createTestLogger();
+    const providerLoader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
+    const loadExecutor = vi.spyOn(providerLoader, "loadActionExecutor");
+    const requestAction = vi.fn().mockResolvedValue({
+      allowed: false,
+      approval: {
+        id: "approval-1",
+        status: "pending",
+        actionId: echoAction.id,
+        connectionId: "example:default",
+        caller: "chat",
+        input: { message: "hello" },
+        requestHash: "hash-1",
+        requestedAt: "2026-08-05T00:00:00.000Z",
+      },
+    });
+    const runner = createRunner({ runs, logger, providerLoader, approvals: { requestAction } });
+
+    const run = await runner.run({
+      actionId: echoAction.id,
+      input: { message: "hello" },
+      caller: "chat",
+    });
+
+    expect(run?.result).toEqual({
+      ok: false,
+      error: {
+        code: "approval_required",
+        message: "Approval is required before example.echo can run on Example Public.",
+        details: {
+          approvalId: "approval-1",
+          actionId: echoAction.id,
+          connectionId: "example:default",
+        },
+      },
+    });
+    expect(requestAction).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: echoAction.id, caller: "chat", input: { message: "hello" } }),
+    );
+    expect(loadExecutor).not.toHaveBeenCalled();
+    expect(runs.items[0]).toMatchObject({ ok: false, errorCode: "approval_required" });
+  });
+
+  it("bypasses the shared connector gate for callers that enforce approval themselves", async () => {
+    const runs = new MemoryRunLogStore();
+    const { logger } = createTestLogger();
+    const requestAction = vi.fn();
+    const runner = createRunner({ runs, logger, approvals: { requestAction } });
+
+    const run = await runner.run({
+      actionId: echoAction.id,
+      input: {},
+      caller: "flow",
+      approvalPolicy: "bypass",
+    });
+
+    expect(run?.result).toEqual({ ok: true, output: { message: "ok" } });
+    expect(requestAction).not.toHaveBeenCalled();
+  });
 });
 
 function createRunner(options: {
@@ -155,6 +218,7 @@ function createRunner(options: {
   logger: Logger;
   providerLoader?: IProviderLoader;
   actionPolicy?: ActionPolicyService;
+  approvals?: Pick<ConnectionApprovalService, "requestAction">;
 }): ActionRunner {
   const catalog = createCatalogStore([exampleProvider], { executableActionIds: [echoAction.id] });
   const providerLoader =
@@ -165,6 +229,7 @@ function createRunner(options: {
     connections: new ConnectionService({ catalog, providerLoader, store: new MemoryConnectionStore() }),
     runs: options.runs,
     actionPolicy: options.actionPolicy,
+    approvals: options.approvals,
     logger: options.logger,
   });
 }

@@ -15,17 +15,27 @@ import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { AgentModelSource } from "./agents/agent-settings-service.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
+import type {
+  ActionApproval,
+  ActionApprovalStatus,
+  ConnectionActionPermission,
+  IConnectionApprovalStore,
+} from "./approvals/connection-approval-types.ts";
 import type { AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
+import type { FlowRunDetail } from "./flows/flow-runner.ts";
+import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type {
   FlowApproval,
   FlowApprovalStatus,
   FlowDefinition,
   FlowRun,
   FlowStep,
+  FlowTriggerState,
   IFlowStore,
 } from "./flows/flow-types.ts";
 import type { Logger } from "./logger.ts";
 import type {
+  AbandonIdempotencyInput,
   CompleteIdempotencyInput,
   IdempotencyClaimInput,
   IdempotencyClaimResult,
@@ -49,6 +59,7 @@ import { actionInputMaxDepth, hashActionRequest, hashIdempotencyKey } from "./ac
 import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
+import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { FlowService } from "./flows/flow-service.ts";
@@ -2341,6 +2352,80 @@ describe("ConnectServer", () => {
     expect((await runs.list()).items).toHaveLength(3);
   });
 
+  it("enforces connector-wide approvals and releases idempotency claims for the approved retry", async () => {
+    let executions = 0;
+    const approvalStore = new MemoryConnectionApprovalStore();
+    const providerLoader = new ActionProviderLoader(async (input, context) => {
+      executions += 1;
+      await context.getCredential("example");
+      return { ok: true, output: input };
+    });
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
+      providerLoader,
+      connectionApprovalStore: approvalStore,
+    }).createApp();
+    const connectedResponse = await app.request("/api/connections/example", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ authType: "api_key", values: { apiKey: "example-key" } }),
+    });
+    const connected = (await connectedResponse.json()) as ConnectionSummary;
+    const permissionsResponse = await app.request(`/api/connection-permissions/${connected.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        permissions: [{ actionId: echoAction.id, approval: "require_approval" }],
+      }),
+    });
+    expect(permissionsResponse.status).toBe(200);
+    const listedPermissions = await app.request(`/api/connection-permissions?connectionId=${connected.id}`);
+    await expect(listedPermissions.json()).resolves.toMatchObject([
+      { actionId: echoAction.id, approval: "require_approval" },
+    ]);
+
+    const request = (idempotencyKey: string) =>
+      app.request("/v1/actions/example.echo", {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": idempotencyKey },
+        body: JSON.stringify({ input: { message: "hello" } }),
+      });
+    const pendingResponse = await request("approved-request");
+    expect(pendingResponse.status).toBe(409);
+    const pendingBody = (await pendingResponse.json()) as {
+      errorCode: string;
+      data: { approvalId: string };
+    };
+    expect(pendingBody).toMatchObject({ errorCode: "approval_required" });
+    expect(executions).toBe(0);
+
+    const listedResponse = await app.request("/api/action-approvals");
+    const listed = (await listedResponse.json()) as ActionApproval[];
+    expect(listed).toEqual([
+      expect.objectContaining({
+        id: pendingBody.data.approvalId,
+        status: "pending",
+        actionId: echoAction.id,
+        caller: "http",
+        input: { message: "hello" },
+      }),
+    ]);
+    expect(JSON.stringify(listed)).not.toContain("requestHash");
+    const approved = await app.request(`/api/action-approvals/${pendingBody.data.approvalId}/approve`, {
+      method: "POST",
+    });
+    expect(approved.status).toBe(200);
+    await expect(approved.json()).resolves.toMatchObject({ status: "approved" });
+
+    const completed = await request("approved-request");
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ success: true, data: { message: "hello" } });
+    expect(executions).toBe(1);
+
+    const nextPending = await request("new-request");
+    expect(nextPending.status).toBe(409);
+    expect(executions).toBe(1);
+  });
+
   it("rejects idempotency keys reused for another input, connection, or action", async () => {
     let executions = 0;
     const providerLoader = new ActionProviderLoader(async (input, context) => {
@@ -3069,7 +3154,7 @@ describe("ConnectServer", () => {
         {
           actionId: "example.echo",
           connectionId: "source-connection",
-          approval: "always_allow",
+          approval: "inherit",
         },
       ],
       maxSteps: 8,
@@ -3091,6 +3176,7 @@ describe("ConnectServer", () => {
     const created = (await createResponse.json()) as FlowDefinition;
     expect(created).toMatchObject({
       ...input,
+      trigger: { type: "manual" },
       agent: {
         ...input.agent,
         model: "opus",
@@ -3104,6 +3190,7 @@ describe("ConnectServer", () => {
       name: "Archive priority project messages",
       status: "paused",
       instructions: "Archive only priority messages from the source in the destination.",
+      trigger: { type: "schedule", cron: "0 9 * * 1-5", timeZone: "Australia/Perth" },
       tools: [
         {
           ...input.tools[0],
@@ -3125,6 +3212,7 @@ describe("ConnectServer", () => {
       status: "paused",
       instructions: updateInput.instructions,
       maxSteps: 12,
+      trigger: updateInput.trigger,
       createdAt: created.createdAt,
       agent: { model: "opus" },
       tools: [{ approval: "require_approval" }],
@@ -3142,6 +3230,73 @@ describe("ConnectServer", () => {
     });
     expect(invalidUpdate.status).toBe(400);
     await expect(invalidUpdate.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+
+    const invalidSchedule = await app.request(`/api/flows/${created.id}`, {
+      method: "PUT",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ ...updateInput, trigger: { type: "schedule", cron: "bad", timeZone: "UTC" } }),
+    });
+    expect(invalidSchedule.status).toBe(400);
+    await expect(invalidSchedule.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+  });
+
+  it("starts API-triggered Flows through runtime authentication", async () => {
+    const calls: Array<{ flowId: string; payload: unknown }> = [];
+    const flowTriggers: Pick<FlowTriggerEngine, "triggerApi"> = {
+      async triggerApi(flowId: string, payload: unknown): Promise<FlowRunDetail> {
+        calls.push({ flowId, payload });
+        const flow = createApiTriggeredFlow(flowId);
+        return {
+          run: {
+            id: "flow-run-1",
+            flowId,
+            flowRevision: flow.revision,
+            flowSnapshot: flow,
+            trigger: "api",
+            triggerEvent: { type: "api", occurredAt: "2026-08-05T01:00:00.000Z", payload },
+            status: "completed",
+            stepCount: 0,
+            startedAt: "2026-08-05T01:00:00.000Z",
+            updatedAt: "2026-08-05T01:00:00.000Z",
+          },
+          steps: [],
+          approvals: [],
+        };
+      },
+    };
+    const app = createTestServer([apiKeyProvider], {
+      auth: { runtimeToken: "runtime-token" },
+      flowTriggers,
+    }).createApp();
+
+    expect(
+      (
+        await app.request("/v1/flows/flow-1/trigger", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ itemId: 42 }),
+        })
+      ).status,
+    ).toBe(401);
+    const response = await app.request("/v1/flows/flow-1/trigger", {
+      method: "POST",
+      headers: { authorization: "Bearer runtime-token", "content-type": "application/json" },
+      body: JSON.stringify({ itemId: 42 }),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      data: { run: { id: "flow-run-1", trigger: "api" } },
+      meta: { flowId: "flow-1", flowRunId: "flow-run-1" },
+    });
+    expect(calls).toEqual([{ flowId: "flow-1", payload: { itemId: 42 } }]);
+
+    const invalid = await app.request("/v1/flows/flow-1/trigger", {
+      method: "POST",
+      headers: { authorization: "Bearer runtime-token", "content-type": "application/json" },
+      body: JSON.stringify(["not", "an", "object"]),
+    });
+    expect(invalid.status).toBe(400);
   });
 });
 
@@ -3160,11 +3315,13 @@ interface CreateTestServerOptions {
   logger?: Logger;
   idempotency?: IIdempotencyStore;
   flows?: FlowService;
+  flowTriggers?: Pick<FlowTriggerEngine, "triggerApi">;
   runtimeTokens?: RuntimeTokenService;
   runtimePolicyStore?: IRuntimePolicyStore;
   runs?: MemoryRunLogStore;
   staticRoot?: string | false;
   transitFiles?: TransitFileService;
+  connectionApprovalStore?: IConnectionApprovalStore;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -3181,6 +3338,9 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     providerLoader,
     store: connectionStore,
   });
+  const connectionApprovals = options.connectionApprovalStore
+    ? new ConnectionApprovalService({ catalog, connections, store: options.connectionApprovalStore })
+    : undefined;
   const clientConfigs = new OAuthClientConfigService({
     catalog,
     origin: "http://localhost:3000",
@@ -3202,6 +3362,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     runs,
     transitFiles,
     actionPolicy: options.actionPolicy,
+    approvals: connectionApprovals,
     logger: options.logger,
   });
   const staticRoot = typeof options.staticRoot === "string" ? options.staticRoot : undefined;
@@ -3220,6 +3381,8 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     }),
     actions: actionRunner,
     flows: options.flows,
+    flowTriggers: options.flowTriggers,
+    connectionApprovals,
     idempotency,
     transitFiles,
     runtimeTokens,
@@ -3291,11 +3454,35 @@ function createFlowConnection(id: string, connectionName: string): ConnectionSum
   };
 }
 
+function createApiTriggeredFlow(id: string): FlowDefinition {
+  return {
+    id,
+    revision: "revision-1",
+    name: "API Flow",
+    status: "active",
+    sourceConnectionId: "source-connection",
+    destinationConnectionId: "destination-connection",
+    instructions: "Process the API event.",
+    trigger: { type: "api" },
+    agent: {
+      provider: "claude_code",
+      connectionId: "claude-subscription",
+      model: "opus",
+      reasoningEffort: "medium",
+    },
+    tools: [],
+    maxSteps: 8,
+    createdAt: "2026-08-05T00:00:00.000Z",
+    updatedAt: "2026-08-05T00:00:00.000Z",
+  };
+}
+
 class MemoryFlowStore implements IFlowStore {
   private readonly flows = new Map<string, FlowDefinition>();
   private readonly runs = new Map<string, FlowRun>();
   private readonly steps = new Map<string, FlowStep>();
   private readonly approvals = new Map<string, FlowApproval>();
+  private readonly triggerStates = new Map<string, FlowTriggerState>();
 
   async setFlow(flow: FlowDefinition): Promise<void> {
     this.flows.set(flow.id, flow);
@@ -3310,7 +3497,20 @@ class MemoryFlowStore implements IFlowStore {
   }
 
   async deleteFlow(id: string): Promise<boolean> {
+    this.triggerStates.delete(id);
     return this.flows.delete(id);
+  }
+
+  async setTriggerState(state: FlowTriggerState): Promise<void> {
+    this.triggerStates.set(state.flowId, state);
+  }
+
+  async getTriggerState(flowId: string): Promise<FlowTriggerState | undefined> {
+    return this.triggerStates.get(flowId);
+  }
+
+  async deleteTriggerState(flowId: string): Promise<void> {
+    this.triggerStates.delete(flowId);
   }
 
   async addRun(run: FlowRun): Promise<void> {
@@ -3653,6 +3853,64 @@ class MemoryRuntimePolicyStore implements IRuntimePolicyStore {
   }
 }
 
+class MemoryConnectionApprovalStore implements IConnectionApprovalStore {
+  private permissions: ConnectionActionPermission[] = [];
+  private readonly approvals = new Map<string, ActionApproval>();
+
+  async replacePermissions(connectionId: string, permissions: ConnectionActionPermission[]): Promise<void> {
+    this.permissions = [
+      ...this.permissions.filter((permission) => permission.connectionId !== connectionId),
+      ...structuredClone(permissions),
+    ];
+  }
+
+  async listPermissions(connectionId?: string): Promise<ConnectionActionPermission[]> {
+    return structuredClone(
+      connectionId
+        ? this.permissions.filter((permission) => permission.connectionId === connectionId)
+        : this.permissions,
+    );
+  }
+
+  async getPermission(connectionId: string, actionId: string): Promise<ConnectionActionPermission | undefined> {
+    return structuredClone(
+      this.permissions.find(
+        (permission) => permission.connectionId === connectionId && permission.actionId === actionId,
+      ),
+    );
+  }
+
+  async addActionApproval(approval: ActionApproval): Promise<void> {
+    this.approvals.set(approval.id, structuredClone(approval));
+  }
+
+  async getActionApproval(id: string): Promise<ActionApproval | undefined> {
+    return structuredClone(this.approvals.get(id));
+  }
+
+  async listActionApprovals(limit = 500): Promise<ActionApproval[]> {
+    return structuredClone(
+      [...this.approvals.values()]
+        .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
+        .slice(0, limit),
+    );
+  }
+
+  async findActionApproval(requestHash: string, status: ActionApprovalStatus): Promise<ActionApproval | undefined> {
+    return structuredClone(
+      [...this.approvals.values()].find(
+        (approval) => approval.requestHash === requestHash && approval.status === status,
+      ),
+    );
+  }
+
+  async updateActionApproval(approval: ActionApproval, expectedStatus: ActionApprovalStatus): Promise<boolean> {
+    if (this.approvals.get(approval.id)?.status !== expectedStatus) return false;
+    this.approvals.set(approval.id, structuredClone(approval));
+    return true;
+  }
+}
+
 type MemoryIdempotencyRecord =
   | {
       claimId: string;
@@ -3714,6 +3972,19 @@ class MemoryIdempotencyStore implements IIdempotencyStore {
       expiresAt: input.expiresAt,
     });
     return true;
+  }
+
+  async abandon(input: AbandonIdempotencyInput): Promise<boolean> {
+    const record = this.records.get(input.keyHash);
+    if (
+      !record ||
+      record.state !== "in_progress" ||
+      record.claimId !== input.claimId ||
+      record.requestHash !== input.requestHash
+    ) {
+      return false;
+    }
+    return this.records.delete(input.keyHash);
   }
 }
 

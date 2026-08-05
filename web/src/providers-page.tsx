@@ -2,10 +2,12 @@ import type {
   AppData,
   AuthDefinition,
   ConnectionRecord,
+  ConnectionActionPermission,
   CredentialField,
   OAuthConfig,
   ProviderConnectionStatus,
   ProviderDefinition,
+  FlowApprovalMode,
 } from "./model";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 
@@ -53,6 +55,7 @@ interface ProviderDetailProps {
   connections: ConnectionRecord[];
   connectionStatus: ProviderConnectionStatus;
   oauthConfig?: OAuthConfig;
+  permissions: ConnectionActionPermission[];
   onRefresh(): void;
 }
 
@@ -140,6 +143,7 @@ export function ProvidersPage(props: ProvidersPageProps): ReactNode {
       connections={configurableConnectionsForProvider(props.data.connections, routeProvider.service)}
       connectionStatus={connectionStatus}
       oauthConfig={oauthConfigForProvider(props.data.oauthConfigs, routeProvider.service)}
+      permissions={props.data.connectionPermissions ?? []}
       onRefresh={props.onRefresh}
     />
   );
@@ -719,6 +723,15 @@ function ProviderDetail(props: ProviderDetailProps): ReactNode {
           ) : null}
         </section>
 
+        {selectedConnection ? (
+          <ConnectionApprovalSettings
+            connection={selectedConnection}
+            provider={props.provider}
+            permissions={props.permissions.filter((permission) => permission.connectionId === selectedConnection.id)}
+            onRefresh={props.onRefresh}
+          />
+        ) : null}
+
         <section className="detail-panel provider-detail-card">
           <div className="provider-panel-title-row">
             <div>
@@ -762,6 +775,114 @@ function ProviderDetail(props: ProviderDetailProps): ReactNode {
       </div>
     </div>
   );
+}
+
+export function ConnectionApprovalSettings(props: {
+  connection: ConnectionRecord & { id?: string };
+  provider: ProviderDefinition;
+  permissions: ConnectionActionPermission[];
+  onRefresh(): void;
+}): ReactNode {
+  const executableActions = props.provider.actions.filter((action) => action.execution.locallyExecutable);
+  const [values, setValues] = useState<Record<string, FlowApprovalMode>>(() => permissionValues(props.permissions));
+  const [query, setQuery] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const connectionId = props.connection.id;
+  const visibleActions = executableActions.filter((action) => {
+    const normalized = query.trim().toLowerCase();
+    return (
+      !normalized ||
+      action.name.toLowerCase().includes(normalized) ||
+      action.id.toLowerCase().includes(normalized) ||
+      action.description.toLowerCase().includes(normalized)
+    );
+  });
+
+  useEffect(() => {
+    setValues(permissionValues(props.permissions));
+    setStatus(null);
+  }, [connectionId, props.permissions]);
+
+  async function save(): Promise<void> {
+    if (!connectionId) {
+      return;
+    }
+    setSaving(true);
+    setStatus("Saving approval defaults…");
+    try {
+      await apiPut<ConnectionActionPermission[]>(`/api/connection-permissions/${connectionId}`, {
+        permissions: executableActions.map((action) => ({
+          actionId: action.id,
+          approval: values[action.id] ?? "always_allow",
+        })),
+      });
+      setStatus("Approval defaults saved.");
+      props.onRefresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save approval defaults.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="detail-panel provider-detail-card provider-approval-settings">
+      <div className="provider-panel-title-row provider-approval-heading">
+        <div>
+          <h3>Action approvals</h3>
+          <p>Set the default for every request on this connection. Individual Flows can override it.</p>
+        </div>
+        <Badge>{Object.values(values).filter((approval) => approval === "require_approval").length} gated</Badge>
+      </div>
+      <Input
+        value={query}
+        placeholder="Filter connector actions"
+        aria-label="Filter connector approval settings"
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <div className="provider-approval-list">
+        {visibleActions.map((action) => (
+          <label className="provider-approval-row" key={action.id}>
+            <span>
+              <strong>{action.name}</strong>
+              <small>{action.id}</small>
+            </span>
+            <select
+              className="flow-native-select"
+              aria-label={`Global approval policy for ${action.name}`}
+              value={values[action.id] ?? "always_allow"}
+              onChange={(event) =>
+                setValues((current) => ({ ...current, [action.id]: event.target.value as FlowApprovalMode }))
+              }
+            >
+              <option value="always_allow">Always allow</option>
+              <option value="require_approval">Require approval</option>
+            </select>
+          </label>
+        ))}
+        {visibleActions.length === 0 ? (
+          <p className="muted-copy">
+            {executableActions.length === 0 ? "No executable actions." : "No matching actions."}
+          </p>
+        ) : null}
+      </div>
+      <div className="button-row">
+        <Button
+          type="button"
+          disabled={!connectionId || saving || executableActions.length === 0}
+          onClick={() => void save()}
+        >
+          {saving ? "Saving…" : "Save approval defaults"}
+        </Button>
+        {status ? <FormStatus message={status} /> : null}
+      </div>
+    </section>
+  );
+}
+
+function permissionValues(permissions: ConnectionActionPermission[]): Record<string, FlowApprovalMode> {
+  return Object.fromEntries(permissions.map((permission) => [permission.actionId, permission.approval]));
 }
 
 export function shouldShowOAuthClientForm(auth: AuthDefinition | undefined, expanded: boolean): boolean {

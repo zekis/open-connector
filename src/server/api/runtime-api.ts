@@ -239,6 +239,9 @@ function mapExecutionErrorStatus(code: string | undefined): RuntimeStatus {
   if (code === "oauth_token_expired" || code === "oauth_refresh_unavailable") {
     return 409;
   }
+  if (code === "approval_required") {
+    return 409;
+  }
   if (code === "connection_not_found" || code === "unknown_service") {
     return 404;
   }

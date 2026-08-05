@@ -3,15 +3,18 @@ import type { ConnectionService, ConnectionSummary } from "../../connection-serv
 import type { AgentCredentialService } from "../agents/agent-credential-service.ts";
 import type { AgentSettingsService } from "../agents/agent-settings-service.ts";
 import type {
-  FlowApprovalMode,
+  FlowApprovalSetting,
   FlowDefinition,
   FlowReasoningEffort,
   FlowStatus,
+  FlowTrigger,
   FlowToolGrant,
   IFlowStore,
 } from "./flow-types.ts";
 
 import { defaultAgentModel } from "../agents/agent-settings-service.ts";
+import { validateCronExpression, validateTimeZone } from "./cron-schedule.ts";
+import { createFlowPollPlan, supportsConnectionFlowTrigger } from "./flow-trigger-adapters.ts";
 
 const defaultReasoningEffort: FlowReasoningEffort = "medium";
 const defaultMaxSteps = 8;
@@ -61,12 +64,13 @@ export class FlowService {
     return flow;
   }
 
-  list(): Promise<FlowDefinition[]> {
-    return this.options.store.listFlows();
+  async list(): Promise<FlowDefinition[]> {
+    return (await this.options.store.listFlows()).map(normalizeStoredFlow);
   }
 
-  get(id: string): Promise<FlowDefinition | undefined> {
-    return this.options.store.getFlow(id);
+  async get(id: string): Promise<FlowDefinition | undefined> {
+    const flow = await this.options.store.getFlow(id);
+    return flow ? normalizeStoredFlow(flow) : undefined;
   }
 
   async getRequired(id: string): Promise<FlowDefinition> {
@@ -110,12 +114,14 @@ export class FlowService {
     const agentModel = (await this.options.agentSettings?.get(agentProvider))?.model ?? defaultAgentModel();
 
     const tools = this.normalizeTools(value.tools, connections, source, destination);
+    const trigger = this.normalizeTrigger(value.trigger, source);
     return {
       name,
       status: readStatus(value.status),
       sourceConnectionId,
       destinationConnectionId,
       instructions,
+      trigger,
       agent: {
         provider: agentProvider,
         connectionId: agentConnectionId,
@@ -125,6 +131,58 @@ export class FlowService {
       tools,
       maxSteps: readMaxSteps(value.maxSteps),
     };
+  }
+
+  private normalizeTrigger(input: unknown, source: ConnectionSummary): FlowTrigger {
+    if (input === undefined) {
+      return { type: "manual" };
+    }
+    const value = requiredObject(input, "trigger");
+    if (value.type === "manual" || value.type === "api") {
+      return { type: value.type };
+    }
+    if (value.type === "schedule") {
+      const cron = requiredText(value.cron, "trigger.cron", 120);
+      const timeZone = requiredText(value.timeZone, "trigger.timeZone", 100);
+      try {
+        validateCronExpression(cron);
+        validateTimeZone(timeZone);
+      } catch (error) {
+        throw new FlowError("invalid_flow", error instanceof Error ? error.message : "Invalid Flow schedule.");
+      }
+      return { type: "schedule", cron, timeZone };
+    }
+    if (value.type === "new_email" || value.type === "file_created") {
+      const connectionId = requiredText(value.connectionId, "trigger.connectionId", 200);
+      if (connectionId !== source.id) {
+        throw new FlowError("invalid_flow", "Connection-event triggers must use the Flow source connection.");
+      }
+      const pollIntervalSeconds = readPollInterval(value.pollIntervalSeconds);
+      const trigger: FlowTrigger =
+        value.type === "new_email"
+          ? {
+              type: "new_email",
+              connectionId,
+              pollIntervalSeconds,
+              query: optionalText(value.query, "trigger.query", 2_000),
+            }
+          : {
+              type: "file_created",
+              connectionId,
+              pollIntervalSeconds,
+              folder: optionalText(value.folder, "trigger.folder", 1_000),
+              extension: optionalText(value.extension, "trigger.extension", 100),
+            };
+      if (!supportsConnectionFlowTrigger(trigger, source.service)) {
+        throw new FlowError("invalid_flow", `${source.service} does not support ${trigger.type} Flow triggers.`);
+      }
+      const action = this.options.catalog.actionsById.get(createFlowPollPlan(trigger, source.service).actionId);
+      if (!action?.execution.locallyExecutable) {
+        throw new FlowError("invalid_flow", `${source.service} event detection is not executable in this runtime.`);
+      }
+      return trigger;
+    }
+    throw new FlowError("invalid_flow", "trigger.type must be manual, api, schedule, new_email, or file_created.");
   }
 
   private normalizeTools(
@@ -207,6 +265,10 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return normalized;
 }
 
+function optionalText(value: unknown, field: string, maxLength: number): string | undefined {
+  return value === undefined || value === "" ? undefined : requiredText(value, field, maxLength);
+}
+
 function requiredConnection(connections: Map<string, ConnectionSummary>, id: string, field: string): ConnectionSummary {
   const connection = connections.get(id);
   if (!connection) {
@@ -225,11 +287,11 @@ function readStatus(value: unknown): FlowStatus {
   throw new FlowError("invalid_flow", "status must be active or paused.");
 }
 
-function readApprovalMode(value: unknown, index: number): FlowApprovalMode {
-  if (value === "always_allow" || value === "require_approval") {
+function readApprovalMode(value: unknown, index: number): FlowApprovalSetting {
+  if (value === "always_allow" || value === "require_approval" || value === "inherit") {
     return value;
   }
-  throw new FlowError("invalid_flow", `tools[${index}].approval must be always_allow or require_approval.`);
+  throw new FlowError("invalid_flow", `tools[${index}].approval must be inherit, always_allow, or require_approval.`);
 }
 
 function readReasoningEffort(value: unknown): FlowReasoningEffort {
@@ -257,4 +319,18 @@ function readMaxSteps(value: unknown): number {
     throw new FlowError("invalid_flow", "maxSteps must be an integer between 1 and 20.");
   }
   return value as number;
+}
+
+function readPollInterval(value: unknown): number {
+  if (value === undefined) {
+    return 60;
+  }
+  if (!Number.isInteger(value) || (value as number) < 30 || (value as number) > 86_400) {
+    throw new FlowError("invalid_flow", "trigger.pollIntervalSeconds must be between 30 and 86400.");
+  }
+  return value as number;
+}
+
+function normalizeStoredFlow(flow: FlowDefinition): FlowDefinition {
+  return flow.trigger ? flow : { ...flow, trigger: { type: "manual" } };
 }

@@ -142,7 +142,9 @@
 }
 
 .approval-mail-icon.approved,
-.approval-detail-icon.approved {
+.approval-detail-icon.approved,
+.approval-mail-icon.consumed,
+.approval-detail-icon.consumed {
   background: color-mix(in oklab, var(--success) 12%, transparent);
   color: var(--success);
 }

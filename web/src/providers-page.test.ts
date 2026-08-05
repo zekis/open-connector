@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppI18n } from "./i18n";
 import {
   configurableConnectionsForProvider,
+  ConnectionApprovalSettings,
   connectionDeletePath,
   connectionDisplayLabel,
   connectionSubmitLabel,
@@ -374,6 +375,54 @@ describe("ProvidersPage route shell", () => {
     expect(markup).toContain("Show more");
     expect(markup).toContain("Clock 47");
     expect(markup).not.toContain("Clock 48");
+  });
+});
+
+describe("ConnectionApprovalSettings", () => {
+  it("renders every executable action with its saved global default", () => {
+    const provider: ProviderDefinition = {
+      ...oauthProvider,
+      actions: [
+        {
+          id: "gmail.send_email",
+          service: "gmail",
+          name: "Send email",
+          description: "Send a message.",
+          requiredScopes: [],
+          inputSchema: {},
+          outputSchema: {},
+          execution: executableActionExecution,
+        },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ConnectionApprovalSettings, {
+        connection: {
+          id: "gmail-default",
+          service: "gmail",
+          connectionName: "default",
+          authType: "oauth2",
+          configured: true,
+          metadata: {},
+        },
+        provider,
+        permissions: [
+          {
+            connectionId: "gmail-default",
+            actionId: "gmail.send_email",
+            approval: "require_approval",
+            updatedAt: "2026-08-05T00:00:00.000Z",
+          },
+        ],
+        onRefresh() {},
+      }),
+    );
+
+    expect(markup).toContain("Action approvals");
+    expect(markup).toContain("Set the default for every request on this connection");
+    expect(markup).toContain("Send email");
+    expect(markup).toContain('<option value="require_approval" selected="">Require approval</option>');
+    expect(markup).toContain("Individual Flows can override it");
   });
 });
 

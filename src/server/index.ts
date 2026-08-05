@@ -56,7 +56,7 @@ const transitFiles = new TransitFileService({
   maxBytes: transitFileMaxBytes,
 });
 await transitFiles.cleanupExpired();
-const { app, runtimeAuthConfigured } = await createConnectApp({
+const { app, runtimeAuthConfigured, flowTriggers } = await createConnectApp({
   catalog,
   providerLoader,
   runtimeDatabase,
@@ -70,12 +70,15 @@ const { app, runtimeAuthConfigured } = await createConnectApp({
   registerStaticRoutes: (app) => registerStaticRoutes(app, staticRoot),
   logger,
 });
+flowTriggers.start();
 
 process.once("SIGINT", () => {
+  flowTriggers.stop();
   runtimeDatabase.close();
   process.exit(0);
 });
 process.once("SIGTERM", () => {
+  flowTriggers.stop();
   runtimeDatabase.close();
   process.exit(0);
 });

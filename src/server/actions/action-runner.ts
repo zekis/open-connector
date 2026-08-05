@@ -3,6 +3,7 @@ import type { ConnectionService, ConnectionSummary, ExecutionConnection } from "
 import type { ActionPolicyDecision, ActionPolicyService, ActionPolicySnapshot } from "../../core/action-policy.ts";
 import type { ExecutionContext, ExecutionResult, TransitFileWriter } from "../../core/types.ts";
 import type { IProviderLoader } from "../../providers/provider-loader.ts";
+import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { Logger } from "../logger.ts";
 import type { IRunLogStore, RunLog, RunLogCaller, RunLogListInput, RunLogPage } from "../storage/runtime-store.ts";
 
@@ -18,6 +19,7 @@ export interface ActionRunnerOptions {
   transitFiles?: TransitFileWriter;
   actionPolicy?: ActionPolicyService;
   logger?: Logger;
+  approvals?: Pick<ConnectionApprovalService, "requestAction">;
 }
 
 export interface RunActionInput {
@@ -31,6 +33,7 @@ export interface RunActionInput {
   flowId?: string;
   flowRunId?: string;
   flowStepId?: string;
+  approvalPolicy?: "enforce" | "bypass";
 }
 
 export interface ActionRunResult {
@@ -90,19 +93,44 @@ export class ActionRunner implements IActionRunner {
         connection = input.connectionId
           ? await this.options.connections.resolveForExecutionById(action.service, input.connectionId)
           : await this.options.connections.resolveForExecution(action.service, input.connectionName);
-        const executor = action.execution.locallyExecutable
-          ? await this.options.providerLoader.loadActionExecutor(
-              action.service,
-              action.id,
-              this.options.catalog.providers.find((provider) => provider.service === action.service)?.displayName,
-            )
-          : undefined;
-        result = await executeProviderAction(
-          action,
-          executor,
-          input.input,
-          this.createExecutionContext(connection.getCredential),
-        );
+        const approval =
+          input.approvalPolicy === "bypass" || !connection.summary
+            ? { allowed: true as const }
+            : await this.options.approvals?.requestAction({
+                actionId: action.id,
+                connection: connection.summary,
+                caller: input.caller,
+                input: input.input,
+                runtimeTokenId: input.runtimeTokenId,
+              });
+        if (approval && !approval.allowed) {
+          result = {
+            ok: false,
+            error: {
+              code: "approval_required",
+              message: `Approval is required before ${action.id} can run on ${connection.summary?.profile.displayName ?? "this connection"}.`,
+              details: {
+                approvalId: approval.approval.id,
+                actionId: action.id,
+                connectionId: connection.summary?.id,
+              },
+            },
+          };
+        } else {
+          const executor = action.execution.locallyExecutable
+            ? await this.options.providerLoader.loadActionExecutor(
+                action.service,
+                action.id,
+                this.options.catalog.providers.find((provider) => provider.service === action.service)?.displayName,
+              )
+            : undefined;
+          result = await executeProviderAction(
+            action,
+            executor,
+            input.input,
+            this.createExecutionContext(connection.getCredential),
+          );
+        }
       } catch (error) {
         result =
           error instanceof ConnectionError

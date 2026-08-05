@@ -122,6 +122,20 @@ const flowIdParameter = {
   schema: jsonSchema.uuid("Flow definition identifier."),
 };
 
+const connectionIdParameter = {
+  name: "connectionId",
+  in: "path",
+  required: true,
+  schema: jsonSchema.nonWhitespaceString("Stable local connection identifier.", { maxLength: 200 }),
+};
+
+const approvalIdParameter = {
+  name: "id",
+  in: "path",
+  required: true,
+  schema: jsonSchema.uuid("Connector approval request identifier."),
+};
+
 const idempotencyKeyParameter = {
   name: "Idempotency-Key",
   in: "header",
@@ -208,9 +222,15 @@ export function createOpenApiDocument(
       items: { $ref: "#/components/schemas/ConnectionSummary" },
     }),
     "/api/connections/{service}": createConnectionPath(),
+    "/api/connection-permissions": createConnectionPermissionsPath(),
+    "/api/connection-permissions/{connectionId}": createConnectionPermissionPath(),
+    "/api/action-approvals": createActionApprovalsPath(),
+    "/api/action-approvals/{id}/approve": createActionApprovalDecisionPath("approve"),
+    "/api/action-approvals/{id}/deny": createActionApprovalDecisionPath("deny"),
     "/api/agent-chat/messages": createAgentChatMessagesPath(),
     "/api/flows": createFlowsPath(),
     "/api/flows/{id}": createFlowPath(),
+    "/v1/flows/{id}/trigger": createFlowTriggerPath(),
     "/api/oauth/configs": getOperation("OAuth", "List local OAuth client configurations.", {
       type: "array",
       items: { $ref: "#/components/schemas/OAuthClientConfigSummary" },
@@ -246,6 +266,7 @@ export function createOpenApiDocument(
       { name: "System", description: "Runtime health and server-level status." },
       { name: "Catalog", description: "Provider and action metadata used by users and agents." },
       { name: "Connections", description: "Local provider credentials and connection state." },
+      { name: "Approvals", description: "Connector-wide action defaults and pending execution approvals." },
       { name: "Chat", description: "Conversational agent access to connected application actions." },
       { name: "Flows", description: "Directional agent Flow definitions managed by the local admin API." },
       { name: "OAuth", description: "Local OAuth client configuration and authorization flow." },
@@ -340,8 +361,12 @@ export function createOpenApiDocument(
             description: "Local provider connection summary.",
           },
         ),
+        ConnectionActionPermission: createConnectionActionPermissionSchema(),
+        ConnectionActionPermissionInput: createConnectionActionPermissionInputSchema(),
+        ActionApproval: createActionApprovalSchema(),
         FlowToolGrant: createFlowToolGrantSchema(),
         FlowAgentInput: createFlowAgentInputSchema(),
+        FlowTrigger: createFlowTriggerSchema(),
         FlowDefinitionInput: createFlowDefinitionInputSchema(),
         FlowAgentConfig: createFlowAgentConfigSchema(),
         FlowDefinition: createFlowDefinitionSchema(),
@@ -682,6 +707,33 @@ function createFlowPath(): Record<string, unknown> {
   };
 }
 
+function createFlowTriggerPath(): Record<string, unknown> {
+  return {
+    post: {
+      tags: ["Flows"],
+      summary: "Start an API-triggered Flow.",
+      description:
+        "Starts an active Flow configured with the API call trigger. Requires a runtime bearer token. The JSON event payload is supplied to the Flow agent as untrusted trigger context.",
+      parameters: [flowIdParameter],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: jsonSchema.unknownObject("Event payload supplied to the Flow agent."),
+          },
+        },
+      },
+      responses: {
+        200: jsonResponse(runtimeSuccessSchema(jsonSchema.unknownObject("Started Flow run detail."))),
+        400: jsonResponse(runtimeFailureSchema()),
+        401: jsonResponse(runtimeFailureSchema()),
+        404: jsonResponse(runtimeFailureSchema()),
+        413: jsonResponse(runtimeFailureSchema()),
+      },
+    },
+  };
+}
+
 function flowDefinitionRequestBody(): Record<string, unknown> {
   return {
     required: true,
@@ -701,15 +753,227 @@ function createFlowToolGrantSchema(): JsonSchema {
         maxLength: 200,
       }),
       approval: jsonSchema.stringEnum("Permission mode applied whenever the Flow agent requests this action.", [
+        "inherit",
         "always_allow",
         "require_approval",
       ]),
     },
     {
       required: ["actionId", "connectionId", "approval"],
-      description: "One action permission granted to the Flow agent.",
+      description:
+        "One action permission granted to the Flow agent. inherit resolves the connector-wide default at execution time; the other values override that default for this Flow.",
     },
   );
+}
+
+function createConnectionActionPermissionInputSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      actionId: jsonSchema.nonWhitespaceString("Executable action on this connection.", { maxLength: 200 }),
+      approval: jsonSchema.stringEnum("Connector-wide default for this action.", ["always_allow", "require_approval"]),
+    },
+    {
+      required: ["actionId", "approval"],
+      description: "One action approval default accepted by the connector settings API.",
+    },
+  );
+}
+
+function createConnectionActionPermissionSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      connectionId: jsonSchema.nonWhitespaceString("Stable local connection identifier.", { maxLength: 200 }),
+      actionId: jsonSchema.nonWhitespaceString("Executable action on this connection.", { maxLength: 200 }),
+      approval: jsonSchema.stringEnum("Connector-wide default for this action.", ["always_allow", "require_approval"]),
+      updatedAt: jsonSchema.dateTime("Latest permission update timestamp."),
+    },
+    {
+      required: ["connectionId", "actionId", "approval", "updatedAt"],
+      description: "Persisted connector-wide action approval default.",
+    },
+  );
+}
+
+function createActionApprovalSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      id: jsonSchema.uuid("Connector approval request identifier."),
+      status: jsonSchema.stringEnum("Approval lifecycle status.", [
+        "pending",
+        "approved",
+        "denied",
+        "consumed",
+        "expired",
+      ]),
+      actionId: jsonSchema.nonWhitespaceString("Requested catalog action.", { maxLength: 200 }),
+      connectionId: jsonSchema.nonWhitespaceString("Connection selected for execution.", { maxLength: 200 }),
+      caller: jsonSchema.stringEnum("Runtime entry point that requested the action.", [
+        "http",
+        "mcp",
+        "web",
+        "flow",
+        "chat",
+        "trigger",
+      ]),
+      input: jsonSchema.unknown("Exact connector action payload awaiting approval."),
+      requestedAt: jsonSchema.dateTime("Approval request timestamp."),
+      runtimeTokenId: jsonSchema.string("Stored runtime token identifier, when applicable."),
+      resolvedAt: jsonSchema.dateTime("Approval decision timestamp."),
+      expiresAt: jsonSchema.dateTime("Expiry for an approved one-time retry."),
+      consumedAt: jsonSchema.dateTime("Timestamp when the matching retry consumed the approval."),
+    },
+    {
+      required: ["id", "status", "actionId", "connectionId", "caller", "input", "requestedAt"],
+      description:
+        "One connector action approval. Approved non-Flow requests authorize one identical retry from the same caller for 15 minutes.",
+    },
+  );
+}
+
+function createConnectionPermissionsPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Approvals"],
+      summary: "List connector-wide action approval defaults.",
+      description:
+        "Lists persisted defaults for every connection, or one connection when connectionId is supplied. Missing actions default to always_allow.",
+      parameters: [
+        {
+          name: "connectionId",
+          in: "query",
+          required: false,
+          schema: jsonSchema.nonWhitespaceString("Stable local connection identifier.", { maxLength: 200 }),
+        },
+      ],
+      responses: {
+        200: jsonResponse(jsonSchema.array({ $ref: "#/components/schemas/ConnectionActionPermission" })),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createConnectionPermissionPath(): Record<string, unknown> {
+  return {
+    put: {
+      tags: ["Approvals"],
+      summary: "Replace one connection's action approval defaults.",
+      description:
+        "Replaces the complete action-default set for one saved connection. These defaults govern Chat, runtime API, MCP, and console requests unless a Flow explicitly overrides them.",
+      parameters: [connectionIdParameter],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: jsonSchema.object(
+              {
+                permissions: jsonSchema.array(
+                  { $ref: "#/components/schemas/ConnectionActionPermissionInput" },
+                  { maxItems: 1_000 },
+                ),
+              },
+              { required: ["permissions"] },
+            ),
+          },
+        },
+      },
+      responses: {
+        200: jsonResponse(jsonSchema.array({ $ref: "#/components/schemas/ConnectionActionPermission" })),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createActionApprovalsPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Approvals"],
+      summary: "List direct connector action approvals.",
+      description: "Lists pending and historical non-Flow connector approval requests for the approval mailbox.",
+      responses: {
+        200: jsonResponse(jsonSchema.array({ $ref: "#/components/schemas/ActionApproval" })),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createActionApprovalDecisionPath(decision: "approve" | "deny"): Record<string, unknown> {
+  return {
+    post: {
+      tags: ["Approvals"],
+      summary: `${decision === "approve" ? "Approve" : "Deny"} a direct connector action request.`,
+      description:
+        decision === "approve"
+          ? "Authorizes one identical retry from the same caller for 15 minutes. The approval endpoint does not execute the connector action."
+          : "Denies the pending request. A later matching attempt creates a new approval request.",
+      parameters: [approvalIdParameter],
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/ActionApproval" }),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createFlowTriggerSchema(): JsonSchema {
+  const pollingProperties = {
+    connectionId: jsonSchema.nonWhitespaceString("Source connection watched for events.", { maxLength: 200 }),
+    pollIntervalSeconds: jsonSchema.integer({
+      minimum: 30,
+      maximum: 86_400,
+      default: 60,
+      description: "Interval between connector checks in seconds.",
+    }),
+  };
+  return {
+    oneOf: [
+      jsonSchema.object(
+        { type: jsonSchema.literal("manual", { description: "Starts only through Run now." }) },
+        { required: ["type"] },
+      ),
+      jsonSchema.object(
+        { type: jsonSchema.literal("api", { description: "Starts through the authenticated runtime endpoint." }) },
+        { required: ["type"] },
+      ),
+      jsonSchema.object(
+        {
+          type: jsonSchema.literal("schedule"),
+          cron: jsonSchema.nonWhitespaceString("Five-field cron expression.", { maxLength: 120 }),
+          timeZone: jsonSchema.nonWhitespaceString("IANA time zone used to evaluate the schedule.", {
+            maxLength: 100,
+          }),
+        },
+        { required: ["type", "cron", "timeZone"] },
+      ),
+      jsonSchema.object(
+        {
+          type: jsonSchema.literal("new_email"),
+          ...pollingProperties,
+          query: jsonSchema.string({
+            maxLength: 2_000,
+            description: "Optional source-provider-native mailbox query.",
+          }),
+        },
+        { required: ["type", "connectionId", "pollIntervalSeconds"] },
+      ),
+      jsonSchema.object(
+        {
+          type: jsonSchema.literal("file_created"),
+          ...pollingProperties,
+          folder: jsonSchema.string({ maxLength: 1_000, description: "Optional source folder to watch." }),
+          extension: jsonSchema.string({ maxLength: 100, description: "Optional file extension filter." }),
+        },
+        { required: ["type", "connectionId", "pollIntervalSeconds"] },
+      ),
+    ],
+    description: "Event that starts the Flow. Omitted inputs default to manual.",
+  };
 }
 
 function createFlowAgentInputSchema(): JsonSchema {
@@ -779,6 +1043,7 @@ function createFlowDefinitionSchema(): JsonSchema {
         "sourceConnectionId",
         "destinationConnectionId",
         "instructions",
+        "trigger",
         "agent",
         "tools",
         "maxSteps",
@@ -799,6 +1064,7 @@ function flowDefinitionProperties(agent: JsonSchema): Record<string, JsonSchema>
       maxLength: 200,
     }),
     instructions: jsonSchema.nonWhitespaceString("Instructions given to the Flow agent.", { maxLength: 20_000 }),
+    trigger: { $ref: "#/components/schemas/FlowTrigger" },
     agent,
     tools: jsonSchema.array({ $ref: "#/components/schemas/FlowToolGrant" }, { minItems: 1, maxItems: 32 }),
     maxSteps: jsonSchema.integer({
@@ -1101,7 +1367,7 @@ function createRunsPath(): Record<string, unknown> {
           name: "caller",
           in: "query",
           required: false,
-          schema: { type: "string", enum: ["http", "mcp", "web", "flow", "chat"] },
+          schema: { type: "string", enum: ["http", "mcp", "web", "flow", "chat", "trigger"] },
           description: "Only return runs from this runtime entry point.",
         },
         {

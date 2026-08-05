@@ -17,7 +17,8 @@
 .flow-builder-heading,
 .flow-section-heading,
 .flow-card-heading,
-.flow-tools-heading {
+.flow-tools-heading,
+.flow-trigger-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -27,7 +28,8 @@
 .flows-toolbar p,
 .flow-builder-heading p,
 .flow-card-heading p,
-.flow-tools-heading p {
+.flow-tools-heading p,
+.flow-trigger-heading p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 13px;
@@ -388,6 +390,111 @@
   resize: vertical;
 }
 
+.flow-trigger-editor {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 55%, var(--card));
+}
+
+.flow-trigger-heading {
+  align-items: center;
+}
+
+.flow-trigger-choices {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flow-trigger-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.flow-trigger-choice:hover,
+.flow-trigger-choice:focus-visible {
+  border-color: color-mix(in oklab, var(--brand) 45%, var(--border));
+  outline: none;
+}
+
+.flow-trigger-choice.selected {
+  border-color: color-mix(in oklab, var(--brand) 65%, var(--border));
+  background: color-mix(in oklab, var(--brand) 10%, var(--card));
+  color: var(--info);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 20%, transparent);
+}
+
+.flow-trigger-choice > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.flow-trigger-choice > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.flow-trigger-choice strong {
+  font-size: 12px;
+}
+
+.flow-trigger-choice small,
+.flow-trigger-detail small,
+.flow-trigger-baseline-note,
+.flow-trigger-fields .field > small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.flow-trigger-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.flow-trigger-file-fields {
+  grid-template-columns: 180px minmax(0, 1fr) minmax(160px, 0.4fr);
+}
+
+.flow-trigger-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.flow-trigger-detail > div {
+  display: grid;
+  gap: 4px;
+}
+
+.flow-trigger-detail code {
+  overflow-wrap: anywhere;
+  color: var(--info);
+  font-size: 12px;
+}
+
+.flow-trigger-baseline-note {
+  margin: -4px 0 0;
+}
+
 .flow-tools-heading {
   align-items: end;
 }
@@ -601,6 +708,29 @@
   font-size: 12px;
 }
 
+.flow-trigger-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.flow-trigger-badge small {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .flow-run-output {
   margin: 0;
   padding: 10px;
@@ -638,6 +768,15 @@
   }
 
   .flow-permission-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-trigger-choices {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flow-trigger-fields,
+  .flow-trigger-file-fields {
     grid-template-columns: 1fr;
   }
 

@@ -14,6 +14,7 @@ const flow: FlowDefinition = {
   sourceConnectionId: "outlook-1",
   destinationConnectionId: "sharepoint-1",
   instructions: "Copy today's messages into a spreadsheet.",
+  trigger: { type: "manual" },
   agent: {
     provider: "claude_code",
     connectionId: "claude-subscription-1",
@@ -60,5 +61,6 @@ describe("FlowsPage", () => {
     expect(html).not.toContain("Waiting for approval");
     expect(html).not.toContain("opus");
     expect(html).not.toContain("Codex");
+    expect(html).toContain("Manual");
   });
 });

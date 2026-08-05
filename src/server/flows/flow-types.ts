@@ -1,10 +1,48 @@
 export type FlowStatus = "active" | "paused";
 export type FlowApprovalMode = "always_allow" | "require_approval";
+export type FlowApprovalSetting = FlowApprovalMode | "inherit";
 export type FlowReasoningEffort = "none" | "low" | "medium" | "high";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type FlowStepStatus = "pending" | "completed" | "failed" | "denied";
 export type FlowApprovalStatus = "pending" | "approved" | "denied";
 export type FlowAgentProvider = "claude_code";
+export type FlowTriggerType = "manual" | "api" | "schedule" | "new_email" | "file_created";
+
+export interface ManualFlowTrigger {
+  type: "manual";
+}
+
+export interface ApiFlowTrigger {
+  type: "api";
+}
+
+export interface ScheduleFlowTrigger {
+  type: "schedule";
+  cron: string;
+  timeZone: string;
+}
+
+export interface NewEmailFlowTrigger {
+  type: "new_email";
+  connectionId: string;
+  pollIntervalSeconds: number;
+  query?: string;
+}
+
+export interface FileCreatedFlowTrigger {
+  type: "file_created";
+  connectionId: string;
+  pollIntervalSeconds: number;
+  folder?: string;
+  extension?: string;
+}
+
+export type FlowTrigger =
+  | ManualFlowTrigger
+  | ApiFlowTrigger
+  | ScheduleFlowTrigger
+  | NewEmailFlowTrigger
+  | FileCreatedFlowTrigger;
 
 export interface FlowAgentConfig {
   /** Omitted on definitions created before Claude-only agent support. */
@@ -17,7 +55,7 @@ export interface FlowAgentConfig {
 export interface FlowToolGrant {
   actionId: string;
   connectionId: string;
-  approval: FlowApprovalMode;
+  approval: FlowApprovalSetting;
 }
 
 /**
@@ -31,6 +69,7 @@ export interface FlowDefinition {
   sourceConnectionId: string;
   destinationConnectionId: string;
   instructions: string;
+  trigger: FlowTrigger;
   agent: FlowAgentConfig;
   tools: FlowToolGrant[];
   maxSteps: number;
@@ -44,6 +83,7 @@ export interface FlowDefinitionInput {
   sourceConnectionId: string;
   destinationConnectionId: string;
   instructions: string;
+  trigger?: FlowTrigger;
   agent: Pick<FlowAgentConfig, "connectionId"> & Partial<Pick<FlowAgentConfig, "provider" | "reasoningEffort">>;
   tools: FlowToolGrant[];
   maxSteps?: number;
@@ -54,7 +94,8 @@ export interface FlowRun {
   flowId: string;
   flowRevision: string;
   flowSnapshot: FlowDefinition;
-  trigger: "manual";
+  trigger: FlowTriggerType;
+  triggerEvent?: FlowTriggerEvent;
   status: FlowRunStatus;
   stepCount: number;
   startedAt: string;
@@ -63,6 +104,25 @@ export interface FlowRun {
   finalOutput?: string;
   errorCode?: string;
   errorMessage?: string;
+}
+
+export interface FlowTriggerEvent {
+  type: FlowTriggerType;
+  occurredAt: string;
+  payload?: unknown;
+}
+
+export interface FlowTriggerState {
+  flowId: string;
+  flowRevision: string;
+  initialized: boolean;
+  seenIds: string[];
+  lastScheduleKey?: string;
+  lastCheckedAt?: string;
+  lastTriggeredAt?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  updatedAt: string;
 }
 
 export interface FlowStep {
@@ -118,4 +178,7 @@ export interface IFlowStore {
   getApproval(id: string): Promise<FlowApproval | undefined>;
   listApprovals(status?: FlowApprovalStatus): Promise<FlowApproval[]>;
   updateApproval(approval: FlowApproval, expectedStatus: FlowApprovalStatus): Promise<boolean>;
+  setTriggerState(state: FlowTriggerState): Promise<void>;
+  getTriggerState(flowId: string): Promise<FlowTriggerState | undefined>;
+  deleteTriggerState(flowId: string): Promise<void>;
 }

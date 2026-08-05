@@ -1,4 +1,4 @@
-import type { AppData, FlowApproval, FlowDefinition } from "./model";
+import type { ActionApproval, AppData, FlowApproval, FlowDefinition } from "./model";
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
@@ -14,6 +14,7 @@ const flow: FlowDefinition = {
   sourceConnectionId: "outlook-1",
   destinationConnectionId: "sharepoint-1",
   instructions: "Copy today's messages into a spreadsheet.",
+  trigger: { type: "manual" },
   agent: {
     connectionId: "openai-1",
     model: "opus",
@@ -44,6 +45,19 @@ const approval: FlowApproval = {
     fileName: "daily-mail.xlsx",
   },
   requestedAt: "2026-07-30T08:30:00.000Z",
+};
+
+const actionApproval: ActionApproval = {
+  id: "action-approval-1",
+  status: "pending",
+  actionId: approval.actionId,
+  connectionId: "sharepoint-1",
+  caller: "chat",
+  input: {
+    siteId: "team-site",
+    fileName: "agent-mail.xlsx",
+  },
+  requestedAt: "2026-07-30T09:30:00.000Z",
 };
 
 const data: AppData = {
@@ -106,7 +120,22 @@ describe("ApprovalsPage", () => {
     const html = renderPage(emptyData);
 
     expect(html).toContain("Approval inbox is clear");
-    expect(html).toContain("Flows with approval-gated tools will pause here");
+    expect(html).toContain("Approval-gated connector requests and Flow tools will pause here");
+  });
+
+  it("renders direct agent requests with one-time retry guidance", () => {
+    const html = renderPage({
+      ...data,
+      flowApprovals: [],
+      actionApprovals: [actionApproval],
+    });
+
+    expect(html).toContain("Agent chat request");
+    expect(html).toContain("SharePoint · Create file");
+    expect(html).toContain("agent-mail.xlsx");
+    expect(html).toContain("Approve next retry");
+    expect(html).toContain("one identical retry from the same caller for 15 minutes");
+    expect(html).not.toContain("Review Flow");
   });
 });
 

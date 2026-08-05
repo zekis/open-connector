@@ -7,10 +7,13 @@ import type { AgentCredentialService } from "./agents/agent-credential-service.t
 import type { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
+import type { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
+import type { ActionApproval } from "./approvals/connection-approval-types.ts";
 import type { IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
+import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type { Logger } from "./logger.ts";
 import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
@@ -58,6 +61,7 @@ import {
   writeRuntimeFailure,
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
+import { ConnectionApprovalError } from "./approvals/connection-approval-service.ts";
 import { AgentChatError } from "./chat/agent-chat-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
@@ -80,6 +84,8 @@ export interface IConnectServerOptions {
   actions: ActionRunner;
   flows?: FlowService;
   flowRunner?: FlowRunner;
+  flowTriggers?: Pick<FlowTriggerEngine, "triggerApi">;
+  connectionApprovals?: ConnectionApprovalService;
   idempotency: IIdempotencyStore;
   transitFiles: ITransitFileService;
   staticRoot?: string;
@@ -148,6 +154,9 @@ export class ConnectServer {
     app.get("/v1/actions/search", (context) => this.searchRuntimeActions(context));
     app.get("/v1/actions/:actionId", (context) => this.getRuntimeAction(context, context.req.param("actionId")));
     app.post("/v1/actions/:actionId", (context) => this.createRuntimeActionRun(context, context.req.param("actionId")));
+    if (this.options.flowTriggers) {
+      app.post("/v1/flows/:id/trigger", (context) => this.triggerFlowFromApi(context, context.req.param("id")));
+    }
     app.get("/v1/apps", (context) => this.listRuntimeApps(context));
     app.get("/v1/apps/authenticated", (context) => this.listAuthenticatedRuntimeApps(context));
     app.get("/v1/apps/services/:service", (context) =>
@@ -201,6 +210,17 @@ export class ConnectServer {
     app.get("/api/connections", (context) => this.listConnections(context));
     app.put("/api/connections/:service", (context) => this.upsertConnection(context, context.req.param("service")));
     app.delete("/api/connections/:service", (context) => this.disconnect(context, context.req.param("service")));
+    if (this.options.connectionApprovals) {
+      app.get("/api/connection-permissions", (context) => this.listConnectionPermissions(context));
+      app.put("/api/connection-permissions/:connectionId", (context) =>
+        this.replaceConnectionPermissions(context, context.req.param("connectionId")),
+      );
+      app.get("/api/action-approvals", (context) => this.listActionApprovals(context));
+      app.post("/api/action-approvals/:id/approve", (context) =>
+        this.approveActionRequest(context, context.req.param("id")),
+      );
+      app.post("/api/action-approvals/:id/deny", (context) => this.denyActionRequest(context, context.req.param("id")));
+    }
     if (this.options.agentCredentials) {
       app.get("/api/agent-connections", (context) => this.listAgentConnections(context));
       app.put("/api/agent-connections/:provider", (context) =>
@@ -592,6 +612,13 @@ export class ConnectServer {
     }
 
     const result = await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant);
+    if (!result.body.success && result.body.errorCode === "approval_required") {
+      const abandoned = await this.options.idempotency.abandon({ keyHash, requestHash, claimId });
+      if (!abandoned) {
+        throw new Error("Idempotency claim was replaced before approval handoff.");
+      }
+      return writeRuntimeActionHttpResult(context, result);
+    }
     const completed = await this.options.idempotency.complete({
       keyHash,
       requestHash,
@@ -848,6 +875,49 @@ export class ConnectServer {
     return this.writeFlowResult(context, this.requiredFlowService().list());
   }
 
+  private async listConnectionPermissions(context: Context): Promise<Response> {
+    const connectionId = optionalString(context.req.query("connectionId"));
+    return context.json(await this.options.connectionApprovals!.listPermissions(connectionId));
+  }
+
+  private async replaceConnectionPermissions(context: Context, connectionId: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    return await this.writeConnectionApprovalResult(
+      context,
+      this.options.connectionApprovals!.replacePermissions(connectionId, body),
+    );
+  }
+
+  private async listActionApprovals(context: Context): Promise<Response> {
+    const approvals = await this.options.connectionApprovals!.listActionApprovals();
+    return context.json(approvals.map(serializeActionApproval));
+  }
+
+  private async approveActionRequest(context: Context, id: string): Promise<Response> {
+    return await this.writeConnectionApprovalResult(
+      context,
+      this.options.connectionApprovals!.approve(id).then(serializeActionApproval),
+    );
+  }
+
+  private async denyActionRequest(context: Context, id: string): Promise<Response> {
+    return await this.writeConnectionApprovalResult(
+      context,
+      this.options.connectionApprovals!.deny(id).then(serializeActionApproval),
+    );
+  }
+
+  private async writeConnectionApprovalResult(context: Context, operation: Promise<unknown>): Promise<Response> {
+    try {
+      return context.json(await operation);
+    } catch (error) {
+      if (error instanceof ConnectionApprovalError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
   private async createFlow(context: Context): Promise<Response> {
     const body = await readJsonBody(context);
     return this.writeFlowResult(context, this.requiredFlowService().create(body));
@@ -873,6 +943,32 @@ export class ConnectServer {
 
   private async startFlowRun(context: Context, id: string): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowRunner().start(id));
+  }
+
+  private async triggerFlowFromApi(context: Context, id: string): Promise<Response> {
+    const payload = await readJsonBody(context, 256 * 1024);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return writeRuntimeFailure(context, {
+        status: 400,
+        errorCode: "invalid_input",
+        message: "Flow trigger payload must be a JSON object.",
+        meta: { flowId: id },
+      });
+    }
+    try {
+      const detail = await this.options.flowTriggers!.triggerApi(id, payload);
+      return writeRuntimeSuccess(context, detail, { flowId: id, flowRunId: detail.run.id });
+    } catch (error) {
+      if (error instanceof FlowError) {
+        return writeRuntimeFailure(context, {
+          status: error.status,
+          errorCode: error.code,
+          message: error.message,
+          meta: { flowId: id },
+        });
+      }
+      throw error;
+    }
   }
 
   private async listFlowRuns(context: Context): Promise<Response> {
@@ -1271,6 +1367,22 @@ export class ConnectServer {
   }
 }
 
+function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval, "requestHash"> {
+  return {
+    id: approval.id,
+    status: approval.status,
+    actionId: approval.actionId,
+    connectionId: approval.connectionId,
+    caller: approval.caller,
+    input: approval.input,
+    requestedAt: approval.requestedAt,
+    runtimeTokenId: approval.runtimeTokenId,
+    resolvedAt: approval.resolvedAt,
+    expiresAt: approval.expiresAt,
+    consumedAt: approval.consumedAt,
+  };
+}
+
 interface ConnectionLogContext {
   operation: "connect" | "disconnect";
   path: string;
@@ -1392,7 +1504,7 @@ function readRunLogListInput(context: Context): RunLogListQuery {
   const caller = optionalString(context.req.query("caller"));
   if (caller !== undefined) {
     if (!isRunLogCaller(caller)) {
-      return { ok: false, message: "caller must be one of http, mcp, web, flow, or chat." };
+      return { ok: false, message: "caller must be one of http, mcp, web, flow, chat, or trigger." };
     }
     input.caller = caller;
   }
@@ -1408,7 +1520,14 @@ function readRunLogListInput(context: Context): RunLogListQuery {
 }
 
 function isRunLogCaller(value: string): value is RunLogCaller {
-  return value === "http" || value === "mcp" || value === "web" || value === "flow" || value === "chat";
+  return (
+    value === "http" ||
+    value === "mcp" ||
+    value === "web" ||
+    value === "flow" ||
+    value === "chat" ||
+    value === "trigger"
+  );
 }
 
 function readSearchQuery(context: Context, defaultLimit = DEFAULT_ACTION_SEARCH_LIMIT): SearchQuery {

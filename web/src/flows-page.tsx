@@ -1,7 +1,18 @@
 import type { AppData, ConnectionRecord, FlowDefinition, FlowRun, FlowRunDetail } from "./model";
 import type { ReactNode } from "react";
 
-import { CirclePlay, GitCompareArrows, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  AlarmClock,
+  Braces,
+  CirclePlay,
+  FilePlus2,
+  GitCompareArrows,
+  Mail,
+  MousePointerClick,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiPost, apiPut } from "./api";
@@ -131,6 +142,7 @@ function FlowCard(props: {
         <span>{destination ? connectionLabel(destination) : "Missing destination"}</span>
       </div>
       <div className="flow-card-meta">
+        <FlowTriggerBadge flow={props.flow} />
         <span>{props.flow.tools.length} tools</span>
         <span>Claude Code</span>
         {latestRun ? <Badge tone={tone}>{latestRun.status.replaceAll("_", " ")}</Badge> : <span>Never run</span>}
@@ -163,6 +175,34 @@ function FlowCard(props: {
         </Button>
       </div>
     </article>
+  );
+}
+
+function FlowTriggerBadge(props: { flow: FlowDefinition }): ReactNode {
+  const trigger = props.flow.trigger;
+  const detail =
+    trigger.type === "schedule"
+      ? `${trigger.cron} · ${trigger.timeZone}`
+      : trigger.type === "new_email" || trigger.type === "file_created"
+        ? `every ${trigger.pollIntervalSeconds}s`
+        : undefined;
+  const config =
+    trigger.type === "api"
+      ? { icon: Braces, label: "API call" }
+      : trigger.type === "schedule"
+        ? { icon: AlarmClock, label: "Schedule" }
+        : trigger.type === "new_email"
+          ? { icon: Mail, label: "New email" }
+          : trigger.type === "file_created"
+            ? { icon: FilePlus2, label: "File created" }
+            : { icon: MousePointerClick, label: "Manual" };
+  const Icon = config.icon;
+  return (
+    <span className="flow-trigger-badge" title={detail}>
+      <Icon size={13} />
+      {config.label}
+      {detail ? <small>{detail}</small> : null}
+    </span>
   );
 }
 

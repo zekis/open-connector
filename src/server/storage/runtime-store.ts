@@ -3,7 +3,7 @@ import type { CredentialProfile } from "../../core/types.ts";
 
 export const DEFAULT_RUN_LIMIT = 5_000;
 
-export type RunLogCaller = "http" | "mcp" | "web" | "flow" | "chat";
+export type RunLogCaller = "http" | "mcp" | "web" | "flow" | "chat" | "trigger";
 
 /**
  * One recent action run shown by the local runtime.

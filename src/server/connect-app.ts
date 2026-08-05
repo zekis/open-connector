@@ -16,11 +16,13 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentCredentialService } from "./agents/agent-credential-service.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
+import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import { AgentChatService } from "./chat/agent-chat-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { ClaudeCodeFlowAgent } from "./flows/claude-code-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
+import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 
 export interface ConnectAppOptions {
@@ -43,6 +45,7 @@ export interface ConnectAppOptions {
 export interface ConnectApp {
   app: Hono;
   runtimeAuthConfigured: boolean;
+  flowTriggers: FlowTriggerEngine;
 }
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
@@ -64,6 +67,11 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
   const agentCredentials = new AgentCredentialService(options.runtimeDatabase.connectionStore, claudeCode);
   const agentSettings = new AgentSettingsService(options.runtimeDatabase.connectionStore, claudeCode);
   const actionPolicy = options.actionPolicy ?? new ActionPolicyService();
+  const connectionApprovals = new ConnectionApprovalService({
+    catalog: options.catalog,
+    connections,
+    store: options.runtimeDatabase.connectionApprovalStore,
+  });
   const actions = new ActionRunner({
     catalog: options.catalog,
     providerLoader: options.providerLoader,
@@ -71,6 +79,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     runs: options.runtimeDatabase.runLogStore,
     transitFiles: options.transitFiles,
     actionPolicy,
+    approvals: connectionApprovals,
     logger: options.logger,
   });
   const getPolicySnapshot = async () => {
@@ -91,6 +100,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     store: options.runtimeDatabase.flowStore,
     actions,
     agentSettings,
+    connectionApprovals,
     claudeCodeAgent: new ClaudeCodeFlowAgent(agentCredentials, claudeCode),
     getPolicySnapshot,
     logger: options.logger,
@@ -103,6 +113,15 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     claudeCode,
     actions,
     getPolicySnapshot,
+  });
+  const flowTriggers = new FlowTriggerEngine({
+    flows,
+    runner: flowRunner,
+    store: options.runtimeDatabase.flowStore,
+    connections,
+    actions,
+    getPolicySnapshot,
+    logger: options.logger,
   });
 
   return {
@@ -122,6 +141,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       actions,
       flows,
       flowRunner,
+      flowTriggers,
+      connectionApprovals,
       idempotency: options.runtimeDatabase.idempotencyStore,
       transitFiles: options.transitFiles,
       runtimeTokens,
@@ -142,5 +163,6 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       Boolean(options.runtimeToken) ||
       Boolean(options.verifyRuntimeJwt) ||
       (options.computeRuntimeAuthConfigured === false ? false : await hasStoredRuntimeTokens()),
+    flowTriggers,
   };
 }

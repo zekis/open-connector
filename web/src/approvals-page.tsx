@@ -1,4 +1,12 @@
-import type { AppData, ConnectionRecord, FlowApproval, FlowDefinition, FlowRunDetail, FlowRunStatus } from "./model";
+import type {
+  ActionApproval,
+  AppData,
+  ConnectionRecord,
+  FlowApproval,
+  FlowDefinition,
+  FlowRunDetail,
+  FlowRunStatus,
+} from "./model";
 import type { ReactNode } from "react";
 
 import {
@@ -27,32 +35,44 @@ interface ApprovalsPageProps {
 
 type ApprovalView = "pending" | "history";
 type ApprovalDecision = "approve" | "deny";
+type ApprovalItem = { kind: "flow"; approval: FlowApproval } | { kind: "action"; approval: ActionApproval };
 
 export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
   const [view, setView] = useState<ApprovalView>("pending");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [resolvedIds, setResolvedIds] = useState<Set<string>>(() => new Set());
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [resolvedKeys, setResolvedKeys] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const approvals = props.data.flowApprovals ?? [];
-  const pending = approvals.filter((approval) => approval.status === "pending" && !resolvedIds.has(approval.id));
-  const history = approvals.filter((approval) => approval.status !== "pending");
+  const approvals: ApprovalItem[] = [
+    ...(props.data.flowApprovals ?? []).map((approval): ApprovalItem => ({ kind: "flow", approval })),
+    ...(props.data.actionApprovals ?? []).map((approval): ApprovalItem => ({ kind: "action", approval })),
+  ].sort((left, right) => Date.parse(right.approval.requestedAt) - Date.parse(left.approval.requestedAt));
+  const pending = approvals.filter(
+    (item) => item.approval.status === "pending" && !resolvedKeys.has(approvalKey(item)),
+  );
+  const history = approvals.filter((item) => item.approval.status !== "pending");
   const visible = view === "pending" ? pending : history;
-  const selected = visible.find((approval) => approval.id === selectedId) ?? visible[0];
+  const selected = visible.find((item) => approvalKey(item) === selectedKey) ?? visible[0];
 
-  async function decide(approval: FlowApproval, decision: ApprovalDecision): Promise<void> {
-    if (decision === "deny" && !window.confirm("Deny this request and cancel the current Flow run?")) {
+  async function decide(item: ApprovalItem, decision: ApprovalDecision): Promise<void> {
+    if (decision === "deny" && !window.confirm(denialPrompt(item))) {
       return;
     }
 
-    setBusy(`${decision}:${approval.id}`);
+    const key = approvalKey(item);
+    setBusy(`${decision}:${key}`);
     setError(null);
     setStatus(null);
     try {
-      const detail = await apiPost<FlowRunDetail>(`/api/flow-approvals/${approval.id}/${decision}`, {});
-      setResolvedIds((current) => new Set(current).add(approval.id));
-      setStatus(decisionMessage(decision, detail.run.status));
+      if (item.kind === "flow") {
+        const detail = await apiPost<FlowRunDetail>(`/api/flow-approvals/${item.approval.id}/${decision}`, {});
+        setStatus(flowDecisionMessage(decision, detail.run.status));
+      } else {
+        await apiPost<ActionApproval>(`/api/action-approvals/${item.approval.id}/${decision}`, {});
+        setStatus(actionDecisionMessage(decision));
+      }
+      setResolvedKeys((current) => new Set(current).add(key));
       props.onRefresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The approval decision could not be recorded.");
@@ -66,7 +86,7 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
       <section className="approvals-toolbar">
         <div>
           <strong>Requests waiting for a decision</strong>
-          <p>Review the exact connector action and payload before allowing a Flow to continue.</p>
+          <p>Review the exact connector action and payload before allowing it to run.</p>
         </div>
         <Badge tone={pending.length > 0 ? "warning" : "success"}>
           {pending.length === 0 ? "Inbox clear" : `${pending.length} pending`}
@@ -106,27 +126,27 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
           title={view === "pending" ? "Approval inbox is clear" : "No approval history yet"}
           description={
             view === "pending"
-              ? "Flows with approval-gated tools will pause here before the connector action runs."
-              : "Approved and denied requests will appear here for review."
+              ? "Approval-gated connector requests and Flow tools will pause here before execution."
+              : "Approved, denied, consumed, and expired requests will appear here for review."
           }
         />
       ) : (
         <section className="approval-mailbox">
           <div className="approval-mail-list list-panel" aria-label={`${view} approvals`}>
-            {visible.map((approval) => (
+            {visible.map((item) => (
               <ApprovalMailItem
-                key={approval.id}
-                approval={approval}
+                key={approvalKey(item)}
+                item={item}
                 data={props.data}
-                selected={approval.id === selected?.id}
-                busy={busy?.endsWith(approval.id) ?? false}
-                onSelect={() => setSelectedId(approval.id)}
+                selected={approvalKey(item) === (selected ? approvalKey(selected) : undefined)}
+                busy={busy?.endsWith(approvalKey(item)) ?? false}
+                onSelect={() => setSelectedKey(approvalKey(item))}
               />
             ))}
           </div>
           {selected ? (
             <ApprovalDetail
-              approval={selected}
+              item={selected}
               data={props.data}
               busy={busy}
               onApprove={() => void decide(selected, "approve")}
@@ -140,16 +160,17 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
 }
 
 function ApprovalMailItem(props: {
-  approval: FlowApproval;
+  item: ApprovalItem;
   data: AppData;
   selected: boolean;
   busy: boolean;
   onSelect(): void;
 }): ReactNode {
-  const flow = findFlow(props.data, props.approval);
-  const action = findAction(props.data, props.approval.actionId);
+  const flow = props.item.kind === "flow" ? findFlow(props.data, props.item.approval) : undefined;
+  const action = findAction(props.data, props.item.approval.actionId);
+  const status = props.item.approval.status;
   const StatusIcon =
-    props.approval.status === "approved" ? CheckCircle2 : props.approval.status === "denied" ? Ban : CircleAlert;
+    status === "approved" || status === "consumed" ? CheckCircle2 : status === "pending" ? CircleAlert : Ban;
 
   return (
     <button
@@ -158,13 +179,13 @@ function ApprovalMailItem(props: {
       aria-current={props.selected}
       onClick={props.onSelect}
     >
-      <span className={`approval-mail-icon ${props.approval.status}`}>
+      <span className={`approval-mail-icon ${status}`}>
         {props.busy ? <Loader2 className="spin" size={15} /> : <StatusIcon size={15} />}
       </span>
       <span className="approval-mail-main">
-        <strong>{flow?.name ?? "Deleted Flow"}</strong>
-        <small>{action?.name ?? props.approval.actionId}</small>
-        <time dateTime={props.approval.requestedAt}>{formatApprovalDate(props.approval.requestedAt)}</time>
+        <strong>{flow?.name ?? approvalSourceLabel(props.item)}</strong>
+        <small>{action?.name ?? props.item.approval.actionId}</small>
+        <time dateTime={props.item.approval.requestedAt}>{formatApprovalDate(props.item.approval.requestedAt)}</time>
       </span>
       <ChevronRight size={15} />
     </button>
@@ -172,46 +193,52 @@ function ApprovalMailItem(props: {
 }
 
 function ApprovalDetail(props: {
-  approval: FlowApproval;
+  item: ApprovalItem;
   data: AppData;
   busy: string | null;
   onApprove(): void;
   onDeny(): void;
 }): ReactNode {
-  const flow = findFlow(props.data, props.approval);
-  const action = findAction(props.data, props.approval.actionId);
-  const connection = props.data.connections.find((item) => item.id === props.approval.connectionId);
-  const pending = props.approval.status === "pending";
-  const approving = props.busy === `approve:${props.approval.id}`;
-  const denying = props.busy === `deny:${props.approval.id}`;
+  const approval = props.item.approval;
+  const flow = props.item.kind === "flow" ? findFlow(props.data, props.item.approval) : undefined;
+  const action = findAction(props.data, approval.actionId);
+  const connection = props.data.connections.find((item) => item.id === approval.connectionId);
+  const pending = approval.status === "pending";
+  const key = approvalKey(props.item);
+  const approving = props.busy === `approve:${key}`;
+  const denying = props.busy === `deny:${key}`;
   const statusTone =
-    props.approval.status === "approved" ? "success" : props.approval.status === "denied" ? "error" : "warning";
+    approval.status === "approved" || approval.status === "consumed"
+      ? "success"
+      : approval.status === "denied"
+        ? "error"
+        : "warning";
 
   return (
     <article className="approval-detail detail-panel">
       <header className="approval-detail-heading">
         <div className="approval-detail-title">
-          <span className={`approval-detail-icon ${props.approval.status}`}>
-            {props.approval.status === "approved" ? (
+          <span className={`approval-detail-icon ${approval.status}`}>
+            {approval.status === "approved" || approval.status === "consumed" ? (
               <Check size={18} />
-            ) : props.approval.status === "denied" ? (
+            ) : approval.status === "denied" || approval.status === "expired" ? (
               <X size={18} />
             ) : (
               <ShieldCheck size={18} />
             )}
           </span>
           <div>
-            <span>Approval request</span>
-            <h2>{flow?.name ?? "Deleted Flow"}</h2>
+            <span>{props.item.kind === "flow" ? "Flow approval request" : "Connector approval request"}</span>
+            <h2>{flow?.name ?? approvalSourceLabel(props.item)}</h2>
           </div>
         </div>
-        <Badge tone={statusTone}>{props.approval.status}</Badge>
+        <Badge tone={statusTone}>{approval.status}</Badge>
       </header>
 
       <dl className="approval-facts">
         <div>
           <dt>Action</dt>
-          <dd>{action ? `${action.providerName} · ${action.name}` : props.approval.actionId}</dd>
+          <dd>{action ? `${action.providerName} · ${action.name}` : approval.actionId}</dd>
         </div>
         <div>
           <dt>Connection</dt>
@@ -219,11 +246,13 @@ function ApprovalDetail(props: {
         </div>
         <div>
           <dt>Requested</dt>
-          <dd>{formatApprovalDate(props.approval.requestedAt)}</dd>
+          <dd>{formatApprovalDate(approval.requestedAt)}</dd>
         </div>
         <div>
-          <dt>Flow run</dt>
-          <dd>{shortId(props.approval.runId)}</dd>
+          <dt>{props.item.kind === "flow" ? "Flow run" : "Caller"}</dt>
+          <dd>
+            {props.item.kind === "flow" ? shortId(props.item.approval.runId) : callerLabel(props.item.approval.caller)}
+          </dd>
         </div>
       </dl>
 
@@ -233,27 +262,23 @@ function ApprovalDetail(props: {
         <CircleAlert size={16} />
         <div>
           <strong>{pending ? "Review before execution" : "Recorded decision"}</strong>
-          <p>
-            {pending
-              ? "Approving sends this exact payload to the selected connection and resumes the waiting Flow. Denying cancels this run."
-              : `This request was ${props.approval.status}${props.approval.resolvedAt ? ` on ${formatApprovalDate(props.approval.resolvedAt)}` : ""}.`}
-          </p>
+          <p>{approvalImpact(props.item)}</p>
         </div>
       </section>
 
       <section className="approval-payload">
         <div>
           <strong>Request payload</strong>
-          <span>{props.approval.actionId}</span>
+          <span>{approval.actionId}</span>
         </div>
-        <pre>{JSON.stringify(props.approval.input, null, 2)}</pre>
+        <pre>{JSON.stringify(approval.input, null, 2)}</pre>
       </section>
 
       {pending ? (
         <div className="approval-actions">
           <Button disabled={props.busy !== null} onClick={props.onApprove}>
             {approving ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
-            {approving ? "Approving…" : "Approve and continue"}
+            {approving ? "Approving…" : props.item.kind === "flow" ? "Approve and continue" : "Approve next retry"}
           </Button>
           <Button variant="destructive" disabled={props.busy !== null} onClick={props.onDeny}>
             {denying ? <Loader2 className="spin" size={15} /> : <X size={15} />}
@@ -278,6 +303,52 @@ function ApprovalDetail(props: {
       ) : null}
     </article>
   );
+}
+
+function approvalKey(item: ApprovalItem): string {
+  return `${item.kind}:${item.approval.id}`;
+}
+
+function approvalSourceLabel(item: ApprovalItem): string {
+  return item.kind === "flow" ? "Deleted Flow" : `${callerLabel(item.approval.caller)} request`;
+}
+
+function callerLabel(caller: ActionApproval["caller"]): string {
+  const labels: Record<ActionApproval["caller"], string> = {
+    chat: "Agent chat",
+    flow: "Flow",
+    http: "Runtime API",
+    mcp: "MCP",
+    trigger: "Trigger detector",
+    web: "Console",
+  };
+  return labels[caller];
+}
+
+function approvalImpact(item: ApprovalItem): string {
+  const approval = item.approval;
+  if (approval.status === "pending") {
+    return item.kind === "flow"
+      ? "Approving sends this exact payload to the selected connection and resumes the waiting Flow. Denying cancels this run."
+      : "Approving authorizes one identical retry from the same caller for 15 minutes. Denying leaves the connector action blocked.";
+  }
+  const resolvedAt = approval.resolvedAt ? ` on ${formatApprovalDate(approval.resolvedAt)}` : "";
+  if (approval.status === "approved" && item.kind === "action") {
+    return `Approved${resolvedAt}. One identical retry remains authorized until the approval expires.`;
+  }
+  if (approval.status === "consumed") {
+    return `Approved${resolvedAt} and consumed by the matching connector request.`;
+  }
+  if (approval.status === "expired") {
+    return `Approved${resolvedAt}, but the authorization expired before a matching retry.`;
+  }
+  return `This request was ${approval.status}${resolvedAt}.`;
+}
+
+function denialPrompt(item: ApprovalItem): string {
+  return item.kind === "flow"
+    ? "Deny this request and cancel the current Flow run?"
+    : "Deny this connector request? A matching retry will request approval again.";
 }
 
 function findFlow(data: AppData, approval: FlowApproval): FlowDefinition | undefined {
@@ -320,7 +391,7 @@ function shortId(value: string): string {
   return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
-function decisionMessage(decision: ApprovalDecision, status: FlowRunStatus): string {
+function flowDecisionMessage(decision: ApprovalDecision, status: FlowRunStatus): string {
   if (decision === "deny") {
     return "Request denied. The Flow run was cancelled.";
   }
@@ -331,4 +402,10 @@ function decisionMessage(decision: ApprovalDecision, status: FlowRunStatus): str
     return "Request approved, but the Flow encountered an error after continuing.";
   }
   return status === "completed" ? "Request approved. The Flow completed." : "Request approved. The Flow continued.";
+}
+
+function actionDecisionMessage(decision: ApprovalDecision): string {
+  return decision === "deny"
+    ? "Request denied. The connector action remains blocked."
+    : "Request approved. Retry the identical request within 15 minutes to run it once.";
 }

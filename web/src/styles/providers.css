@@ -326,8 +326,64 @@
 .provider-inline-oauth-settings,
 .provider-detail-card > .tag-list,
 .provider-detail-card > .linked-list,
-.provider-detail-card > .muted-copy {
+.provider-detail-card > .muted-copy,
+.provider-approval-settings > input,
+.provider-approval-settings > .button-row,
+.provider-approval-list {
   margin: 16px;
+}
+
+.provider-approval-settings > input {
+  width: calc(100% - 32px);
+  margin-bottom: 0;
+}
+
+.provider-approval-heading {
+  align-items: center;
+}
+
+.provider-approval-list {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.provider-approval-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  align-items: center;
+  gap: 16px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-approval-row:last-child {
+  border-bottom: 0;
+}
+
+.provider-approval-row:hover {
+  background: var(--accent);
+}
+
+.provider-approval-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.provider-approval-row strong,
+.provider-approval-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-approval-row small {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .provider-connection-card > .auth-method-control {
@@ -615,6 +671,11 @@
   .connection-list-item [data-slot="button"],
   .connection-manager-new [data-slot="button"] {
     align-self: flex-start;
+  }
+
+  .provider-approval-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
   .provider-row,

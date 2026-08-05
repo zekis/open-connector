@@ -3,6 +3,12 @@ import type { TokenPolicy } from "../../core/action-policy.ts";
 import type { ResolvedCredential } from "../../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
+import type {
+  ActionApproval,
+  ActionApprovalStatus,
+  ConnectionActionPermission,
+  IConnectionApprovalStore,
+} from "../approvals/connection-approval-types.ts";
 import type { D1DatabaseBinding } from "../cloudflare/cloudflare-bindings.ts";
 import type {
   FlowApproval,
@@ -10,10 +16,12 @@ import type {
   FlowDefinition,
   FlowRun,
   FlowStep,
+  FlowTriggerState,
   IFlowStore,
 } from "../flows/flow-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type {
+  AbandonIdempotencyInput,
   CompleteIdempotencyInput,
   IdempotencyClaimInput,
   IdempotencyClaimResult,
@@ -45,6 +53,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly runLogStore: D1RunLogStore;
   readonly idempotencyStore: D1IdempotencyStore;
   readonly flowStore: D1FlowStore;
+  readonly connectionApprovalStore: D1ConnectionApprovalStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -56,6 +65,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.runLogStore = new D1RunLogStore(database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new D1IdempotencyStore(database, secretCodec);
     this.flowStore = new D1FlowStore(database, secretCodec);
+    this.connectionApprovalStore = new D1ConnectionApprovalStore(database, secretCodec);
   }
 }
 
@@ -439,6 +449,22 @@ export class D1IdempotencyStore implements IIdempotencyStore {
       .run();
     return (result.meta.changes ?? 0) > 0;
   }
+
+  async abandon(input: AbandonIdempotencyInput): Promise<boolean> {
+    const result = await this.database
+      .prepare(
+        `
+        delete from idempotency_records
+        where key_hash = ?
+          and claim_id = ?
+          and request_hash = ?
+          and state = 'in_progress'
+      `,
+      )
+      .bind(input.keyHash, input.claimId, input.requestHash)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
 }
 
 export class D1RunLogStore implements IRunLogStore {
@@ -580,6 +606,7 @@ export class D1FlowStore implements IFlowStore {
   }
 
   async deleteFlow(id: string): Promise<boolean> {
+    await this.deleteTriggerState(id);
     const result = await this.database.prepare("delete from flows where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
   }
@@ -688,8 +715,31 @@ export class D1FlowStore implements IFlowStore {
     return (result.meta.changes ?? 0) > 0;
   }
 
+  async setTriggerState(state: FlowTriggerState): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into flow_trigger_states (id, updated_at, value)
+        values (?, ?, ?)
+        on conflict(id) do update set
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .bind(state.flowId, state.updatedAt, await this.encode(state))
+      .run();
+  }
+
+  async getTriggerState(flowId: string): Promise<FlowTriggerState | undefined> {
+    return await this.getById<FlowTriggerState>("flow_trigger_states", flowId);
+  }
+
+  async deleteTriggerState(flowId: string): Promise<void> {
+    await this.database.prepare("delete from flow_trigger_states where id = ?").bind(flowId).run();
+  }
+
   private async getById<T>(
-    table: "flows" | "flow_runs" | "flow_steps" | "flow_approvals",
+    table: "flows" | "flow_runs" | "flow_steps" | "flow_approvals" | "flow_trigger_states",
     id: string,
   ): Promise<T | undefined> {
     const row = await this.database.prepare(`select value from ${table} where id = ?`).bind(id).first<RuntimeRow>();
@@ -709,6 +759,117 @@ export class D1FlowStore implements IFlowStore {
   private encode(value: unknown): Promise<string> {
     return this.secretCodec.encode(JSON.stringify(value));
   }
+}
+
+export class D1ConnectionApprovalStore implements IConnectionApprovalStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async replacePermissions(connectionId: string, permissions: ConnectionActionPermission[]): Promise<void> {
+    await this.database
+      .prepare("delete from connection_action_permissions where connection_id = ?")
+      .bind(connectionId)
+      .run();
+    for (const permission of permissions) {
+      await this.database
+        .prepare(
+          `insert into connection_action_permissions (id, connection_id, action_id, updated_at, value)
+           values (?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          connectionPermissionId(connectionId, permission.actionId),
+          connectionId,
+          permission.actionId,
+          permission.updatedAt,
+          await this.encode(permission),
+        )
+        .run();
+    }
+  }
+
+  async listPermissions(connectionId?: string): Promise<ConnectionActionPermission[]> {
+    const statement = connectionId
+      ? this.database
+          .prepare("select value from connection_action_permissions where connection_id = ? order by action_id")
+          .bind(connectionId)
+      : this.database.prepare("select value from connection_action_permissions order by connection_id, action_id");
+    const { results } = await statement.all<RuntimeRow>();
+    return await this.decodeRows<ConnectionActionPermission>(results);
+  }
+
+  async getPermission(connectionId: string, actionId: string): Promise<ConnectionActionPermission | undefined> {
+    return await this.getById<ConnectionActionPermission>(
+      "connection_action_permissions",
+      connectionPermissionId(connectionId, actionId),
+    );
+  }
+
+  async addActionApproval(approval: ActionApproval): Promise<void> {
+    await this.database
+      .prepare("insert into action_approvals (id, status, request_hash, requested_at, value) values (?, ?, ?, ?, ?)")
+      .bind(approval.id, approval.status, approval.requestHash, approval.requestedAt, await this.encode(approval))
+      .run();
+  }
+
+  async getActionApproval(id: string): Promise<ActionApproval | undefined> {
+    return await this.getById<ActionApproval>("action_approvals", id);
+  }
+
+  async listActionApprovals(limit = 500): Promise<ActionApproval[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 1_000));
+    const { results } = await this.database
+      .prepare("select value from action_approvals order by requested_at desc, id desc limit ?")
+      .bind(boundedLimit)
+      .all<RuntimeRow>();
+    return await this.decodeRows<ActionApproval>(results);
+  }
+
+  async findActionApproval(requestHash: string, status: ActionApprovalStatus): Promise<ActionApproval | undefined> {
+    const row = await this.database
+      .prepare(
+        "select value from action_approvals where request_hash = ? and status = ? order by requested_at desc, id desc limit 1",
+      )
+      .bind(requestHash, status)
+      .first<RuntimeRow>();
+    return row ? await this.decode<ActionApproval>(readString(row, "value")) : undefined;
+  }
+
+  async updateActionApproval(approval: ActionApproval, expectedStatus: ActionApprovalStatus): Promise<boolean> {
+    const result = await this.database
+      .prepare("update action_approvals set status = ?, value = ? where id = ? and status = ?")
+      .bind(approval.status, await this.encode(approval), approval.id, expectedStatus)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  private async getById<T>(
+    table: "connection_action_permissions" | "action_approvals",
+    id: string,
+  ): Promise<T | undefined> {
+    const row = await this.database.prepare(`select value from ${table} where id = ?`).bind(id).first<RuntimeRow>();
+    return row ? await this.decode<T>(readString(row, "value")) : undefined;
+  }
+
+  private async decodeRows<T>(rows: RuntimeRow[]): Promise<T[]> {
+    return await Promise.all(rows.map((row) => this.decode<T>(readString(row, "value"))));
+  }
+
+  private async decode<T>(value: string): Promise<T> {
+    return parseJson<T>(await this.secretCodec.decode(value));
+  }
+
+  private encode(value: unknown): Promise<string> {
+    return this.secretCodec.encode(JSON.stringify(value));
+  }
+}
+
+function connectionPermissionId(connectionId: string, actionId: string): string {
+  return `${connectionId.length}:${connectionId}${actionId}`;
 }
 
 async function getSecretJson<T>(

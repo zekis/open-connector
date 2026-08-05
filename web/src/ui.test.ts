@@ -206,6 +206,8 @@ describe("loadRuntimeData", () => {
       "/api/flows",
       "/api/flow-runs",
       "/api/flow-approvals",
+      "/api/connection-permissions",
+      "/api/action-approvals",
       "/api/agent-connections",
       "/api/agent-settings",
       "/api/agent-settings/claude_code/models",

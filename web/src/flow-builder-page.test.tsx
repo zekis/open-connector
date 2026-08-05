@@ -15,6 +15,7 @@ const flow: FlowDefinition = {
   sourceConnectionId: "outlook-1",
   destinationConnectionId: "sharepoint-1",
   instructions: "Copy today's messages into a spreadsheet.",
+  trigger: { type: "manual" },
   agent: {
     provider: "claude_code",
     connectionId: "claude-subscription-1",
@@ -138,8 +139,32 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain('value="Daily inbox sync"');
     expect(html).toContain("Copy today&#x27;s messages into a spreadsheet.");
     expect(html).toContain("Save changes");
+    expect(html).toContain("Start this Flow");
+    expect(html).toContain("API call");
+    expect(html).toContain("Schedule");
+    expect(html).toContain("New email");
+    expect(html).toContain("File created");
+    expect(html).toContain('aria-pressed="true"');
     expect(html).not.toContain(">Model<");
     expect(html).not.toContain("opus");
+  });
+
+  it("renders persisted schedule settings", () => {
+    const scheduleFlow: FlowDefinition = {
+      ...flow,
+      trigger: { type: "schedule", cron: "0 9 * * 1-5", timeZone: "Australia/Perth" },
+    };
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route
+        path="/flows/:flowId/edit"
+        element={<FlowBuilderPage data={{ ...editorData, flows: [scheduleFlow] }} onRefresh={() => {}} />}
+      />,
+    );
+
+    expect(html).toContain('value="0 9 * * 1-5"');
+    expect(html).toContain('value="Australia/Perth"');
+    expect(html).toContain("Five fields: minute, hour, day, month, weekday.");
   });
 
   it("lays out provider connectors around the Flow instructions", () => {
@@ -177,6 +202,39 @@ describe("FlowBuilderPage", () => {
     expect(destinationIndex).toBeLessThan(destinationActionIndex);
     expect(html).toContain("1/1 allowed");
     expect(html).toContain("0/1 allowed");
+  });
+
+  it("shows the connector-wide default while preserving Flow overrides", () => {
+    const inheritedFlow: FlowDefinition = {
+      ...flow,
+      tools: [{ ...flow.tools[0]!, approval: "inherit" }],
+    };
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route
+        path="/flows/:flowId/edit"
+        element={
+          <FlowBuilderPage
+            data={{
+              ...editorData,
+              flows: [inheritedFlow],
+              connectionPermissions: [
+                {
+                  connectionId: "outlook-1",
+                  actionId: "outlook.search_emails",
+                  approval: "require_approval",
+                  updatedAt: "2026-08-05T00:00:00.000Z",
+                },
+              ],
+            }}
+            onRefresh={() => {}}
+          />
+        }
+      />,
+    );
+
+    expect(html).toContain('<option value="inherit" selected="">Use connector default (Require approval)</option>');
+    expect(html).toContain('<option value="always_allow">Always allow</option>');
   });
 });
 

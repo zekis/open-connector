@@ -4,10 +4,12 @@ import type {
   AgentConnectionSummary,
   AgentModelOption,
   AgentRuntimeSettings,
+  ActionApproval,
   ConnectionRecord,
   FlowApproval,
   FlowDefinition,
   FlowRun,
+  ConnectionActionPermission,
   OAuthConfig,
   ProviderDefinition,
   RunLogPage,
@@ -175,6 +177,8 @@ export async function loadRuntimeData(
     flows,
     flowRuns,
     flowApprovals,
+    connectionPermissions,
+    actionApprovals,
     agentConnections,
     agentSettings,
     agentModels,
@@ -188,6 +192,8 @@ export async function loadRuntimeData(
     apiGet<FlowDefinition[]>("/api/flows"),
     apiGet<FlowRun[]>("/api/flow-runs"),
     apiGet<FlowApproval[]>("/api/flow-approvals"),
+    apiGet<ConnectionActionPermission[]>("/api/connection-permissions"),
+    apiGet<ActionApproval[]>("/api/action-approvals"),
     apiGet<AgentConnectionSummary[]>("/api/agent-connections"),
     apiGet<AgentRuntimeSettings[]>("/api/agent-settings"),
     apiGet<AgentModelOption[]>("/api/agent-settings/claude_code/models"),
@@ -206,6 +212,8 @@ export async function loadRuntimeData(
       flows,
       flowRuns,
       flowApprovals,
+      connectionPermissions,
+      actionApprovals,
       agentConnections,
       agentSettings,
       agentModels,
@@ -365,9 +373,9 @@ function AppShell(props: {
   const isBrowserPage = section === "actions" || section === "runs" || section === "chat";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
-  const pendingApprovalCount = (props.data.flowApprovals ?? []).filter(
-    (approval) => approval.status === "pending",
-  ).length;
+  const pendingApprovalCount =
+    (props.data.flowApprovals ?? []).filter((approval) => approval.status === "pending").length +
+    (props.data.actionApprovals ?? []).filter((approval) => approval.status === "pending").length;
   const mainClassName = [
     isBrowserPage ? "main main-browser" : "main",
     isOverviewPage ? "overview-main" : "",

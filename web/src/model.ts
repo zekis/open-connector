@@ -131,7 +131,7 @@ export interface RunLog {
   id: string;
   service: string;
   actionId: string;
-  caller: "http" | "mcp" | "web" | "flow" | "chat";
+  caller: "http" | "mcp" | "web" | "flow" | "chat" | "trigger";
   startedAt: string;
   completedAt: string;
   durationMs: number;
@@ -174,12 +174,54 @@ export interface RuntimeActionResponse {
 }
 
 export type FlowApprovalMode = "always_allow" | "require_approval";
+export type FlowApprovalSetting = FlowApprovalMode | "inherit";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
+export type FlowTriggerType = "manual" | "api" | "schedule" | "new_email" | "file_created";
+
+export type FlowTrigger =
+  | { type: "manual" }
+  | { type: "api" }
+  | { type: "schedule"; cron: string; timeZone: string }
+  | { type: "new_email"; connectionId: string; pollIntervalSeconds: number; query?: string }
+  | {
+      type: "file_created";
+      connectionId: string;
+      pollIntervalSeconds: number;
+      folder?: string;
+      extension?: string;
+    };
+
+export interface FlowTriggerEvent {
+  type: FlowTriggerType;
+  occurredAt: string;
+  payload?: unknown;
+}
 
 export interface FlowToolGrant {
   actionId: string;
   connectionId: string;
+  approval: FlowApprovalSetting;
+}
+
+export interface ConnectionActionPermission {
+  connectionId: string;
+  actionId: string;
   approval: FlowApprovalMode;
+  updatedAt: string;
+}
+
+export interface ActionApproval {
+  id: string;
+  status: "pending" | "approved" | "denied" | "consumed" | "expired";
+  actionId: string;
+  connectionId: string;
+  caller: RunLog["caller"];
+  input: unknown;
+  requestedAt: string;
+  runtimeTokenId?: string;
+  resolvedAt?: string;
+  expiresAt?: string;
+  consumedAt?: string;
 }
 
 export interface FlowDefinition {
@@ -190,6 +232,7 @@ export interface FlowDefinition {
   sourceConnectionId: string;
   destinationConnectionId: string;
   instructions: string;
+  trigger: FlowTrigger;
   agent: {
     provider?: "claude_code";
     connectionId: string;
@@ -225,7 +268,8 @@ export interface FlowRun {
   id: string;
   flowId: string;
   status: FlowRunStatus;
-  trigger: "manual";
+  trigger: FlowTriggerType;
+  triggerEvent?: FlowTriggerEvent;
   stepCount: number;
   startedAt: string;
   updatedAt: string;
@@ -305,6 +349,8 @@ export interface AppData {
   flows?: FlowDefinition[];
   flowRuns?: FlowRun[];
   flowApprovals?: FlowApproval[];
+  connectionPermissions?: ConnectionActionPermission[];
+  actionApprovals?: ActionApproval[];
   agentConnections?: AgentConnectionSummary[];
   agentSettings?: AgentRuntimeSettings[];
   agentModels?: AgentModelOption[];
@@ -398,6 +444,8 @@ export const emptyData: AppData = {
   flows: [],
   flowRuns: [],
   flowApprovals: [],
+  connectionPermissions: [],
+  actionApprovals: [],
   agentConnections: [],
   agentSettings: [],
   agentModels: [],

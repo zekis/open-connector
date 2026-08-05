@@ -51,6 +51,8 @@ describe("SqliteRuntimeDatabase", () => {
       "0009_runtime_token_proxy.sql",
       "0010_connection_revision.sql",
       "0011_flows.sql",
+      "0012_flow_triggers.sql",
+      "0013_connection_approvals.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -196,6 +198,14 @@ describe("SqliteRuntimeDatabase", () => {
     await first.flowStore.addRun(run);
     await first.flowStore.addStep(step);
     await first.flowStore.addApproval(approval);
+    await first.flowStore.setTriggerState({
+      flowId: flow.id,
+      flowRevision: flow.revision,
+      initialized: true,
+      seenIds: ["message-1"],
+      lastCheckedAt: "2026-07-30T00:00:03.000Z",
+      updatedAt: "2026-07-30T00:00:03.000Z",
+    });
     first.close();
 
     const second = new SqliteRuntimeDatabase(databasePath, {
@@ -205,6 +215,10 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.flowStore.listRuns(flow.id)).resolves.toEqual([run]);
     await expect(second.flowStore.listSteps(run.id)).resolves.toEqual([step]);
     await expect(second.flowStore.listApprovals("pending")).resolves.toEqual([approval]);
+    await expect(second.flowStore.getTriggerState(flow.id)).resolves.toMatchObject({
+      flowId: flow.id,
+      seenIds: ["message-1"],
+    });
     const approved: FlowApproval = {
       ...approval,
       status: "approved",
@@ -213,6 +227,55 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.flowStore.updateApproval(approved, "pending")).resolves.toBe(true);
     await expect(second.flowStore.updateApproval({ ...approved, status: "denied" }, "pending")).resolves.toBe(false);
     await expect(second.flowStore.getApproval(approval.id)).resolves.toEqual(approved);
+    second.close();
+  });
+
+  it("encrypts and persists connector defaults and one-time action approvals", async () => {
+    const databasePath = await createDatabasePath();
+    const permission = {
+      connectionId: "connection-1",
+      actionId: "github.create_issue",
+      approval: "require_approval" as const,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    };
+    const approval = {
+      id: "action-approval-1",
+      status: "pending" as const,
+      actionId: permission.actionId,
+      connectionId: permission.connectionId,
+      caller: "chat" as const,
+      input: { title: "encrypted approval payload" },
+      requestHash: "request-hash-1",
+      requestedAt: "2026-08-05T00:01:00.000Z",
+    };
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("approval-key"),
+    });
+    await first.connectionApprovalStore.replacePermissions(permission.connectionId, [permission]);
+    await first.connectionApprovalStore.addActionApproval(approval);
+    first.close();
+
+    await expectDatabaseDirectoryNotToContain(databasePath, "encrypted approval payload");
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("approval-key"),
+    });
+    await expect(second.connectionApprovalStore.listPermissions(permission.connectionId)).resolves.toEqual([
+      permission,
+    ]);
+    await expect(second.connectionApprovalStore.findActionApproval(approval.requestHash, "pending")).resolves.toEqual(
+      approval,
+    );
+    const approved = {
+      ...approval,
+      status: "approved" as const,
+      resolvedAt: "2026-08-05T00:02:00.000Z",
+      expiresAt: "2026-08-05T00:17:00.000Z",
+    };
+    await expect(second.connectionApprovalStore.updateActionApproval(approved, "pending")).resolves.toBe(true);
+    await expect(
+      second.connectionApprovalStore.updateActionApproval({ ...approved, status: "denied" }, "pending"),
+    ).resolves.toBe(false);
+    await expect(second.connectionApprovalStore.getActionApproval(approval.id)).resolves.toEqual(approved);
     second.close();
   });
 
@@ -350,6 +413,25 @@ describe("SqliteRuntimeDatabase", () => {
       "Invalid persisted action response",
     );
     reopened.close();
+  });
+
+  it("abandons only the matching in-progress idempotency claim", async () => {
+    const database = new SqliteRuntimeDatabase(await createDatabasePath());
+    const claim = {
+      keyHash: "approval-key",
+      requestHash: "approval-request",
+      claimId: "claim-1",
+      now: "2026-08-05T00:00:00.000Z",
+      expiresAt: "2026-08-06T00:00:00.000Z",
+    };
+
+    await expect(database.idempotencyStore.claim(claim)).resolves.toEqual({ kind: "acquired" });
+    await expect(database.idempotencyStore.abandon({ ...claim, claimId: "wrong-claim" })).resolves.toBe(false);
+    await expect(database.idempotencyStore.abandon(claim)).resolves.toBe(true);
+    await expect(database.idempotencyStore.claim({ ...claim, claimId: "claim-2" })).resolves.toEqual({
+      kind: "acquired",
+    });
+    database.close();
   });
 
   it("shares in-progress idempotency claims across database instances", async () => {
@@ -509,6 +591,8 @@ describe("SqliteRuntimeDatabase", () => {
       "0009_runtime_token_proxy.sql",
       "0010_connection_revision.sql",
       "0011_flows.sql",
+      "0012_flow_triggers.sql",
+      "0013_connection_approvals.sql",
     ]) {
       raw.exec(readFileSync(new URL(`../../../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -617,6 +701,12 @@ describe("SqliteRuntimeDatabase", () => {
       inspected.prepare("select name from runtime_migrations where name = ?").get("0010_connection_revision.sql"),
     ).toBeDefined();
     expect(inspected.prepare("select name from runtime_migrations where name = ?").get("0011_flows.sql")).toBeDefined();
+    expect(
+      inspected.prepare("select name from runtime_migrations where name = ?").get("0012_flow_triggers.sql"),
+    ).toBeDefined();
+    expect(
+      inspected.prepare("select name from runtime_migrations where name = ?").get("0013_connection_approvals.sql"),
+    ).toBeDefined();
     expect(inspected.prepare("pragma table_info(connections)").all()).toContainEqual(
       expect.objectContaining({ name: "id", notnull: 1 }),
     );
@@ -776,6 +866,14 @@ describe("SqliteRuntimeDatabase", () => {
       expiresAt: "2026-07-01T00:00:00.000Z",
     });
     await database.flowStore.setFlow(createFlow());
+    await database.connectionApprovalStore.replacePermissions("connection-1", [
+      {
+        connectionId: "connection-1",
+        actionId: "github.create_issue",
+        approval: "require_approval",
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      },
+    ]);
 
     database.resetRuntimeData();
 
@@ -783,6 +881,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(database.runLogStore.list()).resolves.toEqual({ items: [] });
     await expect(database.runtimePolicyStore.get()).resolves.toBeUndefined();
     await expect(database.flowStore.listFlows()).resolves.toEqual([]);
+    await expect(database.connectionApprovalStore.listPermissions()).resolves.toEqual([]);
     await expect(
       database.idempotencyStore.claim({
         keyHash: "key-hash",
@@ -834,6 +933,16 @@ describe("SqliteRuntimeDatabase", () => {
     await database.runLogStore.add(createRun("run-1", "2026-06-30T00:00:00.000Z"));
     const flow = createFlow();
     await database.flowStore.setFlow(flow);
+    await database.connectionApprovalStore.addActionApproval({
+      id: "action-approval-rotation",
+      status: "pending",
+      actionId: "github.create_issue",
+      connectionId: "connection-1",
+      caller: "chat",
+      input: { title: "rotated approval secret" },
+      requestHash: "rotation-request-hash",
+      requestedAt: "2026-08-05T00:00:00.000Z",
+    });
     await database.rotateSecretCodec(new AesGcmSecretCodec("new-key"));
     database.close();
 
@@ -843,6 +952,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withOldKey.connectionStore.get("github", "default")).rejects.toThrow();
     await expect(withOldKey.idempotencyStore.claim({ ...claim, claimId: "claim-2" })).rejects.toThrow();
     await expect(withOldKey.flowStore.getFlow(flow.id)).rejects.toThrow();
+    await expect(withOldKey.connectionApprovalStore.getActionApproval("action-approval-rotation")).rejects.toThrow();
     withOldKey.close();
 
     const withNewKey = new SqliteRuntimeDatabase(databasePath, {
@@ -860,6 +970,9 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withNewKey.runtimeTokenStore.list()).resolves.toMatchObject([{ id: token.record.id }]);
     await expect(withNewKey.runLogStore.list()).resolves.toMatchObject({ items: [{ id: "run-1" }] });
     await expect(withNewKey.flowStore.getFlow(flow.id)).resolves.toEqual(flow);
+    await expect(
+      withNewKey.connectionApprovalStore.getActionApproval("action-approval-rotation"),
+    ).resolves.toMatchObject({ input: { title: "rotated approval secret" } });
     await expect(withNewKey.idempotencyStore.claim({ ...claim, claimId: "claim-3" })).resolves.toEqual({
       kind: "completed",
       response: successResponse({ token: "rotated-idempotency-secret" }),
@@ -896,6 +1009,7 @@ function createFlow(): FlowDefinition {
     sourceConnectionId: "outlook-connection",
     destinationConnectionId: "sharepoint-connection",
     instructions: "Copy today's messages into the destination spreadsheet.",
+    trigger: { type: "manual" },
     agent: {
       connectionId: "openai-connection",
       model: "opus",

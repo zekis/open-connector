@@ -93,6 +93,7 @@ function createTurnInput(): FlowAgentTurnInput {
       sourceConnectionId: "source-1",
       destinationConnectionId: "destination-1",
       instructions: "Synchronize today's records.",
+      trigger: { type: "manual" },
       agent: {
         provider: "claude_code",
         connectionId: "claude-subscription-1",

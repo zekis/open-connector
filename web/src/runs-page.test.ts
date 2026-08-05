@@ -50,6 +50,7 @@ describe("runFiltersFromSearchParams", () => {
         new URLSearchParams("service=hackernews&actionId=hackernews.get_item&caller=mcp&ok=false"),
       ),
     ).toEqual({ service: "hackernews", actionId: "hackernews.get_item", caller: "mcp", ok: false });
+    expect(runFiltersFromSearchParams(new URLSearchParams("caller=trigger"))).toMatchObject({ caller: "trigger" });
   });
 });
 

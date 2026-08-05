@@ -15,6 +15,68 @@ const githubProfile = {
 };
 
 describe("D1RuntimeDatabase", () => {
+  it("persists Flow trigger detector state", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("trigger-state-key"),
+    });
+    const state = {
+      flowId: "flow-1",
+      flowRevision: "revision-1",
+      initialized: true,
+      seenIds: ["item-1"],
+      lastCheckedAt: "2026-08-05T01:00:00.000Z",
+      updatedAt: "2026-08-05T01:00:00.000Z",
+    };
+
+    await database.flowStore.setTriggerState(state);
+    await expect(database.flowStore.getTriggerState(state.flowId)).resolves.toEqual(state);
+    await database.flowStore.deleteTriggerState(state.flowId);
+    await expect(database.flowStore.getTriggerState(state.flowId)).resolves.toBeUndefined();
+  });
+
+  it("persists encrypted connector defaults and atomically resolves action approvals", async () => {
+    const d1 = new SqliteD1Database();
+    const database = new D1RuntimeDatabase(d1, {
+      secretCodec: new AesGcmSecretCodec("approval-key"),
+    });
+    const permission = {
+      connectionId: "connection-1",
+      actionId: "github.create_issue",
+      approval: "require_approval" as const,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    };
+    const approval = {
+      id: "action-approval-1",
+      status: "pending" as const,
+      actionId: permission.actionId,
+      connectionId: permission.connectionId,
+      caller: "mcp" as const,
+      input: { title: "encrypted approval payload" },
+      requestHash: "approval-request-hash",
+      requestedAt: "2026-08-05T00:01:00.000Z",
+    };
+
+    await database.connectionApprovalStore.replacePermissions(permission.connectionId, [permission]);
+    await database.connectionApprovalStore.addActionApproval(approval);
+
+    await expect(database.connectionApprovalStore.listPermissions(permission.connectionId)).resolves.toEqual([
+      permission,
+    ]);
+    await expect(database.connectionApprovalStore.findActionApproval(approval.requestHash, "pending")).resolves.toEqual(
+      approval,
+    );
+    expect(d1.value("action_approvals", "id", approval.id)).not.toContain("encrypted approval payload");
+    const denied = {
+      ...approval,
+      status: "denied" as const,
+      resolvedAt: "2026-08-05T00:02:00.000Z",
+    };
+    await expect(database.connectionApprovalStore.updateActionApproval(denied, "pending")).resolves.toBe(true);
+    await expect(
+      database.connectionApprovalStore.updateActionApproval({ ...denied, status: "approved" }, "pending"),
+    ).resolves.toBe(false);
+  });
+
   it("stores connections and OAuth client configs through the secret codec", async () => {
     const d1 = new SqliteD1Database();
     const database = new D1RuntimeDatabase(d1, {
@@ -245,6 +307,24 @@ describe("D1RuntimeDatabase", () => {
     });
   });
 
+  it("abandons only the matching in-progress idempotency claim", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database());
+    const claim = {
+      keyHash: "approval-key",
+      requestHash: "approval-request",
+      claimId: "claim-1",
+      now: "2026-08-05T00:00:00.000Z",
+      expiresAt: "2026-08-06T00:00:00.000Z",
+    };
+
+    await expect(database.idempotencyStore.claim(claim)).resolves.toEqual({ kind: "acquired" });
+    await expect(database.idempotencyStore.abandon({ ...claim, claimId: "wrong-claim" })).resolves.toBe(false);
+    await expect(database.idempotencyStore.abandon(claim)).resolves.toBe(true);
+    await expect(database.idempotencyStore.claim({ ...claim, claimId: "claim-2" })).resolves.toEqual({
+      kind: "acquired",
+    });
+  });
+
   it("rejects malformed persisted idempotency responses", async () => {
     const d1 = new SqliteD1Database();
     const database = new D1RuntimeDatabase(d1);
@@ -472,6 +552,11 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(
       readFileSync(new URL("../../../migrations/0010_connection_revision.sql", import.meta.url), "utf8"),
     );
+    this.database.exec(readFileSync(new URL("../../../migrations/0011_flows.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0012_flow_triggers.sql", import.meta.url), "utf8"));
+    this.database.exec(
+      readFileSync(new URL("../../../migrations/0013_connection_approvals.sql", import.meta.url), "utf8"),
+    );
   }
 
   prepare(query: string): D1PreparedStatementBinding {
@@ -483,8 +568,8 @@ class SqliteD1Database implements D1DatabaseBinding {
   }
 
   value(
-    table: "connections" | "oauth_client_configs" | "idempotency_records",
-    keyColumn: "service" | "key_hash",
+    table: "connections" | "oauth_client_configs" | "idempotency_records" | "action_approvals",
+    keyColumn: "service" | "key_hash" | "id",
     key: string,
     valueColumn: "value" | "response_value" = "value",
   ): string {

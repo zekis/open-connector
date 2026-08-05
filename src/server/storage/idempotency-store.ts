@@ -25,8 +25,16 @@ export interface CompleteIdempotencyInput {
   expiresAt: string;
 }
 
+/** Values required to release an in-progress claim that produced no replayable result. */
+export interface AbandonIdempotencyInput {
+  keyHash: string;
+  requestHash: string;
+  claimId: string;
+}
+
 /** Persistent store for HTTP action deduplication and completed-result replay. */
 export interface IIdempotencyStore {
   claim(input: IdempotencyClaimInput): Promise<IdempotencyClaimResult>;
   complete(input: CompleteIdempotencyInput): Promise<boolean>;
+  abandon(input: AbandonIdempotencyInput): Promise<boolean>;
 }

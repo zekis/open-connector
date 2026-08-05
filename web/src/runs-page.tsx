@@ -360,7 +360,15 @@ export function runFiltersFromSearchParams(searchParams: URLSearchParams): RunFi
   return {
     service: searchParams.get("service")?.trim() || null,
     actionId: searchParams.get("actionId")?.trim() || "",
-    caller: caller === "http" || caller === "mcp" || caller === "web" ? caller : null,
+    caller:
+      caller === "http" ||
+      caller === "mcp" ||
+      caller === "web" ||
+      caller === "flow" ||
+      caller === "chat" ||
+      caller === "trigger"
+        ? caller
+        : null,
     ok: ok === "true" ? true : ok === "false" ? false : null,
   };
 }

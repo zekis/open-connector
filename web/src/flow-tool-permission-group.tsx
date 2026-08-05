@@ -1,4 +1,4 @@
-import type { ConnectionRecord, FlowApprovalMode, ProviderDefinition } from "./model";
+import type { ConnectionRecord, FlowApprovalMode, FlowApprovalSetting, ProviderDefinition } from "./model";
 import type { ReactNode } from "react";
 
 import { Cable } from "lucide-react";
@@ -12,6 +12,7 @@ export interface FlowToolPermissionChoice {
   actionId: string;
   actionName: string;
   actionDescription: string;
+  defaultApproval: FlowApprovalMode;
 }
 
 interface FlowToolPermissionGroupProps {
@@ -20,9 +21,9 @@ interface FlowToolPermissionGroupProps {
   provider: ProviderDefinition | undefined;
   choices: FlowToolPermissionChoice[];
   visibleChoices: FlowToolPermissionChoice[];
-  selectedTools: Record<string, FlowApprovalMode>;
+  selectedTools: Record<string, FlowApprovalSetting>;
   onToggle(key: string, enabled: boolean): void;
-  onApprovalChange(key: string, approval: FlowApprovalMode): void;
+  onApprovalChange(key: string, approval: FlowApprovalSetting): void;
 }
 
 export function FlowToolPermissionGroup(props: FlowToolPermissionGroupProps): ReactNode {
@@ -74,10 +75,14 @@ export function FlowToolPermissionGroup(props: FlowToolPermissionGroupProps): Re
                 <select
                   className="flow-native-select"
                   aria-label={`Approval policy for ${choice.actionName}`}
-                  value={approval ?? "require_approval"}
+                  value={approval ?? "inherit"}
                   disabled={!approval}
-                  onChange={(event) => props.onApprovalChange(choice.key, event.target.value as FlowApprovalMode)}
+                  onChange={(event) => props.onApprovalChange(choice.key, event.target.value as FlowApprovalSetting)}
                 >
+                  <option value="inherit">
+                    Use connector default (
+                    {choice.defaultApproval === "require_approval" ? "Require approval" : "Always allow"})
+                  </option>
                   <option value="require_approval">Require approval</option>
                   <option value="always_allow">Always allow</option>
                 </select>
