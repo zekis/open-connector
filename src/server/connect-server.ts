@@ -7,6 +7,7 @@ import type { AgentCredentialService } from "./agents/agent-credential-service.t
 import type { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
+import type { IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
@@ -57,6 +58,7 @@ import {
   writeRuntimeFailure,
   writeRuntimeSuccess,
 } from "./api/runtime-api.ts";
+import { AgentChatError } from "./chat/agent-chat-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
@@ -71,6 +73,7 @@ export interface IConnectServerOptions {
   connections: ConnectionService;
   agentCredentials?: AgentCredentialService;
   agentSettings?: AgentSettingsService;
+  agentChat?: IAgentChatService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
@@ -215,6 +218,9 @@ export class ConnectServer {
       app.put("/api/agent-settings/:provider", (context) =>
         this.updateAgentSettings(context, context.req.param("provider")),
       );
+    }
+    if (this.options.agentChat) {
+      app.post("/api/agent-chat/messages", (context) => this.sendAgentChatMessage(context));
     }
 
     app.get("/api/runs", (context) => this.listRuns(context));
@@ -826,6 +832,18 @@ export class ConnectServer {
     }
   }
 
+  private async sendAgentChatMessage(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    try {
+      return context.json(await this.options.agentChat!.respond(body));
+    } catch (error) {
+      if (error instanceof AgentChatError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
   private async listFlows(context: Context): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowService().list());
   }
@@ -1374,7 +1392,7 @@ function readRunLogListInput(context: Context): RunLogListQuery {
   const caller = optionalString(context.req.query("caller"));
   if (caller !== undefined) {
     if (!isRunLogCaller(caller)) {
-      return { ok: false, message: "caller must be one of http, mcp, or web." };
+      return { ok: false, message: "caller must be one of http, mcp, web, flow, or chat." };
     }
     input.caller = caller;
   }
@@ -1390,7 +1408,7 @@ function readRunLogListInput(context: Context): RunLogListQuery {
 }
 
 function isRunLogCaller(value: string): value is RunLogCaller {
-  return value === "http" || value === "mcp" || value === "web";
+  return value === "http" || value === "mcp" || value === "web" || value === "flow" || value === "chat";
 }
 
 function readSearchQuery(context: Context, defaultLimit = DEFAULT_ACTION_SEARCH_LIMIT): SearchQuery {

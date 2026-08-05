@@ -9,6 +9,7 @@
 @import "./styles/providers.css";
 @import "./styles/actions.css";
 @import "./styles/agents.css";
+@import "./styles/chat.css";
 @import "./styles/runs.css";
 @import "./styles/flows.css";
 @import "./styles/approvals.css";

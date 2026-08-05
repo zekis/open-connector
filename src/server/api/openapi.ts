@@ -208,6 +208,7 @@ export function createOpenApiDocument(
       items: { $ref: "#/components/schemas/ConnectionSummary" },
     }),
     "/api/connections/{service}": createConnectionPath(),
+    "/api/agent-chat/messages": createAgentChatMessagesPath(),
     "/api/flows": createFlowsPath(),
     "/api/flows/{id}": createFlowPath(),
     "/api/oauth/configs": getOperation("OAuth", "List local OAuth client configurations.", {
@@ -245,6 +246,7 @@ export function createOpenApiDocument(
       { name: "System", description: "Runtime health and server-level status." },
       { name: "Catalog", description: "Provider and action metadata used by users and agents." },
       { name: "Connections", description: "Local provider credentials and connection state." },
+      { name: "Chat", description: "Conversational agent access to connected application actions." },
       { name: "Flows", description: "Directional agent Flow definitions managed by the local admin API." },
       { name: "OAuth", description: "Local OAuth client configuration and authorization flow." },
       { name: "Access", description: "Runtime execution policy and bearer tokens for /v1 and MCP clients." },
@@ -343,6 +345,10 @@ export function createOpenApiDocument(
         FlowDefinitionInput: createFlowDefinitionInputSchema(),
         FlowAgentConfig: createFlowAgentConfigSchema(),
         FlowDefinition: createFlowDefinitionSchema(),
+        AgentChatMessage: createAgentChatMessageSchema(),
+        AgentChatRequest: createAgentChatRequestSchema(),
+        AgentChatToolActivity: createAgentChatToolActivitySchema(),
+        AgentChatResponse: createAgentChatResponseSchema(),
         ErrorResponse: errorResponseSchema,
         ConnectionUpsertRequest: createConnectionUpsertRequestSchema(),
         OAuthClientConfigSummary: jsonSchema.object(
@@ -513,6 +519,94 @@ export function createOpenApiDocument(
       },
     },
   };
+}
+
+function createAgentChatMessagesPath(): Record<string, unknown> {
+  return {
+    post: {
+      tags: ["Chat"],
+      summary: "Send a message to the configured agent.",
+      description:
+        "Runs one conversational Claude response. The agent can search and execute actions on currently connected applications through the guarded action runner. Runtime policy and run auditing apply to every connector action. Requires local admin authentication when configured.",
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/AgentChatRequest" },
+          },
+        },
+      },
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/AgentChatResponse" }),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        503: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createAgentChatMessageSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      role: jsonSchema.stringEnum("Conversation author.", ["user", "assistant"]),
+      content: jsonSchema.nonWhitespaceString("Plain-text message content.", { maxLength: 20_000 }),
+    },
+    { required: ["role", "content"], description: "One user or assistant chat message." },
+  );
+}
+
+function createAgentChatRequestSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      messages: jsonSchema.array({ $ref: "#/components/schemas/AgentChatMessage" }, { minItems: 1, maxItems: 40 }),
+    },
+    {
+      required: ["messages"],
+      description: "Conversation history ending in the new user message. History is not persisted by the server.",
+    },
+  );
+}
+
+function createAgentChatToolActivitySchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      id: jsonSchema.uuid("Tool activity identifier."),
+      type: jsonSchema.stringEnum("Host tool type.", ["search", "action"]),
+      label: jsonSchema.string("Human-readable tool activity label."),
+      ok: jsonSchema.boolean("Whether the host tool completed successfully."),
+      actionId: jsonSchema.string("Executed connector action id, when applicable."),
+      connectionId: jsonSchema.string("Connection identifier used by the host tool, when applicable."),
+      connectionDisplayName: jsonSchema.string("Connection label safe for display."),
+      input: jsonSchema.unknown("Bounded host tool input."),
+      output: jsonSchema.unknown("Bounded host tool output."),
+    },
+    {
+      required: ["id", "type", "label", "ok", "input", "output"],
+      description: "One connector search or action performed while producing the assistant response.",
+    },
+  );
+}
+
+function createAgentChatResponseSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      message: jsonSchema.object(
+        {
+          id: jsonSchema.uuid("Assistant message identifier."),
+          role: jsonSchema.literal("assistant"),
+          content: jsonSchema.string("Assistant response text."),
+          createdAt: jsonSchema.dateTime("Assistant response timestamp."),
+        },
+        { required: ["id", "role", "content", "createdAt"] },
+      ),
+      toolActivity: jsonSchema.array({ $ref: "#/components/schemas/AgentChatToolActivity" }),
+    },
+    {
+      required: ["message", "toolActivity"],
+      description: "Assistant response and connector activity completed for this message.",
+    },
+  );
 }
 
 function createFlowsPath(): Record<string, unknown> {
@@ -1007,7 +1101,7 @@ function createRunsPath(): Record<string, unknown> {
           name: "caller",
           in: "query",
           required: false,
-          schema: { type: "string", enum: ["http", "mcp", "web"] },
+          schema: { type: "string", enum: ["http", "mcp", "web", "flow", "chat"] },
           description: "Only return runs from this runtime entry point.",
         },
         {

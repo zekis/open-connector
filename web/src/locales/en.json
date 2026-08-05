@@ -42,6 +42,7 @@
     "providers": "Providers",
     "actions": "Actions",
     "agents": "Agents",
+    "chat": "Chat",
     "flows": "Flows",
     "approvals": "Approvals",
     "runs": "Runs",
@@ -77,6 +78,10 @@
       "agents": {
         "title": "Agents",
         "subtitle": "Set up agent runtimes and their API credentials."
+      },
+      "chat": {
+        "title": "Chat",
+        "subtitle": "Talk with your agent and connected applications."
       },
       "flows": {
         "title": "Flows",

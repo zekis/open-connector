@@ -16,6 +16,7 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentCredentialService } from "./agents/agent-credential-service.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
+import { AgentChatService } from "./chat/agent-chat-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { ClaudeCodeFlowAgent } from "./flows/claude-code-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
@@ -72,6 +73,10 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     actionPolicy,
     logger: options.logger,
   });
+  const getPolicySnapshot = async () => {
+    const record = await options.runtimeDatabase.runtimePolicyStore.get();
+    return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
+  };
   const flows = new FlowService({
     catalog: options.catalog,
     connections,
@@ -87,11 +92,17 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     actions,
     agentSettings,
     claudeCodeAgent: new ClaudeCodeFlowAgent(agentCredentials, claudeCode),
-    getPolicySnapshot: async () => {
-      const record = await options.runtimeDatabase.runtimePolicyStore.get();
-      return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
-    },
+    getPolicySnapshot,
     logger: options.logger,
+  });
+  const agentChat = new AgentChatService({
+    catalog: options.catalog,
+    connections,
+    agents: agentCredentials,
+    agentSettings,
+    claudeCode,
+    actions,
+    getPolicySnapshot,
   });
 
   return {
@@ -101,6 +112,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       connections,
       agentCredentials,
       agentSettings,
+      agentChat,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,

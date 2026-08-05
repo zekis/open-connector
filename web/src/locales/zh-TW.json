@@ -42,6 +42,7 @@
     "providers": "服務提供者",
     "actions": "動作",
     "agents": "代理",
+    "chat": "聊天",
     "flows": "流程",
     "approvals": "核准",
     "runs": "執行記錄",
@@ -77,6 +78,10 @@
       "agents": {
         "title": "代理",
         "subtitle": "設定代理執行階段及其 API 憑證。"
+      },
+      "chat": {
+        "title": "聊天",
+        "subtitle": "與代理及已連線的應用程式交談。"
       },
       "flows": {
         "title": "流程",

@@ -131,7 +131,7 @@ export interface RunLog {
   id: string;
   service: string;
   actionId: string;
-  caller: "http" | "mcp" | "web" | "flow";
+  caller: "http" | "mcp" | "web" | "flow" | "chat";
   startedAt: string;
   completedAt: string;
   durationMs: number;
@@ -267,6 +267,31 @@ export interface FlowRunDetail {
   run: FlowRun;
   steps: FlowStep[];
   approvals: FlowApproval[];
+}
+
+export interface AgentChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AgentChatToolActivity {
+  id: string;
+  type: "search" | "action";
+  label: string;
+  ok: boolean;
+  actionId?: string;
+  connectionId?: string;
+  connectionDisplayName?: string;
+  input: unknown;
+  output: unknown;
+}
+
+export interface AgentChatResponse {
+  message: AgentChatMessage & {
+    id: string;
+    createdAt: string;
+  };
+  toolActivity: AgentChatToolActivity[];
 }
 
 export interface AppData {

@@ -27,6 +27,7 @@ import {
   Inbox,
   KeyRound,
   Loader2,
+  MessageCircle,
   Monitor,
   Moon,
   RefreshCw,
@@ -42,6 +43,7 @@ import { AgentsPage } from "./agents-page";
 import { ApiError, apiGet, apiPost } from "./api";
 import { ApprovalsPage } from "./approvals-page";
 import oomolConnectLogoUrl from "./assets/oomol-connect-logo.png";
+import { ChatPage } from "./chat-page";
 import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
@@ -62,6 +64,7 @@ const navItems = [
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
+  { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
   { path: "/flows", labelKey: "nav.flows", icon: Workflow },
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
   { path: "/runs", labelKey: "nav.runs", icon: Activity },
@@ -359,8 +362,9 @@ function AppShell(props: {
   const heading = headingForPath(location.pathname);
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
-  const isBrowserPage = section === "actions" || section === "runs";
+  const isBrowserPage = section === "actions" || section === "runs" || section === "chat";
   const isRunsPage = section === "runs";
+  const isChatPage = section === "chat";
   const pendingApprovalCount = (props.data.flowApprovals ?? []).filter(
     (approval) => approval.status === "pending",
   ).length;
@@ -368,6 +372,7 @@ function AppShell(props: {
     isBrowserPage ? "main main-browser" : "main",
     isOverviewPage ? "overview-main" : "",
     isRunsPage ? "runs-main" : "",
+    isChatPage ? "chat-main" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -452,6 +457,7 @@ function AppShell(props: {
             <Route path="/actions" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/chat" element={<ChatPage data={props.data} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
@@ -629,6 +635,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "agents") {
     return "agents";
+  }
+  if (section === "chat") {
+    return "chat";
   }
   if (section === "access") {
     return "access";

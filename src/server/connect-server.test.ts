@@ -15,6 +15,7 @@ import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { AgentModelSource } from "./agents/agent-settings-service.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
+import type { AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
 import type {
   FlowApproval,
   FlowApprovalStatus,
@@ -183,6 +184,43 @@ describe("ConnectServer", () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  it("forwards authenticated Chat messages to the configured agent service", async () => {
+    const response: AgentChatResponse = {
+      message: {
+        id: "979f762c-7798-4af5-b24f-12661cb336bd",
+        role: "assistant",
+        content: "The connected record is active.",
+        createdAt: "2026-08-05T01:02:03.000Z",
+      },
+      toolActivity: [],
+    };
+    const agentChat: IAgentChatService = {
+      respond: vi.fn(async () => response),
+    };
+    const app = createTestServer([], {
+      agentChat,
+      auth: { adminToken: "local-token" },
+    }).createApp();
+    const body = { messages: [{ role: "user", content: "Check the record" }] };
+
+    const unauthorized = await app.request("/api/agent-chat/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await app.request("/api/agent-chat/messages", {
+      method: "POST",
+      headers: { authorization: "Bearer local-token", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    expect(authorized.status).toBe(200);
+    await expect(authorized.json()).resolves.toEqual(response);
+    expect(agentChat.respond).toHaveBeenCalledWith(body);
   });
 
   it("rejects connections for providers unavailable in the current runtime", async () => {
@@ -3117,6 +3155,7 @@ interface CreateTestServerOptions {
   auth?: TestAuthOptions;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
+  agentChat?: IAgentChatService;
   providerLoader?: IProviderLoader;
   logger?: Logger;
   idempotency?: IIdempotencyStore;
@@ -3171,6 +3210,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     catalog,
     providerLoader,
     connections,
+    agentChat: options.agentChat,
     agentSettings: new AgentSettingsService(connectionStore, new TestAgentModelSource()),
     oauthClientConfigs: clientConfigs,
     oauthFlow: new OAuthFlowService({

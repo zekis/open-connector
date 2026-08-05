@@ -42,6 +42,7 @@
     "providers": "プロバイダー",
     "actions": "アクション",
     "agents": "エージェント",
+    "chat": "チャット",
     "flows": "フロー",
     "approvals": "承認",
     "runs": "実行履歴",
@@ -77,6 +78,10 @@
       "agents": {
         "title": "エージェント",
         "subtitle": "エージェントランタイムと API 認証情報を設定します。"
+      },
+      "chat": {
+        "title": "チャット",
+        "subtitle": "エージェントや接続済みアプリケーションと対話します。"
       },
       "flows": {
         "title": "フロー",

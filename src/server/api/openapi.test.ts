@@ -169,4 +169,43 @@ describe("action execution OpenAPI", () => {
     expect(agent.properties).not.toHaveProperty("model");
     expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
   });
+
+  it("documents authenticated agent Chat with bounded stateless history and connector activity", () => {
+    const document = createOpenApiDocument([provider]);
+    const chatPath = document.paths["/api/agent-chat/messages"] as {
+      post: {
+        description: string;
+        requestBody: { content: { "application/json": { schema: { $ref: string } } } };
+        responses: Record<string, unknown>;
+      };
+    };
+    const request = document.components.schemas.AgentChatRequest as {
+      required: string[];
+      description: string;
+      properties: { messages: { minItems: number; maxItems: number } };
+    };
+    const activity = document.components.schemas.AgentChatToolActivity as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+
+    expect(chatPath.post.requestBody.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/AgentChatRequest",
+    );
+    expect(chatPath.post.responses).toEqual(
+      expect.objectContaining({
+        200: expect.anything(),
+        400: expect.anything(),
+        401: expect.anything(),
+        503: expect.anything(),
+      }),
+    );
+    expect(chatPath.post.description).toContain("Runtime policy and run auditing");
+    expect(chatPath.post.description).toContain("local admin authentication");
+    expect(request.required).toEqual(["messages"]);
+    expect(request.description).toContain("not persisted");
+    expect(request.properties.messages).toMatchObject({ minItems: 1, maxItems: 40 });
+    expect(activity.required).toEqual(expect.arrayContaining(["type", "ok", "input", "output"]));
+    expect(activity.properties).toHaveProperty("connectionId");
+  });
 });

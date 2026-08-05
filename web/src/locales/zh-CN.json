@@ -42,6 +42,7 @@
     "providers": "提供商",
     "actions": "操作",
     "agents": "智能体",
+    "chat": "聊天",
     "flows": "流程",
     "approvals": "审批",
     "runs": "运行记录",
@@ -77,6 +78,10 @@
       "agents": {
         "title": "智能体",
         "subtitle": "设置智能体运行时及其 API 凭据。"
+      },
+      "chat": {
+        "title": "聊天",
+        "subtitle": "与智能体及已连接的应用交谈。"
       },
       "flows": {
         "title": "流程",

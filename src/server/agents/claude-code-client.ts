@@ -98,7 +98,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
       stdin: input.prompt,
     });
     if (result.exitCode !== 0) {
-      throw commandError("claude_agent_failed", "Claude Code could not complete the Flow turn.", result);
+      throw commandError("claude_agent_failed", "Claude Code could not complete the agent turn.", result);
     }
 
     const response = parseJsonRecord(result.stdout, "Claude Code result");
@@ -107,7 +107,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
         "invalid_agent_response",
         typeof response.result === "string" && response.result.trim()
           ? response.result
-          : "Claude Code did not return a structured Flow decision.",
+          : "Claude Code did not return a structured agent decision.",
       );
     }
     return {
@@ -163,7 +163,7 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
       let settled = false;
       const timeout = setTimeout(() => {
         child.kill();
-        finishReject(new ClaudeCodeError("claude_agent_timeout", "Claude Code exceeded the Flow turn timeout."));
+        finishReject(new ClaudeCodeError("claude_agent_timeout", "Claude Code exceeded the agent turn timeout."));
       }, input.timeoutMs);
 
       child.stdout.setEncoding("utf8");
