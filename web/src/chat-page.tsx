@@ -1,7 +1,7 @@
 import type { AgentChatMessage, AgentChatResponse, AgentChatToolActivity, AppData } from "./model";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
-import { Bot, Cable, CircleCheck, CircleX, Loader2, MessageCircle, Send, Trash2, Wrench } from "lucide-react";
+import { Bot, Cable, CircleCheck, CircleX, Clock3, Loader2, MessageCircle, Send, Trash2, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiPost } from "./api";
@@ -21,7 +21,7 @@ const suggestions = [
   "Find the latest updates for my active projects.",
 ];
 
-export function ChatPage(props: { data: AppData }): ReactNode {
+export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -91,6 +91,9 @@ export function ChatPage(props: { data: AppData }): ReactNode {
           toolActivity: response.toolActivity,
         },
       ]);
+      if (response.toolActivity.some((activity) => approvalIdFromToolActivity(activity))) {
+        props.onRefresh();
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
     } finally {
@@ -247,22 +250,50 @@ function ChatMessageView(props: { message: DisplayMessage }): ReactNode {
 function ToolActivityList(props: { activities: AgentChatToolActivity[] }): ReactNode {
   return (
     <div className="chat-tool-list">
-      {props.activities.map((activity) => (
-        <details className={activity.ok ? "chat-tool-call" : "chat-tool-call failed"} key={activity.id}>
-          <summary>
-            {activity.ok ? <CircleCheck size={14} aria-hidden="true" /> : <CircleX size={14} aria-hidden="true" />}
-            <Wrench size={13} aria-hidden="true" />
-            <span>{activity.type === "search" ? activity.label : activity.actionId}</span>
-            {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
-          </summary>
-          <div className="chat-tool-detail">
-            <strong>Input</strong>
-            <pre>{JSON.stringify(activity.input, null, 2)}</pre>
-            <strong>Result</strong>
-            <pre>{JSON.stringify(activity.output, null, 2)}</pre>
+      {props.activities.map((activity) => {
+        const approvalId = approvalIdFromToolActivity(activity);
+        return (
+          <div className="chat-tool-activity" key={activity.id}>
+            {approvalId ? (
+              <div className="chat-approval-request">
+                <Clock3 size={16} aria-hidden="true" />
+                <span>
+                  <strong>Approval queued</strong>
+                  <small>Review the request, then retry this message after approving it.</small>
+                </span>
+                <Button variant="outline" size="sm" asChild>
+                  <Link to="/approvals">Review approval</Link>
+                </Button>
+              </div>
+            ) : null}
+            <details className={activity.ok ? "chat-tool-call" : "chat-tool-call failed"}>
+              <summary>
+                {activity.ok ? <CircleCheck size={14} aria-hidden="true" /> : <CircleX size={14} aria-hidden="true" />}
+                <Wrench size={13} aria-hidden="true" />
+                <span>{activity.type === "search" ? activity.label : activity.actionId}</span>
+                {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
+              </summary>
+              <div className="chat-tool-detail">
+                <strong>Input</strong>
+                <pre>{JSON.stringify(activity.input, null, 2)}</pre>
+                <strong>Result</strong>
+                <pre>{JSON.stringify(activity.output, null, 2)}</pre>
+              </div>
+            </details>
           </div>
-        </details>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+export function approvalIdFromToolActivity(activity: AgentChatToolActivity): string | undefined {
+  if (!isRecord(activity.output) || !isRecord(activity.output.error)) return undefined;
+  if (activity.output.error.code !== "approval_required" || !isRecord(activity.output.error.details)) return undefined;
+  const approvalId = activity.output.error.details.approvalId;
+  return typeof approvalId === "string" && approvalId ? approvalId : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

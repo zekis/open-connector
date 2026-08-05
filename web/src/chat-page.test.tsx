@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
-import { ChatPage } from "./chat-page";
+import { approvalIdFromToolActivity, ChatPage } from "./chat-page";
 import { emptyData } from "./model";
 
 describe("ChatPage", () => {
@@ -59,6 +59,7 @@ describe("ChatPage", () => {
               },
             ],
           }}
+          onRefresh={() => {}}
         />
       </MemoryRouter>,
     );
@@ -74,7 +75,7 @@ describe("ChatPage", () => {
   it("directs an unconfigured runtime to Agent setup", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <ChatPage data={emptyData} />
+        <ChatPage data={emptyData} onRefresh={() => {}} />
       </MemoryRouter>,
     );
 
@@ -83,5 +84,26 @@ describe("ChatPage", () => {
     expect(html).toContain('href="/agents"');
     expect(html).toContain("Set up Claude to start chatting");
     expect(html).toContain("disabled");
+  });
+
+  it("recognizes an approval queued by a connector action", () => {
+    expect(
+      approvalIdFromToolActivity({
+        id: "activity-1",
+        type: "action",
+        label: "Send email",
+        ok: false,
+        actionId: "outlook.send_email",
+        connectionId: "connection-1",
+        input: { subject: "Hello" },
+        output: {
+          error: {
+            code: "approval_required",
+            message: "Approval is required.",
+            details: { approvalId: "approval-1" },
+          },
+        },
+      }),
+    ).toBe("approval-1");
   });
 });

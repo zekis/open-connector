@@ -37,7 +37,7 @@ import {
   TerminalSquare,
   Workflow,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import { AccessPage } from "./access-page";
 import { ActionsPage } from "./actions-page";
@@ -238,6 +238,9 @@ export function App(): ReactNode {
   const [runtimeChecked, setRuntimeChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const refresh = useCallback((): void => {
+    setRefreshToken((value) => value + 1);
+  }, []);
 
   useEffect(
     () =>
@@ -296,10 +299,6 @@ export function App(): ReactNode {
       cancelled = true;
     };
   }, [refreshToken, t]);
-
-  function refresh(): void {
-    setRefreshToken((value) => value + 1);
-  }
 
   function unlock(token: string): void {
     pendingUnlockToken.current = token;
@@ -465,7 +464,7 @@ function AppShell(props: {
             <Route path="/actions" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
-            <Route path="/chat" element={<ChatPage data={props.data} />} />
+            <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}

@@ -104,6 +104,7 @@ describe("AgentChatService", () => {
       }),
     ]);
     expect(claude.inputs[0]?.prompt).toContain("Example account");
+    expect(claude.inputs[0]?.systemPrompt).toContain("call the action so the host can create the approval request");
     expect(claude.inputs[1]?.prompt).toContain("example.lookup");
     expect(claude.inputs[2]?.prompt).toContain("Record 42 is active");
   });

@@ -22,7 +22,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { apiPost } from "./api";
 import { Badge, EmptyState, FormStatus, InlineError } from "./shared-ui";
@@ -44,6 +44,11 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    props.onRefresh();
+  }, [props.onRefresh]);
+
   const approvals: ApprovalItem[] = [
     ...(props.data.flowApprovals ?? []).map((approval): ApprovalItem => ({ kind: "flow", approval })),
     ...(props.data.actionApprovals ?? []).map((approval): ApprovalItem => ({ kind: "action", approval })),

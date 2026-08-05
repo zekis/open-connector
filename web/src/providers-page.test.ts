@@ -140,6 +140,57 @@ describe("ProvidersPage route shell", () => {
     expect(markup).toContain("Scopes requested by this provider");
   });
 
+  it("shows per-action approval controls before a saved connection is opened", () => {
+    const provider: ProviderDefinition = {
+      ...oauthProvider,
+      actions: [
+        {
+          id: "gmail.send_email",
+          service: "gmail",
+          name: "Send email",
+          description: "Send a message.",
+          requiredScopes: [],
+          inputSchema: {},
+          outputSchema: {},
+          execution: executableActionExecution,
+        },
+      ],
+    };
+    const markup = renderProvidersPage(
+      {
+        ...providerData,
+        providers: [provider],
+        connections: [
+          {
+            id: "gmail-default",
+            service: "gmail",
+            connectionName: "default",
+            authType: "oauth2",
+            configured: true,
+            default: true,
+            profile: { displayName: "personal@example.com" },
+            metadata: {},
+          },
+        ],
+        connectionPermissions: [
+          {
+            connectionId: "gmail-default",
+            actionId: "gmail.send_email",
+            approval: "require_approval",
+            updatedAt: "2026-08-05T00:00:00.000Z",
+          },
+        ],
+      },
+      "/providers/gmail",
+    );
+
+    expect(markup).toContain("Action approvals");
+    expect(markup).toContain('aria-label="Approval settings connection"');
+    expect(markup).toContain('aria-label="Global approval policy for Send email"');
+    expect(markup).toContain('<option value="require_approval" selected="">Require approval</option>');
+    expect(markup).not.toContain("Reconnect Gmail");
+  });
+
   it("places provider connection status beside the detail title", () => {
     const markup = renderProvidersPage(providerData, "/providers/gmail");
 
@@ -397,14 +448,27 @@ describe("ConnectionApprovalSettings", () => {
     };
     const markup = renderToStaticMarkup(
       createElement(ConnectionApprovalSettings, {
-        connection: {
-          id: "gmail-default",
-          service: "gmail",
-          connectionName: "default",
-          authType: "oauth2",
-          configured: true,
-          metadata: {},
-        },
+        connections: [
+          {
+            id: "gmail-default",
+            service: "gmail",
+            connectionName: "default",
+            authType: "oauth2",
+            configured: true,
+            default: true,
+            profile: { displayName: "personal@example.com" },
+            metadata: {},
+          },
+          {
+            id: "gmail-work",
+            service: "gmail",
+            connectionName: "work",
+            authType: "oauth2",
+            configured: true,
+            profile: { displayName: "work@example.com" },
+            metadata: {},
+          },
+        ],
         provider,
         permissions: [
           {
@@ -421,6 +485,8 @@ describe("ConnectionApprovalSettings", () => {
     expect(markup).toContain("Action approvals");
     expect(markup).toContain("Set the default for every request on this connection");
     expect(markup).toContain("Send email");
+    expect(markup).toContain("default · personal@example.com");
+    expect(markup).toContain("work · work@example.com");
     expect(markup).toContain('<option value="require_approval" selected="">Require approval</option>');
     expect(markup).toContain("Individual Flows can override it");
   });

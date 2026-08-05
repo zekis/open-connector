@@ -723,11 +723,12 @@ function ProviderDetail(props: ProviderDetailProps): ReactNode {
           ) : null}
         </section>
 
-        {selectedConnection ? (
+        {props.connections.some((connection) => connection.id) ? (
           <ConnectionApprovalSettings
-            connection={selectedConnection}
+            connections={props.connections}
+            selectedConnectionId={selectedConnection?.id}
             provider={props.provider}
-            permissions={props.permissions.filter((permission) => permission.connectionId === selectedConnection.id)}
+            permissions={props.permissions}
             onRefresh={props.onRefresh}
           />
         ) : null}
@@ -778,17 +779,29 @@ function ProviderDetail(props: ProviderDetailProps): ReactNode {
 }
 
 export function ConnectionApprovalSettings(props: {
-  connection: ConnectionRecord & { id?: string };
+  connections: ConnectionRecord[];
+  selectedConnectionId?: string;
   provider: ProviderDefinition;
   permissions: ConnectionActionPermission[];
   onRefresh(): void;
 }): ReactNode {
+  const connections = useMemo(
+    () =>
+      props.connections.filter(
+        (connection): connection is ConnectionRecord & { id: string } => typeof connection.id === "string",
+      ),
+    [props.connections],
+  );
   const executableActions = props.provider.actions.filter((action) => action.execution.locallyExecutable);
-  const [values, setValues] = useState<Record<string, FlowApprovalMode>>(() => permissionValues(props.permissions));
+  const [connectionId, setConnectionId] = useState(() =>
+    preferredApprovalConnectionId(connections, props.selectedConnectionId),
+  );
+  const [values, setValues] = useState<Record<string, FlowApprovalMode>>(() =>
+    permissionValues(props.permissions.filter((permission) => permission.connectionId === connectionId)),
+  );
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const connectionId = props.connection.id;
   const visibleActions = executableActions.filter((action) => {
     const normalized = query.trim().toLowerCase();
     return (
@@ -800,7 +813,21 @@ export function ConnectionApprovalSettings(props: {
   });
 
   useEffect(() => {
-    setValues(permissionValues(props.permissions));
+    setConnectionId((current) => {
+      if (
+        props.selectedConnectionId &&
+        connections.some((connection) => connection.id === props.selectedConnectionId)
+      ) {
+        return props.selectedConnectionId;
+      }
+      return connections.some((connection) => connection.id === current)
+        ? current
+        : preferredApprovalConnectionId(connections);
+    });
+  }, [connections, props.selectedConnectionId]);
+
+  useEffect(() => {
+    setValues(permissionValues(props.permissions.filter((permission) => permission.connectionId === connectionId)));
     setStatus(null);
   }, [connectionId, props.permissions]);
 
@@ -835,12 +862,32 @@ export function ConnectionApprovalSettings(props: {
         </div>
         <Badge>{Object.values(values).filter((approval) => approval === "require_approval").length} gated</Badge>
       </div>
-      <Input
-        value={query}
-        placeholder="Filter connector actions"
-        aria-label="Filter connector approval settings"
-        onChange={(event) => setQuery(event.target.value)}
-      />
+      <div className="provider-approval-toolbar">
+        <label>
+          <span>Connection</span>
+          <select
+            className="flow-native-select"
+            aria-label="Approval settings connection"
+            value={connectionId}
+            onChange={(event) => setConnectionId(event.target.value)}
+          >
+            {connections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connectionDisplayLabel(connection)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Search actions</span>
+          <Input
+            value={query}
+            placeholder="Filter connector actions"
+            aria-label="Filter connector approval settings"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+      </div>
       <div className="provider-approval-list">
         {visibleActions.map((action) => (
           <label className="provider-approval-row" key={action.id}>
@@ -883,6 +930,18 @@ export function ConnectionApprovalSettings(props: {
 
 function permissionValues(permissions: ConnectionActionPermission[]): Record<string, FlowApprovalMode> {
   return Object.fromEntries(permissions.map((permission) => [permission.actionId, permission.approval]));
+}
+
+function preferredApprovalConnectionId(
+  connections: Array<ConnectionRecord & { id: string }>,
+  selectedConnectionId?: string,
+): string {
+  return (
+    connections.find((connection) => connection.id === selectedConnectionId)?.id ??
+    connections.find((connection) => connection.default)?.id ??
+    connections[0]?.id ??
+    ""
+  );
 }
 
 export function shouldShowOAuthClientForm(auth: AuthDefinition | undefined, expanded: boolean): boolean {

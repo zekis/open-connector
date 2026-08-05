@@ -327,15 +327,34 @@
 .provider-detail-card > .tag-list,
 .provider-detail-card > .linked-list,
 .provider-detail-card > .muted-copy,
-.provider-approval-settings > input,
+.provider-approval-toolbar,
 .provider-approval-settings > .button-row,
 .provider-approval-list {
   margin: 16px;
 }
 
-.provider-approval-settings > input {
-  width: calc(100% - 32px);
+.provider-approval-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.4fr) minmax(220px, 1fr);
+  gap: 12px;
   margin-bottom: 0;
+}
+
+.provider-approval-toolbar label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.provider-approval-toolbar label > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-approval-toolbar .flow-native-select,
+.provider-approval-toolbar input {
+  width: 100%;
 }
 
 .provider-approval-heading {
@@ -675,6 +694,10 @@
 
   .provider-approval-row {
     align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .provider-approval-toolbar {
     grid-template-columns: 1fr;
   }
 
