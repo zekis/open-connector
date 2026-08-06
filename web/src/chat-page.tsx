@@ -1,10 +1,29 @@
-import type { AgentChatMessage, AgentChatResponse, AgentChatToolActivity, AppData } from "./model";
+import type {
+  AgentChatApprovalResult,
+  AgentChatMessage,
+  AgentChatResponse,
+  AgentChatToolActivity,
+  AppData,
+} from "./model";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
-import { Bot, Cable, CircleCheck, CircleX, Clock3, Loader2, MessageCircle, Send, Trash2, Wrench } from "lucide-react";
+import {
+  Bot,
+  Cable,
+  Check,
+  CircleCheck,
+  CircleX,
+  Clock3,
+  Loader2,
+  MessageCircle,
+  Send,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { apiPost } from "./api";
+import { apiGet, apiPost } from "./api";
 import { evaluatePolicy, policyLayers } from "./policy";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,6 +34,18 @@ interface DisplayMessage extends AgentChatMessage {
   toolActivity?: AgentChatToolActivity[];
 }
 
+interface PendingChatApproval {
+  approvalId: string;
+  assistantMessageId: string;
+}
+
+interface ChatSession {
+  messages: DisplayMessage[];
+  pendingApproval?: PendingChatApproval;
+}
+
+const chatSessionStorageKey = "open-connector.agent-chat-session.v1";
+
 const suggestions = [
   "Summarize today's important emails.",
   "What connected applications can you use?",
@@ -22,11 +53,14 @@ const suggestions = [
 ];
 
 export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode {
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [session, setSession] = useState<ChatSession>(readStoredChatSession);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [approvalDecision, setApprovalDecision] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const messages = session.messages;
+  const pendingApproval = session.pendingApproval;
   const agentConnection = props.data.agentConnections?.find((connection) => connection.provider === "claude_code");
   const connectedServices = useMemo(
     () =>
@@ -60,6 +94,40 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  useEffect(() => {
+    storeChatSession(session);
+  }, [session]);
+
+  useEffect(() => {
+    if (!pendingApproval) return;
+    let cancelled = false;
+    let checking = false;
+    const check = async (): Promise<void> => {
+      if (checking) return;
+      checking = true;
+      try {
+        const result = await apiGet<AgentChatApprovalResult>(`/api/agent-chat/approvals/${pendingApproval.approvalId}`);
+        if (!cancelled) {
+          setError(null);
+          setSession((current) => applyApprovalResult(current, result));
+          if (result.response?.status === "waiting_for_approval") props.onRefresh();
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : "Could not check the pending approval.");
+        }
+      } finally {
+        checking = false;
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingApproval?.approvalId, props.onRefresh]);
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     await sendMessage(draft);
@@ -67,7 +135,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
 
   async function sendMessage(value: string): Promise<void> {
     const content = value.trim();
-    if (!content || sending || !agentConnection) return;
+    if (!content || sending || pendingApproval || !agentConnection) return;
 
     const userMessage: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -76,7 +144,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       createdAt: new Date().toISOString(),
     };
     const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    setSession({ messages: nextMessages });
     setDraft("");
     setSending(true);
     setError(null);
@@ -84,20 +152,40 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       const response = await apiPost<AgentChatResponse>("/api/agent-chat/messages", {
         messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
       });
-      setMessages((current) => [
-        ...current,
-        {
-          ...response.message,
-          toolActivity: response.toolActivity,
-        },
-      ]);
-      if (response.toolActivity.some((activity) => approvalIdFromToolActivity(activity))) {
-        props.onRefresh();
-      }
+      const assistantMessage: DisplayMessage = {
+        ...response.message,
+        toolActivity: response.toolActivity,
+      };
+      setSession({
+        messages: [...nextMessages, assistantMessage],
+        pendingApproval:
+          response.status === "waiting_for_approval" && response.approvalId
+            ? { approvalId: response.approvalId, assistantMessageId: assistantMessage.id }
+            : undefined,
+      });
+      if (response.status === "waiting_for_approval") props.onRefresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function decideApproval(decision: "approve" | "deny"): Promise<void> {
+    if (!pendingApproval || approvalDecision) return;
+    if (decision === "deny" && !window.confirm("Deny this connector action and stop the waiting Chat?")) return;
+    setApprovalDecision(decision);
+    setError(null);
+    try {
+      await apiPost(`/api/action-approvals/${pendingApproval.approvalId}/${decision}`, {});
+      const result = await apiGet<AgentChatApprovalResult>(`/api/agent-chat/approvals/${pendingApproval.approvalId}`);
+      setSession((current) => applyApprovalResult(current, result));
+      props.onRefresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The approval decision could not be recorded.");
+      props.onRefresh();
+    } finally {
+      setApprovalDecision(null);
     }
   }
 
@@ -109,7 +197,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }
 
   function resetChat(): void {
-    setMessages([]);
+    setSession({ messages: [] });
     setDraft("");
     setError(null);
   }
@@ -125,16 +213,24 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             <Bot size={17} aria-hidden="true" />
           </span>
           <span>
-            <strong>{agentConnection ? "Claude is ready" : "Agent setup required"}</strong>
+            <strong>
+              {pendingApproval
+                ? "Claude is waiting for approval"
+                : agentConnection
+                  ? "Claude is ready"
+                  : "Agent setup required"}
+            </strong>
             <small>
               {agentConnection
-                ? `${connectionSummary} · ${actionSummary}`
+                ? pendingApproval
+                  ? "Approving the pending connector action will resume this Chat automatically."
+                  : `${connectionSummary} · ${actionSummary}`
                 : "Connect your Claude subscription before starting a chat."}
             </small>
           </span>
         </div>
         {messages.length > 0 ? (
-          <Button variant="outline" size="sm" onClick={resetChat} disabled={sending}>
+          <Button variant="outline" size="sm" onClick={resetChat} disabled={sending || Boolean(pendingApproval)}>
             <Trash2 size={14} aria-hidden="true" />
             New chat
           </Button>
@@ -150,7 +246,13 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         ) : (
           <div className="chat-message-list">
             {messages.map((message) => (
-              <ChatMessageView key={message.id} message={message} />
+              <ChatMessageView
+                key={message.id}
+                message={message}
+                activeApprovalId={pendingApproval?.approvalId}
+                approvalDecision={approvalDecision}
+                onApprovalDecision={(decision) => void decideApproval(decision)}
+              />
             ))}
             {sending ? (
               <div className="chat-message-row assistant">
@@ -175,16 +277,20 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={keyDown}
             placeholder={
-              agentConnection ? "Ask Claude to find, explain, or do something…" : "Set up Claude to start chatting"
+              pendingApproval
+                ? "Waiting for the pending approval…"
+                : agentConnection
+                  ? "Ask Claude to find, explain, or do something…"
+                  : "Set up Claude to start chatting"
             }
             aria-label="Message Claude"
-            disabled={!agentConnection || sending}
+            disabled={!agentConnection || sending || Boolean(pendingApproval)}
             rows={3}
           />
           <Button
             type="submit"
             size="icon"
-            disabled={!agentConnection || sending || !draft.trim()}
+            disabled={!agentConnection || sending || Boolean(pendingApproval) || !draft.trim()}
             aria-label="Send message"
           >
             {sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
@@ -230,7 +336,12 @@ function ChatWelcome(props: { configured: boolean; onSuggestion(value: string): 
   );
 }
 
-function ChatMessageView(props: { message: DisplayMessage }): ReactNode {
+function ChatMessageView(props: {
+  message: DisplayMessage;
+  activeApprovalId?: string;
+  approvalDecision: "approve" | "deny" | null;
+  onApprovalDecision(decision: "approve" | "deny"): void;
+}): ReactNode {
   const assistant = props.message.role === "assistant";
   return (
     <div className={assistant ? "chat-message-row assistant" : "chat-message-row user"}>
@@ -240,30 +351,68 @@ function ChatMessageView(props: { message: DisplayMessage }): ReactNode {
         </span>
       ) : null}
       <div className={assistant ? "chat-message-content assistant" : "chat-message-content user"}>
-        {props.message.toolActivity?.length ? <ToolActivityList activities={props.message.toolActivity} /> : null}
+        {props.message.toolActivity?.length ? (
+          <ChatToolActivityList
+            activities={props.message.toolActivity}
+            activeApprovalId={props.activeApprovalId}
+            approvalDecision={props.approvalDecision}
+            onApprovalDecision={props.onApprovalDecision}
+          />
+        ) : null}
         <div className={assistant ? "chat-bubble assistant" : "chat-bubble user"}>{props.message.content}</div>
       </div>
     </div>
   );
 }
 
-function ToolActivityList(props: { activities: AgentChatToolActivity[] }): ReactNode {
+export function ChatToolActivityList(props: {
+  activities: AgentChatToolActivity[];
+  activeApprovalId?: string;
+  approvalDecision: "approve" | "deny" | null;
+  onApprovalDecision(decision: "approve" | "deny"): void;
+}): ReactNode {
   return (
     <div className="chat-tool-list">
       {props.activities.map((activity) => {
         const approvalId = approvalIdFromToolActivity(activity);
+        const waiting = approvalId !== undefined && approvalId === props.activeApprovalId;
         return (
           <div className="chat-tool-activity" key={activity.id}>
-            {approvalId ? (
+            {waiting ? (
               <div className="chat-approval-request">
                 <Clock3 size={16} aria-hidden="true" />
                 <span>
-                  <strong>Approval queued</strong>
-                  <small>Review the request, then retry this message after approving it.</small>
+                  <strong>Waiting for approval</strong>
+                  <small>Claude is paused and will continue automatically after approval.</small>
                 </span>
-                <Button variant="outline" size="sm" asChild>
-                  <Link to="/approvals">Review approval</Link>
-                </Button>
+                <div className="chat-approval-actions">
+                  <Button
+                    size="sm"
+                    disabled={props.approvalDecision !== null}
+                    onClick={() => props.onApprovalDecision("approve")}
+                  >
+                    {props.approvalDecision === "approve" ? (
+                      <Loader2 className="spin" size={14} />
+                    ) : (
+                      <Check size={14} />
+                    )}
+                    {props.approvalDecision === "approve" ? "Approving…" : "Approve and continue"}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={props.approvalDecision !== null}
+                    onClick={() => props.onApprovalDecision("deny")}
+                  >
+                    {props.approvalDecision === "deny" ? <Loader2 className="spin" size={14} /> : <X size={14} />}
+                    {props.approvalDecision === "deny" ? "Denying…" : "Deny"}
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/approvals" target="_blank" rel="noreferrer">
+                      Open mailbox
+                    </Link>
+                  </Button>
+                </div>
               </div>
             ) : null}
             <details className={activity.ok ? "chat-tool-call" : "chat-tool-call failed"}>
@@ -288,10 +437,80 @@ function ToolActivityList(props: { activities: AgentChatToolActivity[] }): React
 }
 
 export function approvalIdFromToolActivity(activity: AgentChatToolActivity): string | undefined {
-  if (!isRecord(activity.output) || !isRecord(activity.output.error)) return undefined;
-  if (activity.output.error.code !== "approval_required" || !isRecord(activity.output.error.details)) return undefined;
-  const approvalId = activity.output.error.details.approvalId;
-  return typeof approvalId === "string" && approvalId ? approvalId : undefined;
+  return activity.approvalId;
+}
+
+export function applyApprovalResult(session: ChatSession, result: AgentChatApprovalResult): ChatSession {
+  if (session.pendingApproval?.approvalId !== result.approvalId) return session;
+  if (result.response) {
+    const responseMessage: DisplayMessage = {
+      ...result.response.message,
+      toolActivity: result.response.toolActivity,
+    };
+    return {
+      messages: session.messages.map((message) =>
+        message.id === session.pendingApproval?.assistantMessageId ? responseMessage : message,
+      ),
+      pendingApproval:
+        result.response.status === "waiting_for_approval" && result.response.approvalId
+          ? {
+              approvalId: result.response.approvalId,
+              assistantMessageId: responseMessage.id,
+            }
+          : undefined,
+    };
+  }
+  if (result.status !== "denied" && result.status !== "expired") return session;
+  const content =
+    result.status === "denied"
+      ? "The connector action was denied, so Claude stopped this request."
+      : "The connector approval expired before the action could run.";
+  return {
+    messages: session.messages.map((message) =>
+      message.id === session.pendingApproval?.assistantMessageId ? { ...message, content } : message,
+    ),
+  };
+}
+
+function readStoredChatSession(): ChatSession {
+  if (typeof window === "undefined") return { messages: [] };
+  try {
+    const raw = window.sessionStorage.getItem(chatSessionStorageKey);
+    if (!raw) return { messages: [] };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed) || !Array.isArray(parsed.messages)) return { messages: [] };
+    const messages = parsed.messages.filter(isDisplayMessage);
+    const pendingApproval = isPendingChatApproval(parsed.pendingApproval) ? parsed.pendingApproval : undefined;
+    return pendingApproval && messages.some((message) => message.id === pendingApproval.assistantMessageId)
+      ? { messages, pendingApproval }
+      : { messages };
+  } catch {
+    return { messages: [] };
+  }
+}
+
+function storeChatSession(session: ChatSession): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(chatSessionStorageKey, JSON.stringify(session));
+  } catch {
+    // Chat remains usable when browser storage is disabled or full.
+  }
+}
+
+function isDisplayMessage(value: unknown): value is DisplayMessage {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.createdAt === "string" &&
+    (value.role === "user" || value.role === "assistant") &&
+    typeof value.content === "string" &&
+    (value.toolActivity === undefined || Array.isArray(value.toolActivity))
+  );
+}
+
+function isPendingChatApproval(value: unknown): value is PendingChatApproval {
+  return isRecord(value) && typeof value.approvalId === "string" && typeof value.assistantMessageId === "string";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

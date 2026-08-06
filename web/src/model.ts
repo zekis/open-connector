@@ -326,16 +326,25 @@ export interface AgentChatToolActivity {
   actionId?: string;
   connectionId?: string;
   connectionDisplayName?: string;
+  approvalId?: string;
   input: unknown;
   output: unknown;
 }
 
 export interface AgentChatResponse {
+  status: "completed" | "waiting_for_approval" | "failed";
+  approvalId?: string;
   message: AgentChatMessage & {
     id: string;
     createdAt: string;
   };
   toolActivity: AgentChatToolActivity[];
+}
+
+export interface AgentChatApprovalResult {
+  approvalId: string;
+  status: ActionApproval["status"];
+  response?: AgentChatResponse;
 }
 
 export interface AppData {

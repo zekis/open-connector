@@ -75,12 +75,13 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
         setStatus(flowDecisionMessage(decision, detail.run.status));
       } else {
         await apiPost<ActionApproval>(`/api/action-approvals/${item.approval.id}/${decision}`, {});
-        setStatus(actionDecisionMessage(decision));
+        setStatus(actionDecisionMessage(decision, item.approval.caller));
       }
       setResolvedKeys((current) => new Set(current).add(key));
       props.onRefresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The approval decision could not be recorded.");
+      props.onRefresh();
     } finally {
       setBusy(null);
     }
@@ -283,7 +284,7 @@ function ApprovalDetail(props: {
         <div className="approval-actions">
           <Button disabled={props.busy !== null} onClick={props.onApprove}>
             {approving ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
-            {approving ? "Approving…" : props.item.kind === "flow" ? "Approve and continue" : "Approve next retry"}
+            {approving ? "Approving…" : approvalButtonLabel(props.item)}
           </Button>
           <Button variant="destructive" disabled={props.busy !== null} onClick={props.onDeny}>
             {denying ? <Loader2 className="spin" size={15} /> : <X size={15} />}
@@ -333,8 +334,11 @@ function callerLabel(caller: ActionApproval["caller"]): string {
 function approvalImpact(item: ApprovalItem): string {
   const approval = item.approval;
   if (approval.status === "pending") {
-    return item.kind === "flow"
-      ? "Approving sends this exact payload to the selected connection and resumes the waiting Flow. Denying cancels this run."
+    if (item.kind === "flow") {
+      return "Approving sends this exact payload to the selected connection and resumes the waiting Flow. Denying cancels this run.";
+    }
+    return item.approval.caller === "chat"
+      ? "Approving executes this exact connector action and resumes the waiting Chat automatically. Denying stops the pending Chat request."
       : "Approving authorizes one identical retry from the same caller for 15 minutes. Denying leaves the connector action blocked.";
   }
   const resolvedAt = approval.resolvedAt ? ` on ${formatApprovalDate(approval.resolvedAt)}` : "";
@@ -351,9 +355,15 @@ function approvalImpact(item: ApprovalItem): string {
 }
 
 function denialPrompt(item: ApprovalItem): string {
-  return item.kind === "flow"
-    ? "Deny this request and cancel the current Flow run?"
+  if (item.kind === "flow") return "Deny this request and cancel the current Flow run?";
+  return item.approval.caller === "chat"
+    ? "Deny this connector request and stop the waiting Chat?"
     : "Deny this connector request? A matching retry will request approval again.";
+}
+
+function approvalButtonLabel(item: ApprovalItem): string {
+  if (item.kind === "flow") return "Approve and continue";
+  return item.approval.caller === "chat" ? "Approve and resume Chat" : "Approve next retry";
 }
 
 function findFlow(data: AppData, approval: FlowApproval): FlowDefinition | undefined {
@@ -409,8 +419,10 @@ function flowDecisionMessage(decision: ApprovalDecision, status: FlowRunStatus):
   return status === "completed" ? "Request approved. The Flow completed." : "Request approved. The Flow continued.";
 }
 
-function actionDecisionMessage(decision: ApprovalDecision): string {
+function actionDecisionMessage(decision: ApprovalDecision, caller: ActionApproval["caller"]): string {
   return decision === "deny"
     ? "Request denied. The connector action remains blocked."
-    : "Request approved. Retry the identical request within 15 minutes to run it once.";
+    : caller === "chat"
+      ? "Request approved. Chat resumed automatically."
+      : "Request approved. Retry the identical request within 15 minutes to run it once.";
 }

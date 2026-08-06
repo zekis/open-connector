@@ -1,8 +1,11 @@
 import type { ConnectionSummary } from "../../connection-service.ts";
 import type { ProviderDefinition } from "../../core/types.ts";
+import type { ExecutionResult } from "../../core/types.ts";
 import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts";
 import type { AgentModelOption } from "../agents/agent-settings-service.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
+import type { ActionApproval } from "../approvals/connection-approval-types.ts";
+import type { AgentChatResponse } from "./agent-chat-types.ts";
 
 import { describe, expect, it } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
@@ -78,6 +81,7 @@ describe("AgentChatService", () => {
     });
 
     expect(response.message).toMatchObject({ role: "assistant", content: "Record 42 is active." });
+    expect(response.status).toBe("completed");
     expect(response.toolActivity).toHaveLength(2);
     expect(response.toolActivity[0]).toMatchObject({ type: "search", ok: true });
     expect(response.toolActivity[0]?.output).toMatchObject({
@@ -109,6 +113,63 @@ describe("AgentChatService", () => {
     expect(claude.inputs[2]?.prompt).toContain("Record 42 is active");
   });
 
+  it("pauses on approval and resumes the exact action with saved agent context", async () => {
+    const approvalId = "26d9fa1f-ff35-4bc8-b9af-12bb33389e61";
+    const approval = createChatApproval(approvalId);
+    const approvals = new FakeChatApprovals(approval);
+    const actions = new FakeActionRunner([
+      {
+        ok: false,
+        error: {
+          code: "approval_required",
+          message: "Approval is required.",
+          details: { approvalId },
+        },
+      },
+      successfulActionResult,
+    ]);
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "search_connector_actions",
+        arguments: { query: "look up record" },
+      },
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          input: { query: "record-42" },
+        },
+      },
+      { kind: "final", text: "Record 42 is active." },
+    ]);
+    const service = createService(claude, actions, true, approvals);
+
+    const waiting = await service.respond({
+      messages: [{ role: "user", content: "Is record 42 active?" }],
+    });
+
+    expect(waiting).toMatchObject({ status: "waiting_for_approval", approvalId });
+    expect(approvals.approval.chat).toMatchObject({
+      messages: [{ role: "user", content: "Is record 42 active?" }],
+    });
+    expect(approvals.approval.chat?.toolActivity).toHaveLength(1);
+    approvals.approve();
+
+    const completed = await service.resume(approvalId);
+
+    expect(completed).toMatchObject({ status: "completed", message: { content: "Record 42 is active." } });
+    expect(actions.inputs[1]).toMatchObject({
+      actionId: "example.lookup",
+      input: { query: "record-42" },
+      approvalPolicy: "bypass",
+    });
+    expect(claude.inputs[2]?.prompt).toContain('"active":true');
+    expect((await service.getApprovalResult(approvalId)).response).toEqual(completed);
+  });
+
   it("rejects conversation history that does not end with a user message", async () => {
     const service = createService(new FakeClaudeCodeClient([]), new FakeActionRunner());
 
@@ -131,6 +192,7 @@ function createService(
   claudeCode: IClaudeCodeClient,
   actions: IActionRunner,
   agentConfigured = true,
+  approvals = new FakeChatApprovals(),
 ): AgentChatService {
   const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
   return new AgentChatService({
@@ -165,6 +227,7 @@ function createService(
     },
     claudeCode,
     actions,
+    approvals,
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
   });
 }
@@ -191,17 +254,80 @@ class FakeClaudeCodeClient implements IClaudeCodeClient {
 
 class FakeActionRunner implements IActionRunner {
   readonly inputs: RunActionInput[] = [];
+  private readonly results: ExecutionResult[];
+
+  constructor(results: ExecutionResult[] = [successfulActionResult]) {
+    this.results = results;
+  }
 
   async run(input: RunActionInput) {
     this.inputs.push(input);
     return {
       executionId: crypto.randomUUID(),
       auditPersisted: true,
-      result: {
-        ok: true,
-        output: { id: "record-42", active: true, summary: "Record 42 is active" },
-      },
+      result: this.results.shift() ?? successfulActionResult,
       connection,
     };
   }
+}
+
+const successfulActionResult: ExecutionResult = {
+  ok: true,
+  output: { id: "record-42", active: true, summary: "Record 42 is active" },
+};
+
+class FakeChatApprovals {
+  approval: ActionApproval;
+
+  constructor(approval = createChatApproval(crypto.randomUUID())) {
+    this.approval = approval;
+  }
+
+  async getActionApproval(id: string): Promise<ActionApproval | undefined> {
+    return id === this.approval.id ? structuredClone(this.approval) : undefined;
+  }
+
+  async attachChatContinuation(
+    id: string,
+    messages: NonNullable<ActionApproval["chat"]>["messages"],
+    toolActivity: NonNullable<ActionApproval["chat"]>["toolActivity"],
+  ): Promise<ActionApproval> {
+    if (id !== this.approval.id) throw new Error("Unexpected approval id");
+    this.approval = { ...this.approval, chat: { messages, toolActivity } };
+    return structuredClone(this.approval);
+  }
+
+  async consumeApproved(id: string): Promise<ActionApproval> {
+    if (id !== this.approval.id || this.approval.status !== "approved") throw new Error("Approval is not approved");
+    this.approval = { ...this.approval, status: "consumed", consumedAt: new Date().toISOString() };
+    return structuredClone(this.approval);
+  }
+
+  async storeChatResponse(id: string, response: AgentChatResponse): Promise<ActionApproval> {
+    if (id !== this.approval.id || !this.approval.chat) throw new Error("Unexpected approval id");
+    this.approval = { ...this.approval, chat: { ...this.approval.chat, response } };
+    return structuredClone(this.approval);
+  }
+
+  approve(): void {
+    this.approval = {
+      ...this.approval,
+      status: "approved",
+      resolvedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+  }
+}
+
+function createChatApproval(id: string): ActionApproval {
+  return {
+    id,
+    status: "pending",
+    actionId: "example.lookup",
+    connectionId: connection.id,
+    caller: "chat",
+    input: { query: "record-42" },
+    requestHash: "request-hash",
+    requestedAt: new Date().toISOString(),
+  };
 }

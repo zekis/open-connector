@@ -247,6 +247,10 @@ describe("SqliteRuntimeDatabase", () => {
       input: { title: "encrypted approval payload" },
       requestHash: "request-hash-1",
       requestedAt: "2026-08-05T00:01:00.000Z",
+      chat: {
+        messages: [{ role: "user" as const, content: "encrypted chat continuation" }],
+        toolActivity: [],
+      },
     };
     const first = new SqliteRuntimeDatabase(databasePath, {
       secretCodec: new AesGcmSecretCodec("approval-key"),
@@ -256,6 +260,7 @@ describe("SqliteRuntimeDatabase", () => {
     first.close();
 
     await expectDatabaseDirectoryNotToContain(databasePath, "encrypted approval payload");
+    await expectDatabaseDirectoryNotToContain(databasePath, "encrypted chat continuation");
     const second = new SqliteRuntimeDatabase(databasePath, {
       secretCodec: new AesGcmSecretCodec("approval-key"),
     });

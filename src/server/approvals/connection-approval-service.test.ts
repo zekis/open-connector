@@ -91,6 +91,68 @@ describe("ConnectionApprovalService", () => {
     if (!next.allowed) expect(next.approval.id).not.toBe(first.approval.id);
   });
 
+  it("persists Chat continuation state and consumes the approved action before storing its response", async () => {
+    const { service, store } = createService();
+    await service.replacePermissions(connection.id, {
+      permissions: [{ actionId: "example.echo", approval: "require_approval" }],
+    });
+    const requested = await service.requestAction({
+      actionId: "example.echo",
+      connection,
+      caller: "chat",
+      input: { message: "hello" },
+    });
+    if (requested.allowed) throw new Error("Expected a pending approval.");
+
+    await service.attachChatContinuation(requested.approval.id, [{ role: "user", content: "Send hello" }], []);
+    await service.approve(requested.approval.id);
+    await service.consumeApproved(requested.approval.id, "chat");
+    await service.storeChatResponse(requested.approval.id, {
+      status: "completed",
+      message: {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Sent hello.",
+        createdAt: new Date().toISOString(),
+      },
+      toolActivity: [],
+    });
+
+    await expect(store.getActionApproval(requested.approval.id)).resolves.toMatchObject({
+      status: "consumed",
+      chat: {
+        messages: [{ role: "user", content: "Send hello" }],
+        response: { status: "completed", message: { content: "Sent hello." } },
+      },
+    });
+    await expect(service.consumeApproved(requested.approval.id, "chat")).rejects.toMatchObject({
+      code: "approval_not_approved",
+    });
+  });
+
+  it("records only one decision when the same approval is submitted concurrently", async () => {
+    const { service } = createService();
+    await service.replacePermissions(connection.id, {
+      permissions: [{ actionId: "example.echo", approval: "require_approval" }],
+    });
+    const requested = await service.requestAction({
+      actionId: "example.echo",
+      connection,
+      caller: "chat",
+      input: { message: "hello" },
+    });
+    if (requested.allowed) throw new Error("Expected a pending approval.");
+
+    const decisions = await Promise.allSettled([
+      service.approve(requested.approval.id),
+      service.approve(requested.approval.id),
+    ]);
+
+    expect(decisions.filter((decision) => decision.status === "fulfilled")).toHaveLength(1);
+    expect(decisions.filter((decision) => decision.status === "rejected")).toHaveLength(1);
+    await expect(service.getActionApproval(requested.approval.id)).resolves.toMatchObject({ status: "approved" });
+  });
+
   it("keeps approvals scoped to the caller and runtime token", async () => {
     const { service } = createService();
     await service.replacePermissions(connection.id, {

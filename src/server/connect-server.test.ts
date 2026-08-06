@@ -199,6 +199,7 @@ describe("ConnectServer", () => {
 
   it("forwards authenticated Chat messages to the configured agent service", async () => {
     const response: AgentChatResponse = {
+      status: "completed",
       message: {
         id: "979f762c-7798-4af5-b24f-12661cb336bd",
         role: "assistant",
@@ -209,6 +210,8 @@ describe("ConnectServer", () => {
     };
     const agentChat: IAgentChatService = {
       respond: vi.fn(async () => response),
+      resume: vi.fn(async () => response),
+      getApprovalResult: vi.fn(async (approvalId: string) => ({ approvalId, status: "pending" as const })),
     };
     const app = createTestServer([], {
       agentChat,
@@ -232,6 +235,64 @@ describe("ConnectServer", () => {
     expect(authorized.status).toBe(200);
     await expect(authorized.json()).resolves.toEqual(response);
     expect(agentChat.respond).toHaveBeenCalledWith(body);
+
+    const approvalStatus = await app.request("/api/agent-chat/approvals/approval-1", {
+      headers: { authorization: "Bearer local-token" },
+    });
+    expect(approvalStatus.status).toBe(200);
+    await expect(approvalStatus.json()).resolves.toEqual({ approvalId: "approval-1", status: "pending" });
+    expect(agentChat.getApprovalResult).toHaveBeenCalledWith("approval-1");
+  });
+
+  it("resumes a paused Chat when its connector action is approved", async () => {
+    const approvalStore = new MemoryConnectionApprovalStore();
+    const approval: ActionApproval = {
+      id: "35e351d3-1a25-434a-a64c-962ddde42668",
+      status: "pending",
+      actionId: "example.echo",
+      connectionId: "connection-1",
+      caller: "chat",
+      input: { message: "hello" },
+      requestHash: "request-hash",
+      requestedAt: "2026-08-06T01:00:00.000Z",
+      chat: {
+        messages: [{ role: "user", content: "Send hello" }],
+        toolActivity: [],
+      },
+    };
+    await approvalStore.addActionApproval(approval);
+    const response: AgentChatResponse = {
+      status: "completed",
+      message: {
+        id: "979f762c-7798-4af5-b24f-12661cb336bd",
+        role: "assistant",
+        content: "Sent hello.",
+        createdAt: "2026-08-06T01:01:00.000Z",
+      },
+      toolActivity: [],
+    };
+    const agentChat: IAgentChatService = {
+      respond: vi.fn(async () => response),
+      resume: vi.fn(async (approvalId) => {
+        const approved = await approvalStore.getActionApproval(approvalId);
+        if (!approved) throw new Error("Approval not found");
+        await approvalStore.updateActionApproval(
+          { ...approved, status: "consumed", consumedAt: "2026-08-06T01:01:00.000Z" },
+          "approved",
+        );
+        return response;
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => ({ approvalId, status: "consumed" as const, response })),
+    };
+    const app = createTestServer([], { agentChat, connectionApprovalStore: approvalStore }).createApp();
+
+    const approved = await app.request(`/api/action-approvals/${approval.id}/approve`, { method: "POST" });
+
+    expect(approved.status).toBe(200);
+    const approvedBody = await approved.json();
+    expect(approvedBody).toMatchObject({ id: approval.id, status: "consumed" });
+    expect(approvedBody).not.toHaveProperty("chat");
+    expect(agentChat.resume).toHaveBeenCalledWith(approval.id);
   });
 
   it("rejects connections for providers unavailable in the current runtime", async () => {

@@ -123,7 +123,7 @@ describe("ApprovalsPage", () => {
     expect(html).toContain("Approval-gated connector requests and Flow tools will pause here");
   });
 
-  it("renders direct agent requests with one-time retry guidance", () => {
+  it("renders direct agent requests with pause and resume guidance", () => {
     const html = renderPage({
       ...data,
       flowApprovals: [],
@@ -133,8 +133,8 @@ describe("ApprovalsPage", () => {
     expect(html).toContain("Agent chat request");
     expect(html).toContain("SharePoint · Create file");
     expect(html).toContain("agent-mail.xlsx");
-    expect(html).toContain("Approve next retry");
-    expect(html).toContain("one identical retry from the same caller for 15 minutes");
+    expect(html).toContain("Approve and resume Chat");
+    expect(html).toContain("resumes the waiting Chat automatically");
     expect(html).not.toContain("Review Flow");
   });
 });

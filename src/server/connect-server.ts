@@ -241,6 +241,9 @@ export class ConnectServer {
     }
     if (this.options.agentChat) {
       app.post("/api/agent-chat/messages", (context) => this.sendAgentChatMessage(context));
+      app.get("/api/agent-chat/approvals/:id", (context) =>
+        this.getAgentChatApproval(context, context.req.param("id")),
+      );
     }
 
     app.get("/api/runs", (context) => this.listRuns(context));
@@ -871,6 +874,17 @@ export class ConnectServer {
     }
   }
 
+  private async getAgentChatApproval(context: Context, approvalId: string): Promise<Response> {
+    try {
+      return context.json(await this.options.agentChat!.getApprovalResult(approvalId));
+    } catch (error) {
+      if (error instanceof AgentChatError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
   private async listFlows(context: Context): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowService().list());
   }
@@ -894,10 +908,23 @@ export class ConnectServer {
   }
 
   private async approveActionRequest(context: Context, id: string): Promise<Response> {
-    return await this.writeConnectionApprovalResult(
-      context,
-      this.options.connectionApprovals!.approve(id).then(serializeActionApproval),
-    );
+    try {
+      const approval = await this.options.connectionApprovals!.approve(id);
+      if (approval.caller === "chat" && approval.chat && this.options.agentChat) {
+        await this.options.agentChat.resume(id);
+        const resumed = await this.options.connectionApprovals!.getActionApproval(id);
+        return context.json(serializeActionApproval(resumed ?? approval));
+      }
+      return context.json(serializeActionApproval(approval));
+    } catch (error) {
+      if (error instanceof ConnectionApprovalError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      if (error instanceof AgentChatError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
   }
 
   private async denyActionRequest(context: Context, id: string): Promise<Response> {
@@ -1367,7 +1394,7 @@ export class ConnectServer {
   }
 }
 
-function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval, "requestHash"> {
+function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval, "requestHash" | "chat"> {
   return {
     id: approval.id,
     status: approval.status,

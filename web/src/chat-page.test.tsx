@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
-import { approvalIdFromToolActivity, ChatPage } from "./chat-page";
+import { applyApprovalResult, approvalIdFromToolActivity, ChatPage, ChatToolActivityList } from "./chat-page";
 import { emptyData } from "./model";
 
 describe("ChatPage", () => {
@@ -95,6 +95,7 @@ describe("ChatPage", () => {
         ok: false,
         actionId: "outlook.send_email",
         connectionId: "connection-1",
+        approvalId: "approval-1",
         input: { subject: "Hello" },
         output: {
           error: {
@@ -105,5 +106,69 @@ describe("ChatPage", () => {
         },
       }),
     ).toBe("approval-1");
+  });
+
+  it("shows one inline decision surface for the active Chat approval", () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ChatToolActivityList
+          activities={[
+            {
+              id: "activity-1",
+              type: "action",
+              label: "Send email",
+              ok: false,
+              actionId: "outlook.send_email",
+              connectionId: "connection-1",
+              approvalId: "approval-1",
+              input: { subject: "Hello" },
+              output: { error: { code: "approval_required", message: "Approval is required." } },
+            },
+          ]}
+          activeApprovalId="approval-1"
+          approvalDecision={null}
+          onApprovalDecision={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("Waiting for approval");
+    expect(html).toContain("Approve and continue");
+    expect(html).toContain(">Deny<");
+    expect(html).toContain('href="/approvals"');
+    expect(html).toContain('target="_blank"');
+  });
+
+  it("replaces a waiting message when the approved Chat resumes", () => {
+    const resumed = applyApprovalResult(
+      {
+        messages: [
+          {
+            id: "waiting-message",
+            role: "assistant",
+            content: "Chat is paused for approval.",
+            createdAt: "2026-08-06T01:00:00.000Z",
+          },
+        ],
+        pendingApproval: { approvalId: "approval-1", assistantMessageId: "waiting-message" },
+      },
+      {
+        approvalId: "approval-1",
+        status: "consumed",
+        response: {
+          status: "completed",
+          message: {
+            id: "completed-message",
+            role: "assistant",
+            content: "Email sent.",
+            createdAt: "2026-08-06T01:01:00.000Z",
+          },
+          toolActivity: [],
+        },
+      },
+    );
+
+    expect(resumed.pendingApproval).toBeUndefined();
+    expect(resumed.messages).toEqual([expect.objectContaining({ id: "completed-message", content: "Email sent." })]);
   });
 });

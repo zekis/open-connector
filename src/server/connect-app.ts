@@ -112,6 +112,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     agentSettings,
     claudeCode,
     actions,
+    approvals: connectionApprovals,
     getPolicySnapshot,
   });
   const flowTriggers = new FlowTriggerEngine({

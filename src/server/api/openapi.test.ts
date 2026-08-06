@@ -207,7 +207,7 @@ describe("action execution OpenAPI", () => {
     );
     expect(approvalsPath.get.responses["200"]).toBeDefined();
     expect(approvePath.post.description).toContain("one identical retry");
-    expect(approvePath.post.description).toContain("does not execute");
+    expect(approvePath.post.description).toContain("Resumes a paused Chat automatically");
     expect(flowGrant.properties.approval.enum).toEqual(["inherit", "always_allow", "require_approval"]);
     expect(flowGrant.description).toContain("override");
     expect(actionApproval.description).toContain("15 minutes");
@@ -232,6 +232,9 @@ describe("action execution OpenAPI", () => {
       required: string[];
       properties: Record<string, unknown>;
     };
+    const approvalPath = document.paths["/api/agent-chat/approvals/{id}"] as {
+      get: { responses: Record<string, unknown> };
+    };
 
     expect(chatPath.post.requestBody.content["application/json"].schema.$ref).toBe(
       "#/components/schemas/AgentChatRequest",
@@ -247,9 +250,13 @@ describe("action execution OpenAPI", () => {
     expect(chatPath.post.description).toContain("Runtime policy and run auditing");
     expect(chatPath.post.description).toContain("local admin authentication");
     expect(request.required).toEqual(["messages"]);
-    expect(request.description).toContain("not persisted");
+    expect(request.description).toContain("encrypted approval record");
     expect(request.properties.messages).toMatchObject({ minItems: 1, maxItems: 40 });
     expect(activity.required).toEqual(expect.arrayContaining(["type", "ok", "input", "output"]));
     expect(activity.properties).toHaveProperty("connectionId");
+    expect(activity.properties).toHaveProperty("approvalId");
+    expect(approvalPath.get.responses).toEqual(
+      expect.objectContaining({ 200: expect.anything(), 401: expect.anything(), 404: expect.anything() }),
+    );
   });
 });

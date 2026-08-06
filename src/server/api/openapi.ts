@@ -228,6 +228,7 @@ export function createOpenApiDocument(
     "/api/action-approvals/{id}/approve": createActionApprovalDecisionPath("approve"),
     "/api/action-approvals/{id}/deny": createActionApprovalDecisionPath("deny"),
     "/api/agent-chat/messages": createAgentChatMessagesPath(),
+    "/api/agent-chat/approvals/{id}": createAgentChatApprovalPath(),
     "/api/flows": createFlowsPath(),
     "/api/flows/{id}": createFlowPath(),
     "/v1/flows/{id}/trigger": createFlowTriggerPath(),
@@ -374,6 +375,7 @@ export function createOpenApiDocument(
         AgentChatRequest: createAgentChatRequestSchema(),
         AgentChatToolActivity: createAgentChatToolActivitySchema(),
         AgentChatResponse: createAgentChatResponseSchema(),
+        AgentChatApprovalResult: createAgentChatApprovalResultSchema(),
         ErrorResponse: errorResponseSchema,
         ConnectionUpsertRequest: createConnectionUpsertRequestSchema(),
         OAuthClientConfigSummary: jsonSchema.object(
@@ -588,7 +590,8 @@ function createAgentChatRequestSchema(): JsonSchema {
     },
     {
       required: ["messages"],
-      description: "Conversation history ending in the new user message. History is not persisted by the server.",
+      description:
+        "Conversation history ending in the new user message. A trusted continuation snapshot is persisted with the encrypted approval record when an action pauses Chat.",
     },
   );
 }
@@ -603,6 +606,7 @@ function createAgentChatToolActivitySchema(): JsonSchema {
       actionId: jsonSchema.string("Executed connector action id, when applicable."),
       connectionId: jsonSchema.string("Connection identifier used by the host tool, when applicable."),
       connectionDisplayName: jsonSchema.string("Connection label safe for display."),
+      approvalId: jsonSchema.uuid("Pending approval identifier when this action paused Chat."),
       input: jsonSchema.unknown("Bounded host tool input."),
       output: jsonSchema.unknown("Bounded host tool output."),
     },
@@ -616,6 +620,8 @@ function createAgentChatToolActivitySchema(): JsonSchema {
 function createAgentChatResponseSchema(): JsonSchema {
   return jsonSchema.object(
     {
+      status: jsonSchema.stringEnum("Chat turn status.", ["completed", "waiting_for_approval", "failed"]),
+      approvalId: jsonSchema.uuid("Approval currently pausing this Chat turn."),
       message: jsonSchema.object(
         {
           id: jsonSchema.uuid("Assistant message identifier."),
@@ -628,10 +634,47 @@ function createAgentChatResponseSchema(): JsonSchema {
       toolActivity: jsonSchema.array({ $ref: "#/components/schemas/AgentChatToolActivity" }),
     },
     {
-      required: ["message", "toolActivity"],
+      required: ["status", "message", "toolActivity"],
       description: "Assistant response and connector activity completed for this message.",
     },
   );
+}
+
+function createAgentChatApprovalResultSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      approvalId: jsonSchema.uuid("Chat approval identifier."),
+      status: jsonSchema.stringEnum("Approval lifecycle status.", [
+        "pending",
+        "approved",
+        "denied",
+        "consumed",
+        "expired",
+      ]),
+      response: { $ref: "#/components/schemas/AgentChatResponse" },
+    },
+    {
+      required: ["approvalId", "status"],
+      description: "Current approval state and the resumed Chat response when continuation has completed.",
+    },
+  );
+}
+
+function createAgentChatApprovalPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Chat"],
+      summary: "Read a paused Chat approval result.",
+      description:
+        "Returns the approval lifecycle state and the agent response produced after an approved Chat action resumes.",
+      parameters: [approvalIdParameter],
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/AgentChatApprovalResult" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
 }
 
 function createFlowsPath(): Record<string, unknown> {
@@ -825,7 +868,7 @@ function createActionApprovalSchema(): JsonSchema {
     {
       required: ["id", "status", "actionId", "connectionId", "caller", "input", "requestedAt"],
       description:
-        "One connector action approval. Approved non-Flow requests authorize one identical retry from the same caller for 15 minutes.",
+        "One connector action approval. Chat approvals resume the paused agent; other approved non-Flow requests authorize one identical retry from the same caller for 15 minutes.",
     },
   );
 }
@@ -908,7 +951,7 @@ function createActionApprovalDecisionPath(decision: "approve" | "deny"): Record<
       summary: `${decision === "approve" ? "Approve" : "Deny"} a direct connector action request.`,
       description:
         decision === "approve"
-          ? "Authorizes one identical retry from the same caller for 15 minutes. The approval endpoint does not execute the connector action."
+          ? "Resumes a paused Chat automatically. Other callers receive one identical retry authorization for 15 minutes."
           : "Denies the pending request. A later matching attempt creates a new approval request.",
       parameters: [approvalIdParameter],
       responses: {

@@ -259,6 +259,14 @@
   font-size: 11px;
 }
 
+.chat-approval-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .chat-tool-call {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -386,6 +394,17 @@
 
   .chat-agent-state small {
     white-space: normal;
+  }
+
+  .chat-approval-request {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .chat-approval-actions {
+    width: 100%;
+    padding-left: 26px;
+    justify-content: flex-start;
   }
 
   .chat-transcript,

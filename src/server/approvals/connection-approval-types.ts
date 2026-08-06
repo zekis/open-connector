@@ -1,3 +1,4 @@
+import type { AgentChatApprovalContinuation } from "../chat/agent-chat-types.ts";
 import type { RunLogCaller } from "../storage/runtime-store.ts";
 
 export type ConnectionApprovalMode = "always_allow" | "require_approval";
@@ -23,6 +24,7 @@ export interface ActionApproval {
   resolvedAt?: string;
   expiresAt?: string;
   consumedAt?: string;
+  chat?: AgentChatApprovalContinuation;
 }
 
 export interface IConnectionApprovalStore {

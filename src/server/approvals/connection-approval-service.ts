@@ -1,5 +1,10 @@
 import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionService, ConnectionSummary } from "../../connection-service.ts";
+import type {
+  AgentChatApprovalContinuation,
+  AgentChatResponse,
+  AgentChatToolActivity,
+} from "../chat/agent-chat-types.ts";
 import type { RunLogCaller } from "../storage/runtime-store.ts";
 import type {
   ActionApproval,
@@ -146,6 +151,83 @@ export class ConnectionApprovalService {
 
   listActionApprovals(limit?: number): Promise<ActionApproval[]> {
     return this.options.store.listActionApprovals(limit);
+  }
+
+  getActionApproval(id: string): Promise<ActionApproval | undefined> {
+    return this.options.store.getActionApproval(id);
+  }
+
+  async attachChatContinuation(
+    id: string,
+    messages: AgentChatApprovalContinuation["messages"],
+    toolActivity: AgentChatToolActivity[],
+  ): Promise<ActionApproval> {
+    const approval = await this.getPendingApproval(id);
+    if (approval.caller !== "chat") {
+      throw new ConnectionApprovalError("invalid_approval_caller", "Only Chat approvals can store agent state.");
+    }
+    const updated: ActionApproval = {
+      ...approval,
+      chat: {
+        messages: structuredClone(messages),
+        toolActivity: structuredClone(toolActivity),
+      },
+    };
+    if (!(await this.options.store.updateActionApproval(updated, "pending"))) {
+      throw new ConnectionApprovalError("approval_not_pending", "The approval has already been resolved.");
+    }
+    return updated;
+  }
+
+  async consumeApproved(id: string, caller: RunLogCaller): Promise<ActionApproval> {
+    const approval = await this.options.store.getActionApproval(id);
+    if (!approval) {
+      throw new ConnectionApprovalError("approval_not_found", `Approval not found: ${id}.`, 404);
+    }
+    if (approval.caller !== caller) {
+      throw new ConnectionApprovalError("invalid_approval_caller", "The approval belongs to a different caller.");
+    }
+    if (approval.status !== "approved") {
+      throw new ConnectionApprovalError("approval_not_approved", "The approval is not ready to resume.");
+    }
+    const now = new Date();
+    if (!approval.expiresAt || Date.parse(approval.expiresAt) <= now.getTime()) {
+      await this.options.store.updateActionApproval(
+        { ...approval, status: "expired", resolvedAt: approval.resolvedAt ?? now.toISOString() },
+        "approved",
+      );
+      throw new ConnectionApprovalError("approval_expired", "The approval expired before the agent resumed.");
+    }
+    const consumed: ActionApproval = {
+      ...approval,
+      status: "consumed",
+      consumedAt: now.toISOString(),
+    };
+    if (!(await this.options.store.updateActionApproval(consumed, "approved"))) {
+      throw new ConnectionApprovalError("approval_not_approved", "The approval has already been consumed.");
+    }
+    return consumed;
+  }
+
+  async storeChatResponse(id: string, response: AgentChatResponse): Promise<ActionApproval> {
+    const approval = await this.options.store.getActionApproval(id);
+    if (!approval || approval.caller !== "chat" || !approval.chat) {
+      throw new ConnectionApprovalError("approval_not_found", `Chat approval not found: ${id}.`, 404);
+    }
+    if (approval.status !== "consumed") {
+      throw new ConnectionApprovalError("approval_not_consumed", "The Chat approval has not been consumed.");
+    }
+    const updated: ActionApproval = {
+      ...approval,
+      chat: {
+        ...approval.chat,
+        response: structuredClone(response),
+      },
+    };
+    if (!(await this.options.store.updateActionApproval(updated, "consumed"))) {
+      throw new ConnectionApprovalError("approval_not_consumed", "The Chat approval changed before completion.");
+    }
+    return updated;
   }
 
   async approve(id: string): Promise<ActionApproval> {
