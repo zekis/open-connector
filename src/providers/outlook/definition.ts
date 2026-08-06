@@ -24,6 +24,7 @@ export const provider: ProviderDefinition = {
         method: "S256",
       },
       authorizationParams: {
+        prompt: "select_account",
         response_mode: "query",
       },
       clientConfigFields: [
