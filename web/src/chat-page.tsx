@@ -24,6 +24,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiGet, apiPost } from "./api";
+import { ChatMarkdown } from "./chat-markdown";
 import { evaluatePolicy, policyLayers } from "./policy";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -359,7 +360,9 @@ function ChatMessageView(props: {
             onApprovalDecision={props.onApprovalDecision}
           />
         ) : null}
-        <div className={assistant ? "chat-bubble assistant" : "chat-bubble user"}>{props.message.content}</div>
+        <div className={assistant ? "chat-bubble assistant" : "chat-bubble user"}>
+          {assistant ? <ChatMarkdown>{props.message.content}</ChatMarkdown> : props.message.content}
+        </div>
       </div>
     </div>
   );
