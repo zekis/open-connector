@@ -407,6 +407,7 @@ const recommendedProviderServices = [
   "box",
   "confluence",
   "outlook",
+  "sharepoint",
   "discord",
   "telegram",
   "twilio",
