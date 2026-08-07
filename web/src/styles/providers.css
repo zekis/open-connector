@@ -588,6 +588,50 @@
   flex-wrap: wrap;
 }
 
+.oauth-redirect-uri {
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 35%, var(--background));
+}
+
+.oauth-redirect-uri-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.oauth-redirect-uri-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.oauth-redirect-uri-header strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.oauth-redirect-uri-header small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.oauth-redirect-uri code {
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", "Roboto Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  user-select: all;
+}
+
 .oauth-client-editor {
   padding-top: 2px;
 }
@@ -679,6 +723,15 @@
 
   .oauth-client-actions {
     justify-content: flex-start;
+  }
+
+  .oauth-redirect-uri-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .oauth-redirect-uri-header [data-slot="button"] {
+    align-self: flex-start;
   }
 
   .connection-list-item,

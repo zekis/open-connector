@@ -12,6 +12,7 @@ import type {
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 
 import { useTranslate } from "@embra/i18n/react";
+import { useClipboard } from "foxact/use-clipboard";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -19,6 +20,7 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleSlash2,
+  Copy,
   ExternalLink,
   KeyRound,
   Plus,
@@ -55,6 +57,7 @@ interface ProviderDetailProps {
   connections: ConnectionRecord[];
   connectionStatus: ProviderConnectionStatus;
   oauthConfig?: OAuthConfig;
+  oauthRedirectUri?: string;
   permissions: ConnectionActionPermission[];
   onRefresh(): void;
 }
@@ -143,6 +146,7 @@ export function ProvidersPage(props: ProvidersPageProps): ReactNode {
       connections={configurableConnectionsForProvider(props.data.connections, routeProvider.service)}
       connectionStatus={connectionStatus}
       oauthConfig={oauthConfigForProvider(props.data.oauthConfigs, routeProvider.service)}
+      oauthRedirectUri={oauthRedirectUriForProvider(props.data.oauthConfigs, routeProvider.service)}
       permissions={props.data.connectionPermissions ?? []}
       onRefresh={props.onRefresh}
     />
@@ -715,6 +719,7 @@ function ProviderDetail(props: ProviderDetailProps): ReactNode {
                 provider={props.provider}
                 auth={oauthAuth}
                 config={props.oauthConfig}
+                redirectUri={props.oauthRedirectUri}
                 expanded={oauthClientExpanded}
                 onToggle={() => setOAuthClientExpanded((value) => !value)}
                 onRefresh={props.onRefresh}
@@ -1390,11 +1395,13 @@ function OAuthClientSettings(props: {
   provider: ProviderDefinition;
   auth: AuthDefinition;
   config?: OAuthConfig;
+  redirectUri?: string;
   expanded: boolean;
   onToggle(): void;
   onRefresh(): void;
 }): ReactNode {
   const t = useTranslate();
+  const redirectClipboard = useClipboard();
   const [status, setStatus] = useState<string | null>(null);
   const previousProviderService = useRef(props.provider.service);
   const skipNextConfigClear = useRef(false);
@@ -1460,6 +1467,35 @@ function OAuthClientSettings(props: {
           ) : null}
         </div>
       </div>
+      {props.redirectUri ? (
+        <div className="oauth-redirect-uri">
+          <div className="oauth-redirect-uri-header">
+            <div>
+              <strong>{t("providers.oauthClientSettings.redirectUri")}</strong>
+              <small>{t("providers.oauthClientSettings.redirectUriHint")}</small>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => void redirectClipboard.copy(props.redirectUri!)}
+              aria-label={t(
+                redirectClipboard.copied
+                  ? "providers.oauthClientSettings.copiedRedirectUri"
+                  : "providers.oauthClientSettings.copyRedirectUri",
+              )}
+            >
+              {redirectClipboard.copied ? <Check size={14} /> : <Copy size={14} />}
+              {t(
+                redirectClipboard.copied
+                  ? "providers.oauthClientSettings.copiedRedirectUri"
+                  : "providers.oauthClientSettings.copyRedirectUri",
+              )}
+            </Button>
+          </div>
+          <code>{props.redirectUri}</code>
+        </div>
+      ) : null}
       {status ? <FormStatus message={status} /> : null}
       {shouldShowOAuthClientForm(props.auth, props.expanded) ? (
         <div className="oauth-client-editor">
@@ -1577,6 +1613,10 @@ function compactProviderCount(value: number): string {
 
 export function oauthConfigForProvider(configs: OAuthConfig[], service: string): OAuthConfig | undefined {
   return configs.find((config) => config.service === service && config.configured);
+}
+
+export function oauthRedirectUriForProvider(configs: OAuthConfig[], service: string): string | undefined {
+  return configs.find((config) => config.service === service)?.expectedRedirectUri;
 }
 
 const providerStatusOptions: Array<{ id: ProviderStatusFilter; labelKey: string }> = [

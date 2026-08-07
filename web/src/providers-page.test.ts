@@ -18,6 +18,7 @@ import {
   oauthClientActionLabel,
   oauthAuthorizationRequestBody,
   oauthConfigForProvider,
+  oauthRedirectUriForProvider,
   providerBrowserResetKey,
   ProvidersPage,
   shouldClearOAuthClientStatus,
@@ -120,6 +121,14 @@ describe("ProvidersPage OAuth client settings", () => {
     const markup = renderProvidersPage(providerData, "/providers/gmail");
 
     expect(markup).toContain("Reset OAuth Client");
+  });
+
+  it("shows the exact OAuth callback URL with a copy action", () => {
+    const markup = renderProvidersPage(providerData, "/providers/gmail");
+
+    expect(markup).toContain("Callback URL");
+    expect(markup).toContain("https://connector.example.com/oauth/callback");
+    expect(markup).toContain("Copy callback URL");
   });
 });
 
@@ -687,7 +696,14 @@ const catalogOnlyProvider: ProviderDefinition = {
 const providerData: AppData = {
   providers: [oauthProvider],
   connections: [],
-  oauthConfigs: [{ service: "gmail", configured: true, clientId: "gmail-client-id" }],
+  oauthConfigs: [
+    {
+      service: "gmail",
+      configured: true,
+      clientId: "gmail-client-id",
+      expectedRedirectUri: "https://connector.example.com/oauth/callback",
+    },
+  ],
   runtimeTokens: [],
   runs: [],
 };
@@ -735,5 +751,23 @@ describe("oauthConfigForProvider", () => {
 
   it("ignores unconfigured OAuth config summaries", () => {
     expect(oauthConfigForProvider([{ service: "gmail", configured: false, clientId: null }], "gmail")).toBeUndefined();
+  });
+});
+
+describe("oauthRedirectUriForProvider", () => {
+  it("returns the runtime callback URL even before the OAuth client is configured", () => {
+    expect(
+      oauthRedirectUriForProvider(
+        [
+          {
+            service: "azure_devops",
+            configured: false,
+            clientId: null,
+            expectedRedirectUri: "https://ocgw.erp-portal.au/oauth/callback",
+          },
+        ],
+        "azure_devops",
+      ),
+    ).toBe("https://ocgw.erp-portal.au/oauth/callback");
   });
 });
