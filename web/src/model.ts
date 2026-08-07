@@ -391,6 +391,7 @@ const recommendedProviderServices = [
   "googlecalendar",
   "googledrive",
   "github",
+  "azure_devops",
   "notion",
   "hubspot",
   "googleforms",
