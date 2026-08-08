@@ -1,4 +1,4 @@
-import type { FlowApproval, FlowDefinition, ProviderDefinition } from "./model";
+import type { FlowApproval, FlowDefinition, FlowRun, ProviderDefinition } from "./model";
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
@@ -45,6 +45,18 @@ const approval: FlowApproval = {
   requestedAt: "2026-07-30T01:00:00.000Z",
 };
 
+const run: FlowRun = {
+  id: "run-1",
+  flowId: flow.id,
+  status: "completed",
+  trigger: "manual",
+  stepCount: 2,
+  startedAt: "2026-07-30T01:00:00.000Z",
+  updatedAt: "2026-07-30T01:01:00.000Z",
+  completedAt: "2026-07-30T01:01:00.000Z",
+  finalOutput: "A detailed result that stays hidden until requested.",
+};
+
 const providers: ProviderDefinition[] = [
   provider("outlook", "Outlook", "https://www.microsoft.com/microsoft-365/outlook/outlook-for-business"),
   provider("sharepoint", "SharePoint", "https://www.microsoft.com/microsoft-365/sharepoint/collaboration"),
@@ -55,7 +67,7 @@ describe("FlowsPage", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <FlowsPage
-          data={{ ...emptyData, providers, connections, flows: [flow], flowApprovals: [approval] }}
+          data={{ ...emptyData, providers, connections, flows: [flow], flowRuns: [run], flowApprovals: [approval] }}
           onRefresh={() => {}}
         />
       </MemoryRouter>,
@@ -76,6 +88,8 @@ describe("FlowsPage", () => {
     expect(html).toContain("SharePoint");
     expect(html.match(/class="provider-icon large"/g) ?? []).toHaveLength(2);
     expect(html).toContain("Flows from source to destination");
+    expect(html).toContain('aria-label="View last run details for Daily inbox sync"');
+    expect(html).not.toContain(run.finalOutput);
   });
 });
 

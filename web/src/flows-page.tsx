@@ -9,6 +9,7 @@ import {
   CirclePlay,
   FilePlus2,
   GitCompareArrows,
+  Info,
   Mail,
   MousePointerClick,
   Pencil,
@@ -18,8 +19,17 @@ import {
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiPost, apiPut } from "./api";
+import { ChatMarkdown } from "./chat-markdown";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 interface FlowsPageProps {
   data: AppData;
@@ -129,14 +139,7 @@ function FlowCard(props: {
   const sourceProvider = props.data.providers.find((provider) => provider.service === source?.service);
   const destinationProvider = props.data.providers.find((provider) => provider.service === destination?.service);
   const latestRun = props.latestRun;
-  const tone =
-    latestRun?.status === "failed"
-      ? "error"
-      : latestRun?.status === "waiting_for_approval"
-        ? "warning"
-        : latestRun?.status === "completed"
-          ? "success"
-          : undefined;
+  const tone = latestRun ? flowRunTone(latestRun.status) : undefined;
 
   return (
     <article className="flow-card">
@@ -160,10 +163,15 @@ function FlowCard(props: {
         <FlowTriggerBadge flow={props.flow} />
         <span>{props.flow.tools.length} tools</span>
         <span>Claude Code</span>
-        {latestRun ? <Badge tone={tone}>{latestRun.status.replaceAll("_", " ")}</Badge> : <span>Never run</span>}
+        {latestRun ? (
+          <span className="flow-last-run">
+            <Badge tone={tone}>{latestRun.status.replaceAll("_", " ")}</Badge>
+            <FlowRunDetails flowName={props.flow.name} run={latestRun} />
+          </span>
+        ) : (
+          <span>Never run</span>
+        )}
       </div>
-      {latestRun?.finalOutput ? <p className="flow-run-output">{latestRun.finalOutput}</p> : null}
-      {latestRun?.errorMessage ? <InlineError message={latestRun.errorMessage} /> : null}
       <div className="button-row">
         <Button size="sm" disabled={props.busy || props.flow.status !== "active"} onClick={props.onRun}>
           <CirclePlay size={14} />
@@ -191,6 +199,65 @@ function FlowCard(props: {
       </div>
     </article>
   );
+}
+
+function FlowRunDetails(props: { flowName: string; run: FlowRun }): ReactNode {
+  const run = props.run;
+  const hasResult = Boolean(run.finalOutput || run.errorMessage);
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          className="flow-run-info-button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`View last run details for ${props.flowName}`}
+          title="View last run details"
+        >
+          <Info size={14} />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="flow-run-dialog">
+        <DialogHeader>
+          <DialogTitle>Last run · {props.flowName}</DialogTitle>
+          <DialogDescription>
+            Started {formatFlowRunTime(run.startedAt)}
+            {run.completedAt ? ` · Finished ${formatFlowRunTime(run.completedAt)}` : ""} · {run.stepCount} steps
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flow-run-dialog-summary">
+          <span>Status</span>
+          <Badge tone={flowRunTone(run.status)}>{run.status.replaceAll("_", " ")}</Badge>
+        </div>
+        <div className="flow-run-dialog-content">
+          {run.errorMessage ? <InlineError message={run.errorMessage} /> : null}
+          {run.finalOutput ? <ChatMarkdown>{run.finalOutput}</ChatMarkdown> : null}
+          {!hasResult ? (
+            <p className="flow-run-dialog-empty">
+              {run.status === "running" || run.status === "waiting_for_approval"
+                ? "This run is still in progress."
+                : "No output was recorded for this run."}
+            </p>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function flowRunTone(status: FlowRun["status"]): "success" | "warning" | "error" | undefined {
+  if (status === "failed") return "error";
+  if (status === "waiting_for_approval") return "warning";
+  if (status === "completed") return "success";
+  return undefined;
+}
+
+function formatFlowRunTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function FlowEndpoint(props: {
