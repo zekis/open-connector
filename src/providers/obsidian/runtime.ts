@@ -68,6 +68,7 @@ export interface ObsidianMutationResult {
 }
 
 const defaultRequestTimeoutMs = 60_000;
+const maxCliContentArgumentLength = 1_500;
 const maxResponseBytes = 16 * 1024 * 1024;
 const maxErrorMessageCharacters = 8 * 1024;
 
@@ -215,8 +216,43 @@ async function mutateObsidianNote(
   flags: string[] | undefined,
   context: ObsidianActionContext,
 ): Promise<ObsidianMutationResult> {
-  const result = await requestObsidianCli(command, "POST", { params: { path, content }, flags }, context);
-  return { path, message: result.stdout.trimEnd(), durationMs: result.duration };
+  const chunks = splitObsidianCliContent(content);
+  if (command === "prepend") chunks.reverse();
+
+  let message = "";
+  let durationMs = 0;
+  for (const [index, chunk] of chunks.entries()) {
+    const stepCommand = index > 0 && command === "create" ? "append" : command;
+    const stepFlags = index === 0 ? flags : ["inline"];
+    const result = await requestObsidianCli(
+      stepCommand,
+      "POST",
+      { params: { path, content: chunk }, flags: stepFlags },
+      context,
+    );
+    if (index === 0) message = result.stdout.trimEnd();
+    durationMs += result.duration;
+  }
+  return { path, message, durationMs };
+}
+
+/**
+ * Encode content using Obsidian CLI's documented newline/tab escapes and keep
+ * each Windows command argument comfortably below the platform limit.
+ */
+function splitObsidianCliContent(content: string): string[] {
+  const chunks: string[] = [];
+  let chunk = "";
+  for (const character of content.replace(/\r\n?/gu, "\n")) {
+    const encoded = character === "\n" ? "\\n" : character === "\t" ? "\\t" : character;
+    if (chunk && chunk.length + encoded.length > maxCliContentArgumentLength) {
+      chunks.push(chunk);
+      chunk = "";
+    }
+    chunk += encoded;
+  }
+  if (chunk || chunks.length === 0) chunks.push(chunk);
+  return chunks;
 }
 
 async function requestObsidianCli(

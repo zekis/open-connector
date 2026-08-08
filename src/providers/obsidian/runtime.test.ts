@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendObsidianNote,
   normalizeObsidianApiBaseUrl,
+  prependObsidianNote,
   searchObsidianNotes,
   validateObsidianCredential,
   writeObsidianNote,
@@ -12,6 +14,44 @@ describe("Obsidian REST runtime", () => {
     expect(normalizeObsidianApiBaseUrl("https://notes.example.com/obsidian/api/v1/", false)).toBe(
       "https://notes.example.com/obsidian/api/v1",
     );
+  });
+
+  it("keeps large append and prepend continuations inline and ordered", async () => {
+    const content = `${"A".repeat(1_499)}\n${"B".repeat(20)}`;
+    for (const mutation of [
+      {
+        handler: appendObsidianNote,
+        firstContent: "A".repeat(1_499),
+        secondContent: `\\n${"B".repeat(20)}`,
+      },
+      {
+        handler: prependObsidianNote,
+        firstContent: `\\n${"B".repeat(20)}`,
+        secondContent: "A".repeat(1_499),
+      },
+    ]) {
+      const fetcher = createCommandFetch();
+      const context = {
+        apiKey: "test-api-key",
+        apiBaseUrl: "https://notes.example.com/api/v1",
+        vault: "Projects",
+        fetcher,
+      };
+
+      await mutation.handler({ path: "Projects/Large.md", content }, context);
+
+      const calls = vi.mocked(fetcher).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(JSON.parse(String(calls[0]![1]?.body))).toEqual({
+        vault: "Projects",
+        params: { path: "Projects/Large.md", content: mutation.firstContent },
+      });
+      expect(JSON.parse(String(calls[1]![1]?.body))).toEqual({
+        vault: "Projects",
+        params: { path: "Projects/Large.md", content: mutation.secondContent },
+        flags: ["inline"],
+      });
+    }
   });
 
   it("requires the private-network opt-in for Tailscale addresses", () => {
@@ -111,8 +151,59 @@ describe("Obsidian REST runtime", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({
       vault: "Projects",
-      params: { path: "Projects/Roadmap.md", content: "# Roadmap\n" },
+      params: { path: "Projects/Roadmap.md", content: "# Roadmap\\n" },
       flags: ["overwrite"],
+    });
+  });
+
+  it("splits large writes into inline continuation commands", async () => {
+    const fetcher = vi.fn(async (input: URL | RequestInfo): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      const command = url.pathname.split("/").pop()!;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          command,
+          exitCode: 0,
+          stdout: `${command === "create" ? "Created" : "Appended to"} Projects/Large.md\n`,
+          stderr: "",
+          duration: 12,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const context = {
+      apiKey: "test-api-key",
+      apiBaseUrl: "https://notes.example.com/api/v1",
+      vault: "Projects",
+      fetcher,
+    };
+    const content = `${"A".repeat(1_499)}\n${"B".repeat(20)}`;
+
+    const result = await writeObsidianNote({ path: "Projects/Large.md", content }, context);
+
+    expect(result).toEqual({
+      path: "Projects/Large.md",
+      message: "Created Projects/Large.md",
+      durationMs: 24,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(fetcher).mock.calls;
+    const firstUrl = new URL(calls[0]![0] instanceof Request ? calls[0]![0].url : calls[0]![0].toString());
+    const secondUrl = new URL(calls[1]![0] instanceof Request ? calls[1]![0].url : calls[1]![0].toString());
+    const firstBody = JSON.parse(String(calls[0]![1]?.body));
+    const secondBody = JSON.parse(String(calls[1]![1]?.body));
+    expect(firstUrl.pathname).toBe("/api/v1/cli/create");
+    expect(firstBody).toEqual({
+      vault: "Projects",
+      params: { path: "Projects/Large.md", content: "A".repeat(1_499) },
+      flags: ["overwrite"],
+    });
+    expect(secondUrl.pathname).toBe("/api/v1/cli/append");
+    expect(secondBody).toEqual({
+      vault: "Projects",
+      params: { path: "Projects/Large.md", content: `\\n${"B".repeat(20)}` },
+      flags: ["inline"],
     });
   });
 });
@@ -120,5 +211,23 @@ describe("Obsidian REST runtime", () => {
 function createJsonFetch(payload: unknown, status = 200): typeof fetch {
   return vi.fn(async (): Promise<Response> => {
     return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+}
+
+function createCommandFetch(): typeof fetch {
+  return vi.fn(async (input: URL | RequestInfo): Promise<Response> => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    const command = url.pathname.split("/").pop()!;
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        command,
+        exitCode: 0,
+        stdout: `${command} completed\n`,
+        stderr: "",
+        duration: 12,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
 }
