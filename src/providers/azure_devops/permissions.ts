@@ -1,7 +1,3 @@
-export const azureDevOpsDelegatedScope = "https://app.vssps.visualstudio.com/.default";
-
-export const azureDevOpsOAuthScopes: string[] = [azureDevOpsDelegatedScope, "offline_access"];
-
 export const azureDevOpsPermissions = {
   profileRead: "vso.profile",
   projectRead: "vso.project",

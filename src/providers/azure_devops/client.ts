@@ -1,17 +1,16 @@
-import type { OAuthProviderContext } from "../provider-runtime.ts";
+import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
-import { optionalString, requiredRecord, requiredString } from "../../core/cast.ts";
+import { optionalString, requiredRecord } from "../../core/cast.ts";
 import { encodePathSegment, readBoundedResponseBytes } from "../../core/request.ts";
 import { ProviderRequestError } from "../provider-runtime.ts";
 
 const azureDevOpsOrigin = "https://dev.azure.com";
-const azureDevOpsProfileOrigin = "https://app.vssps.visualstudio.com";
 const maxAzureDevOpsJsonBytes = 4 * 1024 * 1024;
 const maxAzureDevOpsErrorBytes = 1024 * 1024;
 
-export interface AzureDevOpsRuntimeDeps extends Pick<OAuthProviderContext, "fetcher" | "signal"> {
+export interface AzureDevOpsRuntimeDeps extends Pick<ApiKeyProviderContext, "fetcher" | "signal"> {
   authorization: string;
-  organization?: string;
+  organization: string;
 }
 
 export type AzureDevOpsActionHandler = (
@@ -41,11 +40,7 @@ interface AzureDevOpsErrorPayload {
 
 /** Resolve an action organization override or the organization stored with a PAT connection. */
 export function resolveAzureDevOpsOrganization(input: Record<string, unknown>, deps: AzureDevOpsRuntimeDeps): string {
-  return requiredString(
-    optionalString(input.organization) ?? deps.organization,
-    "organization",
-    (message) => new ProviderRequestError(400, `${message} OAuth connections must supply it in the action input.`),
-  );
+  return optionalString(input.organization) ?? deps.organization;
 }
 
 /** Build a project-scoped REST path without allowing input to control the request host. */
@@ -69,17 +64,6 @@ export async function azureDevOpsJsonRequest<T>(
   return azureDevOpsJsonUrlRequest<T>(url, deps, options);
 }
 
-/** Request the current Azure DevOps user profile from the fixed profile API host. */
-export function azureDevOpsProfileRequest<T>(deps: AzureDevOpsRuntimeDeps): Promise<AzureDevOpsJsonResponse<T>> {
-  const url = new URL("/_apis/profile/profiles/me", azureDevOpsProfileOrigin);
-  return azureDevOpsJsonUrlRequest<T>(url, deps, {
-    query: {
-      details: true,
-      coreAttributes: "Email,DisplayName",
-    },
-  });
-}
-
 /** Read and validate Azure DevOps' standard collection envelope. */
 export function readAzureDevOpsCollection(value: unknown, fieldName: string): Array<Record<string, unknown>> {
   const payload = requiredRecord(value, `${fieldName} response`, (message) => new ProviderRequestError(502, message));
@@ -96,7 +80,7 @@ async function azureDevOpsJsonUrlRequest<T>(
   deps: AzureDevOpsRuntimeDeps,
   options: AzureDevOpsRequestOptions,
 ): Promise<AzureDevOpsJsonResponse<T>> {
-  if (url.origin !== azureDevOpsOrigin && url.origin !== azureDevOpsProfileOrigin) {
+  if (url.origin !== azureDevOpsOrigin) {
     throw new ProviderRequestError(400, "Azure DevOps requests must target an official Azure DevOps Services host.");
   }
   if (!url.searchParams.has("api-version")) {

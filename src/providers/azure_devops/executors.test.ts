@@ -1,8 +1,7 @@
 import type { AzureDevOpsRuntimeDeps } from "./client.ts";
 
 import { describe, expect, it, vi } from "vitest";
-import { ProviderRequestError } from "../provider-runtime.ts";
-import { azureDevOpsActionHandlers, credentialValidators } from "./executors.ts";
+import { azureDevOpsActionHandlers, credentialValidators, executors } from "./executors.ts";
 
 describe("Azure DevOps executors", () => {
   it("lists projects using the PAT connection organization and continuation token", async () => {
@@ -124,40 +123,29 @@ describe("Azure DevOps executors", () => {
     ]);
   });
 
-  it("rejects an OAuth action without an organization before sending credentials", async () => {
-    const fetcher = createFetch(async () => Response.json({ value: [] }));
-
+  it("rejects a legacy OAuth connection before executing an action", async () => {
     await expect(
-      azureDevOpsActionHandlers.list_projects!({}, { authorization: "Bearer access-token", fetcher }),
-    ).rejects.toEqual(expect.objectContaining<Partial<ProviderRequestError>>({ status: 400 }));
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("uses the Azure DevOps profile API to identify an OAuth connection", async () => {
-    const fetcher = createFetch(async () =>
-      Response.json({ id: "user-1", displayName: "Zeke Tierney", emailAddress: "zeke@example.com" }),
-    );
-
-    await expect(
-      credentialValidators.oauth2!(
+      executors["azure_devops.list_projects"]!(
+        {},
         {
-          authType: "oauth2",
-          accessToken: "access-token",
-          tokenType: "Bearer",
-          profile: { accountId: "pending", displayName: "pending", grantedScopes: [] },
-          metadata: {},
+          async getCredential() {
+            return {
+              authType: "oauth2",
+              accessToken: "access-token",
+              tokenType: "Bearer",
+              profile: { accountId: "user-1", displayName: "Zeke Tierney", grantedScopes: [] },
+              metadata: {},
+            };
+          },
         },
-        { fetcher },
       ),
     ).resolves.toMatchObject({
-      profile: { accountId: "user-1", displayName: "zeke@example.com" },
+      ok: false,
+      error: {
+        code: "authorization_failed",
+        message: "Configure a personal access token for this provider first.",
+      },
     });
-
-    const [request, init] = vi.mocked(fetcher).mock.calls[0]!;
-    const url = new URL(request instanceof Request ? request.url : request.toString());
-    expect(url.origin).toBe("https://app.vssps.visualstudio.com");
-    expect(url.pathname).toBe("/_apis/profile/profiles/me");
-    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access-token");
   });
 
   it("validates a PAT against its configured organization with Basic authentication", async () => {

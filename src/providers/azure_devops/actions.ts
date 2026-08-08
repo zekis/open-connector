@@ -2,7 +2,7 @@ import type { ActionDefinition, JsonSchema } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
-import { azureDevOpsDelegatedScope, azureDevOpsPermissions } from "./scopes.ts";
+import { azureDevOpsPermissions } from "./permissions.ts";
 
 const service = "azure_devops";
 
@@ -15,7 +15,7 @@ interface AzureDevOpsActionSource {
 }
 
 const organization = s.nonEmptyString(
-  "Azure DevOps organization name. Required for OAuth connections; optional for PAT connections configured with an organization.",
+  "Optional Azure DevOps organization override. Defaults to the organization configured with the PAT connection.",
 );
 const projectIdOrName = s.nonEmptyString("Azure DevOps project ID or project name.");
 const repositoryIdOrName = s.nonEmptyString("Azure Repos repository ID or repository name.");
@@ -327,7 +327,7 @@ export const azureDevOpsActions: ActionDefinition[] = actions.map((source) =>
   defineProviderAction(service, {
     name: source.name,
     description: source.description,
-    requiredScopes: [azureDevOpsDelegatedScope],
+    requiredScopes: [],
     providerPermissions: source.providerPermissions,
     inputSchema: source.inputSchema,
     outputSchema: source.outputSchema,
