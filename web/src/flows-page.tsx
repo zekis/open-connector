@@ -1,9 +1,11 @@
-import type { AppData, ConnectionRecord, FlowDefinition, FlowRun, FlowRunDetail } from "./model";
+import type { AppData, ConnectionRecord, FlowDefinition, FlowRun, FlowRunDetail, ProviderDefinition } from "./model";
 import type { ReactNode } from "react";
 
 import {
   AlarmClock,
+  ArrowRight,
   Braces,
+  Cable,
   CirclePlay,
   FilePlus2,
   GitCompareArrows,
@@ -13,10 +15,10 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiPost, apiPut } from "./api";
-import { Badge, EmptyState, InlineError } from "./shared-ui";
+import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 
 interface FlowsPageProps {
@@ -29,6 +31,13 @@ export function FlowsPage(props: FlowsPageProps): ReactNode {
   const flowRuns = props.data.flowRuns ?? [];
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const hasRunningFlow = flowRuns.some((run) => run.status === "running");
+
+  useEffect(() => {
+    if (!hasRunningFlow) return;
+    const timer = window.setInterval(props.onRefresh, 2_000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningFlow, props.onRefresh]);
 
   async function mutate(key: string, operation: () => Promise<unknown>): Promise<void> {
     setBusy(key);
@@ -117,6 +126,8 @@ function FlowCard(props: {
 }): ReactNode {
   const source = props.data.connections.find((connection) => connection.id === props.flow.sourceConnectionId);
   const destination = props.data.connections.find((connection) => connection.id === props.flow.destinationConnectionId);
+  const sourceProvider = props.data.providers.find((provider) => provider.service === source?.service);
+  const destinationProvider = props.data.providers.find((provider) => provider.service === destination?.service);
   const latestRun = props.latestRun;
   const tone =
     latestRun?.status === "failed"
@@ -137,9 +148,13 @@ function FlowCard(props: {
         <Badge tone={props.flow.status === "active" ? "success" : "warning"}>{props.flow.status}</Badge>
       </div>
       <div className="flow-path">
-        <span>{source ? connectionLabel(source) : "Missing source"}</span>
-        <strong>→</strong>
-        <span>{destination ? connectionLabel(destination) : "Missing destination"}</span>
+        <FlowEndpoint role="source" connection={source} provider={sourceProvider} />
+        <div className="flow-path-direction" aria-label="Flows from source to destination">
+          <span />
+          <ArrowRight size={16} />
+          <span />
+        </div>
+        <FlowEndpoint role="destination" connection={destination} provider={destinationProvider} />
       </div>
       <div className="flow-card-meta">
         <FlowTriggerBadge flow={props.flow} />
@@ -178,6 +193,35 @@ function FlowCard(props: {
   );
 }
 
+function FlowEndpoint(props: {
+  role: "source" | "destination";
+  connection: ConnectionRecord | undefined;
+  provider: ProviderDefinition | undefined;
+}): ReactNode {
+  const roleLabel = props.role === "source" ? "Source" : "Destination";
+  const providerName = props.provider?.displayName ?? props.connection?.service ?? `Missing ${props.role}`;
+  const connectionName = props.connection ? connectionDisplayName(props.connection) : "Choose a connection to repair";
+
+  return (
+    <div className={`flow-endpoint ${props.role}`} title={`${providerName} · ${connectionName}`}>
+      <div className="flow-endpoint-icon">
+        {props.provider ? (
+          <ProviderIcon provider={props.provider} large />
+        ) : (
+          <span className="flow-endpoint-icon-fallback">
+            <Cable size={20} />
+          </span>
+        )}
+      </div>
+      <div className="flow-endpoint-copy">
+        <small>{roleLabel}</small>
+        <strong>{providerName}</strong>
+        <span>{connectionName}</span>
+      </div>
+    </div>
+  );
+}
+
 function FlowTriggerBadge(props: { flow: FlowDefinition }): ReactNode {
   const trigger = props.flow.trigger;
   const detail =
@@ -206,10 +250,10 @@ function FlowTriggerBadge(props: { flow: FlowDefinition }): ReactNode {
   );
 }
 
-function connectionLabel(connection: ConnectionRecord): string {
+function connectionDisplayName(connection: ConnectionRecord): string {
   const displayName =
     connection.profile && typeof connection.profile.displayName === "string" && connection.profile.displayName.trim()
       ? connection.profile.displayName
       : connection.connectionName;
-  return displayName ? `${displayName} · ${connection.service}` : connection.service;
+  return displayName || connection.connectionName || "Default connection";
 }

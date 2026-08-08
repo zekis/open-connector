@@ -1,4 +1,4 @@
-import type { FlowApproval, FlowDefinition } from "./model";
+import type { FlowApproval, FlowDefinition, ProviderDefinition } from "./model";
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
@@ -45,11 +45,19 @@ const approval: FlowApproval = {
   requestedAt: "2026-07-30T01:00:00.000Z",
 };
 
+const providers: ProviderDefinition[] = [
+  provider("outlook", "Outlook", "https://www.microsoft.com/microsoft-365/outlook/outlook-for-business"),
+  provider("sharepoint", "SharePoint", "https://www.microsoft.com/microsoft-365/sharepoint/collaboration"),
+];
+
 describe("FlowsPage", () => {
   it("renders a list with links to separate create and edit builders", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <FlowsPage data={{ ...emptyData, flows: [flow], flowApprovals: [approval] }} onRefresh={() => {}} />
+        <FlowsPage
+          data={{ ...emptyData, providers, connections, flows: [flow], flowApprovals: [approval] }}
+          onRefresh={() => {}}
+        />
       </MemoryRouter>,
     );
 
@@ -62,5 +70,42 @@ describe("FlowsPage", () => {
     expect(html).not.toContain("opus");
     expect(html).not.toContain("Codex");
     expect(html).toContain("Manual");
+    expect(html).toContain("Source");
+    expect(html).toContain("Destination");
+    expect(html).toContain("Outlook");
+    expect(html).toContain("SharePoint");
+    expect(html.match(/class="provider-icon large"/g) ?? []).toHaveLength(2);
+    expect(html).toContain("Flows from source to destination");
   });
 });
+
+const connections = [
+  {
+    id: "outlook-1",
+    service: "outlook",
+    connectionName: "work",
+    authType: "oauth2",
+    profile: { displayName: "zeke@example.com" },
+    metadata: {},
+  },
+  {
+    id: "sharepoint-1",
+    service: "sharepoint",
+    connectionName: "projects",
+    authType: "oauth2",
+    profile: { displayName: "SGC Projects" },
+    metadata: {},
+  },
+];
+
+function provider(service: string, displayName: string, homepageUrl: string): ProviderDefinition {
+  return {
+    service,
+    displayName,
+    categories: [],
+    authTypes: ["oauth2"],
+    auth: [{ type: "oauth2", scopes: [] }],
+    homepageUrl,
+    actions: [],
+  };
+}

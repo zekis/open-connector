@@ -61,6 +61,12 @@ export interface FlowRunStartInput {
   event?: FlowTriggerEvent;
 }
 
+interface PreparedFlowRun {
+  flow: FlowDefinition;
+  run: FlowRun;
+  initialInput: string;
+}
+
 /**
  * Runs one bounded agent tool loop and pauses before approval-gated actions.
  */
@@ -72,6 +78,31 @@ export class FlowRunner {
   }
 
   async start(flowId: string, input: FlowRunStartInput = {}): Promise<FlowRunDetail> {
+    const prepared = await this.prepareRun(flowId, input);
+    return await this.continueSafely(prepared.flow, prepared.run, prepared.initialInput, undefined);
+  }
+
+  /**
+   * Persist and start a run without holding the initiating HTTP request open
+   * for the complete agent loop.
+   */
+  async startInBackground(flowId: string, input: FlowRunStartInput = {}): Promise<FlowRunDetail> {
+    const prepared = await this.prepareRun(flowId, input);
+    const completion = this.continueSafely(prepared.flow, prepared.run, prepared.initialInput, undefined);
+    void completion.catch((error: unknown) => {
+      this.options.logger?.error(
+        {
+          flowId: prepared.flow.id,
+          flowRunId: prepared.run.id,
+          error,
+        },
+        "background flow run failed",
+      );
+    });
+    return await this.getRunDetail(prepared.run.id);
+  }
+
+  private async prepareRun(flowId: string, input: FlowRunStartInput): Promise<PreparedFlowRun> {
     const storedFlow = await this.options.flows.getRequired(flowId);
     const flow = await this.withCurrentAgentSettings(storedFlow);
     if (flow.status !== "active") {
@@ -92,7 +123,11 @@ export class FlowRunner {
       updatedAt: now,
     };
     await this.options.store.addRun(run);
-    return await this.continueSafely(flow, run, createInitialInput(flow, input.event), undefined);
+    return {
+      flow,
+      run,
+      initialInput: createInitialInput(flow, input.event),
+    };
   }
 
   async approve(approvalId: string): Promise<FlowRunDetail> {

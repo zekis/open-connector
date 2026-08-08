@@ -62,6 +62,22 @@ describe("FlowRunner", () => {
     }
   });
 
+  it("starts a manual run in the background without waiting for the agent loop", async () => {
+    const harness = createHarness("always_allow");
+    const releaseAgent = harness.agent.holdNextResponse();
+
+    const started = await harness.runner.startInBackground(harness.flow.id);
+
+    expect(started.run).toMatchObject({
+      flowId: harness.flow.id,
+      status: "running",
+      stepCount: 0,
+    });
+
+    releaseAgent();
+    await expect.poll(async () => (await harness.runner.listRuns(harness.flow.id))[0]?.status).toBe("completed");
+  });
+
   it("pauses before a gated tool, then executes the fingerprinted call after approval", async () => {
     const harness = createHarness("require_approval");
 
@@ -213,9 +229,21 @@ class FakeActionRunner implements IActionRunner {
 
 class FakeFlowAgent implements IFlowAgent {
   readonly inputs: FlowAgentTurnInput[] = [];
+  private nextResponseGate?: Promise<void>;
+
+  holdNextResponse(): () => void {
+    let release = (): void => {};
+    this.nextResponseGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  }
 
   async respond(input: FlowAgentTurnInput): Promise<FlowAgentTurn> {
     this.inputs.push(input);
+    const gate = this.nextResponseGate;
+    this.nextResponseGate = undefined;
+    await gate;
     return this.inputs.length === 1
       ? {
           responseId: "response-1",

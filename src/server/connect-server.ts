@@ -969,7 +969,7 @@ export class ConnectServer {
   }
 
   private async startFlowRun(context: Context, id: string): Promise<Response> {
-    return this.writeFlowResult(context, this.requiredFlowRunner().start(id));
+    return this.writeFlowResult(context, this.requiredFlowRunner().startInBackground(id));
   }
 
   private async triggerFlowFromApi(context: Context, id: string): Promise<Response> {
