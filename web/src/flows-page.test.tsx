@@ -89,6 +89,13 @@ describe("FlowsPage", () => {
     expect(html.match(/class="provider-icon large"/g) ?? []).toHaveLength(2);
     expect(html).toContain("Flows from source to destination");
     expect(html).toContain('aria-label="View last run details for Daily inbox sync"');
+    expect(html).toContain('aria-label="Run Daily inbox sync"');
+    expect(html).toContain('aria-label="Edit Daily inbox sync"');
+    expect(html).toContain('aria-label="Pause Daily inbox sync"');
+    expect(html).toContain('aria-label="Delete Daily inbox sync"');
+    expect(html).not.toMatch(/>Run now</);
+    expect(html).not.toMatch(/>Edit</);
+    expect(html).not.toMatch(/>Pause</);
     expect(html).not.toContain(run.finalOutput);
   });
 });

@@ -387,7 +387,7 @@ function AppShell(props: {
   const CurrentNavIcon = currentNavItem.icon;
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" aria-busy={props.loading}>
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
@@ -442,12 +442,6 @@ function AppShell(props: {
             <CurrentNavIcon size={16} />
             <h1>{t(`shell.headings.${heading}.title`)}</h1>
           </div>
-          {props.loading ? (
-            <div className="loading-panel page-loading">
-              <Loader2 className="spin" size={16} />
-              {t("common.loadingRuntimeData")}
-            </div>
-          ) : null}
         </header>
 
         <main className={mainClassName}>

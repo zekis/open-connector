@@ -289,10 +289,6 @@
   color: var(--muted-foreground);
 }
 
-.page-loading {
-  margin-top: 0;
-}
-
 .page-stack {
   display: grid;
   gap: 18px;

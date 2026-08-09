@@ -663,7 +663,7 @@
   grid-template-areas:
     "heading path actions"
     "meta path actions";
-  grid-template-columns: minmax(230px, 0.8fr) minmax(440px, 1.4fr) auto;
+  grid-template-columns: minmax(230px, 0.7fr) minmax(500px, 1.7fr) 56px;
   align-items: center;
   gap: 0;
   overflow: hidden;
@@ -863,19 +863,21 @@
 
 .flow-card > .button-row {
   grid-area: actions;
-  align-content: center;
+  align-items: center;
   align-self: stretch;
-  flex-wrap: wrap;
+  justify-content: center;
+  flex-direction: column;
+  flex-wrap: nowrap;
   gap: 8px;
-  max-width: 320px;
+  width: 56px;
   margin: 0;
-  padding: 16px;
+  padding: 16px 11px;
   border-left: 1px solid var(--border);
   background: color-mix(in oklab, var(--muted) 42%, transparent);
 }
 
 .flow-delete-button {
-  margin-left: auto;
+  margin: 0;
   color: var(--destructive);
 }
 
@@ -917,17 +919,10 @@
 @media (max-width: 1180px) {
   .flow-card {
     grid-template-areas:
-      "heading path"
-      "meta path"
-      "actions actions";
-    grid-template-columns: minmax(220px, 0.75fr) minmax(420px, 1.25fr);
-  }
-
-  .flow-card > .button-row {
-    max-width: none;
-    padding: 12px 18px;
-    border-top: 1px solid var(--border);
-    border-left: 0;
+      "heading actions"
+      "path actions"
+      "meta actions";
+    grid-template-columns: minmax(0, 1fr) 56px;
   }
 }
 
@@ -985,11 +980,15 @@
 
   .flow-card {
     grid-template-areas:
-      "heading"
-      "path"
-      "meta"
-      "actions";
-    grid-template-columns: minmax(0, 1fr);
+      "heading actions"
+      "path actions"
+      "meta actions";
+    grid-template-columns: minmax(0, 1fr) 52px;
+  }
+
+  .flow-card > .button-row {
+    width: 52px;
+    padding-inline: 9px;
   }
 
   .flow-path {

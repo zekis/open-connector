@@ -12,7 +12,9 @@ import {
   Info,
   Mail,
   MousePointerClick,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -173,18 +175,29 @@ function FlowCard(props: {
         )}
       </div>
       <div className="button-row">
-        <Button size="sm" disabled={props.busy || props.flow.status !== "active"} onClick={props.onRun}>
+        <Button
+          size="icon-sm"
+          disabled={props.busy || props.flow.status !== "active"}
+          aria-label={`Run ${props.flow.name}`}
+          title="Run now"
+          onClick={props.onRun}
+        >
           <CirclePlay size={14} />
-          Run now
         </Button>
-        <Button variant="outline" size="sm" asChild>
-          <Link to={`/flows/${props.flow.id}/edit`}>
+        <Button variant="outline" size="icon-sm" asChild>
+          <Link to={`/flows/${props.flow.id}/edit`} aria-label={`Edit ${props.flow.name}`} title="Edit Flow">
             <Pencil size={14} />
-            Edit
           </Link>
         </Button>
-        <Button variant="outline" size="sm" disabled={props.busy} onClick={props.onToggle}>
-          {props.flow.status === "active" ? "Pause" : "Activate"}
+        <Button
+          variant="outline"
+          size="icon-sm"
+          disabled={props.busy}
+          aria-label={`${props.flow.status === "active" ? "Pause" : "Activate"} ${props.flow.name}`}
+          title={props.flow.status === "active" ? "Pause Flow" : "Activate Flow"}
+          onClick={props.onToggle}
+        >
+          {props.flow.status === "active" ? <Pause size={14} /> : <Play size={14} />}
         </Button>
         <Button
           className="flow-delete-button"
@@ -192,6 +205,7 @@ function FlowCard(props: {
           size="icon-sm"
           disabled={props.busy}
           aria-label={`Delete ${props.flow.name}`}
+          title="Delete Flow"
           onClick={props.onDelete}
         >
           <Trash2 size={14} />
