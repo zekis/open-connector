@@ -862,13 +862,32 @@ function createActionApprovalSchema(): JsonSchema {
       requestedAt: jsonSchema.dateTime("Approval request timestamp."),
       runtimeTokenId: jsonSchema.string("Stored runtime token identifier, when applicable."),
       resolvedAt: jsonSchema.dateTime("Approval decision timestamp."),
-      expiresAt: jsonSchema.dateTime("Expiry for an approved one-time retry."),
-      consumedAt: jsonSchema.dateTime("Timestamp when the matching retry consumed the approval."),
+      expiresAt: jsonSchema.dateTime("Expiry for an approved paused continuation."),
+      consumedAt: jsonSchema.dateTime("Timestamp when the exact request was claimed for execution."),
+      execution: jsonSchema.object(
+        {
+          executionId: jsonSchema.string({ description: "Exact action execution identifier." }),
+          auditPersisted: jsonSchema.boolean({ description: "Whether the action run audit was stored." }),
+          result: jsonSchema.object(
+            {
+              ok: jsonSchema.boolean({ description: "Whether the exact action execution succeeded." }),
+              output: jsonSchema.unknown("Provider action output when execution succeeded."),
+              error: errorPayloadSchema,
+            },
+            { required: ["ok"], description: "Exact action execution result." },
+          ),
+          completedAt: jsonSchema.dateTime("Exact action completion timestamp."),
+        },
+        {
+          required: ["executionId", "auditPersisted", "result", "completedAt"],
+          description: "Result recorded after approving and executing this exact request once.",
+        },
+      ),
     },
     {
       required: ["id", "status", "actionId", "connectionId", "caller", "input", "requestedAt"],
       description:
-        "One connector action approval. Chat approvals resume the paused agent; other approved non-Flow requests authorize one identical retry from the same caller for 15 minutes.",
+        "One exact connector action approval. Approval executes the stored action, connection, and input once; it never authorizes a matching retry.",
     },
   );
 }
@@ -951,8 +970,8 @@ function createActionApprovalDecisionPath(decision: "approve" | "deny"): Record<
       summary: `${decision === "approve" ? "Approve" : "Deny"} a direct connector action request.`,
       description:
         decision === "approve"
-          ? "Resumes a paused Chat automatically. Other callers receive one identical retry authorization for 15 minutes."
-          : "Denies the pending request. A later matching attempt creates a new approval request.",
+          ? "Executes this exact connector request once. Paused Chat and MCP callers resume automatically with the result."
+          : "Denies this exact pending request without executing it.",
       parameters: [approvalIdParameter],
       responses: {
         200: jsonResponse({ $ref: "#/components/schemas/ActionApproval" }),

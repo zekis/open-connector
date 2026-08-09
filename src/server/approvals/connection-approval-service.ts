@@ -8,6 +8,7 @@ import type {
 import type { RunLogCaller } from "../storage/runtime-store.ts";
 import type {
   ActionApproval,
+  ActionApprovalExecution,
   ConnectionActionPermission,
   ConnectionApprovalMode,
   IConnectionApprovalStore,
@@ -34,7 +35,7 @@ export interface ActionApprovalRequestInput {
 
 export type ActionApprovalDecision = { allowed: true } | { allowed: false; approval: ActionApproval };
 
-/** Owns connector action defaults and one-time approval grants for non-Flow requests. */
+/** Owns connector action defaults and exact-request approvals for non-Flow requests. */
 export class ConnectionApprovalService {
   private readonly options: ConnectionApprovalServiceOptions;
 
@@ -111,25 +112,6 @@ export class ConnectionApprovalService {
       input: input.input,
       runtimeTokenId: input.runtimeTokenId,
     });
-    const now = new Date();
-    const approved = await this.options.store.findActionApproval(requestHash, "approved");
-    if (approved) {
-      if (approved.expiresAt && Date.parse(approved.expiresAt) > now.getTime()) {
-        const consumed: ActionApproval = {
-          ...approved,
-          status: "consumed",
-          consumedAt: now.toISOString(),
-        };
-        if (await this.options.store.updateActionApproval(consumed, "approved")) {
-          return { allowed: true };
-        }
-      } else {
-        await this.options.store.updateActionApproval(
-          { ...approved, status: "expired", resolvedAt: approved.resolvedAt ?? now.toISOString() },
-          "approved",
-        );
-      }
-    }
     const pending = await this.options.store.findActionApproval(requestHash, "pending");
     if (pending) {
       return { allowed: false, approval: pending };
@@ -142,7 +124,7 @@ export class ConnectionApprovalService {
       caller: input.caller,
       input: input.input,
       requestHash,
-      requestedAt: now.toISOString(),
+      requestedAt: new Date().toISOString(),
       runtimeTokenId: input.runtimeTokenId,
     };
     await this.options.store.addActionApproval(approval);
@@ -228,6 +210,37 @@ export class ConnectionApprovalService {
       throw new ConnectionApprovalError("approval_not_consumed", "The Chat approval changed before completion.");
     }
     return updated;
+  }
+
+  async storeExecution(id: string, execution: ActionApprovalExecution): Promise<ActionApproval> {
+    const approval = await this.options.store.getActionApproval(id);
+    if (!approval) {
+      throw new ConnectionApprovalError("approval_not_found", `Approval not found: ${id}.`, 404);
+    }
+    if (approval.status !== "consumed" || approval.execution) {
+      throw new ConnectionApprovalError("approval_not_consumed", "The approved request is not awaiting a result.");
+    }
+    const updated: ActionApproval = {
+      ...approval,
+      execution: structuredClone(execution),
+    };
+    if (!(await this.options.store.updateActionApproval(updated, "consumed"))) {
+      throw new ConnectionApprovalError("approval_not_consumed", "The approved request changed before completion.");
+    }
+    return updated;
+  }
+
+  async waitForExecution(id: string, signal?: AbortSignal): Promise<ActionApproval> {
+    while (true) {
+      const approval = await this.options.store.getActionApproval(id);
+      if (!approval) {
+        throw new ConnectionApprovalError("approval_not_found", `Approval not found: ${id}.`, 404);
+      }
+      if (approval.execution || approval.status === "denied" || approval.status === "expired") {
+        return approval;
+      }
+      await waitForApprovalPoll(signal);
+    }
   }
 
   async approve(id: string): Promise<ActionApproval> {
@@ -331,4 +344,21 @@ function readApprovalMode(value: unknown, field: string): ConnectionApprovalMode
     "invalid_connection_permissions",
     `${field} must be always_allow or require_approval.`,
   );
+}
+
+function waitForApprovalPoll(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("The approval wait was aborted.", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, 250);
+    const abort = (): void => {
+      clearTimeout(timeout);
+      reject(signal?.reason ?? new DOMException("The approval wait was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }

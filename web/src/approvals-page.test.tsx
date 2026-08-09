@@ -137,6 +137,20 @@ describe("ApprovalsPage", () => {
     expect(html).toContain("resumes the waiting Chat automatically");
     expect(html).not.toContain("Review Flow");
   });
+
+  it("runs one exact MCP request without authorizing a retry", () => {
+    const html = renderPage({
+      ...data,
+      flowApprovals: [],
+      actionApprovals: [{ ...actionApproval, caller: "mcp" }],
+    });
+
+    expect(html).toContain("Approve and run");
+    expect(html).toContain("executes this exact connector action once");
+    expect(html).toContain("No retry is authorized");
+    expect(html).not.toContain("next retry");
+    expect(html).not.toContain("15 minutes");
+  });
 });
 
 function renderPage(runtimeData: AppData): string {

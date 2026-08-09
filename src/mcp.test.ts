@@ -2,6 +2,7 @@ import type { IConnectionStore, StoredConnection } from "./connection-service.ts
 import type { ActionPolicySnapshot } from "./core/action-policy.ts";
 import type { ActionDefinition, ActionExecutor, ProviderDefinition, ResolvedCredential } from "./core/types.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
+import type { ActionApproval } from "./server/approvals/connection-approval-types.ts";
 import type { IRunLogStore, RunLog, RunLogPage } from "./server/storage/runtime-store.ts";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -256,6 +257,70 @@ describe("MCP server", () => {
         },
       });
     });
+  });
+
+  it("waits for an exact MCP approval and returns that execution result", async () => {
+    const catalog = createCatalogStore([exampleProvider], { executableActionIds: [echoAction.id] });
+    const providerLoader = new EchoProviderLoader();
+    const connections = new ConnectionService({
+      catalog,
+      providerLoader,
+      store: new MemoryConnectionStore(),
+    });
+    const approval: ActionApproval = {
+      id: "approval-1",
+      status: "pending",
+      actionId: echoAction.id,
+      connectionId: "example:default",
+      caller: "mcp",
+      input: { message: "hello" },
+      requestHash: "request-hash",
+      requestedAt: "2026-08-09T01:00:00.000Z",
+    };
+    const actions = new ActionRunner({
+      catalog,
+      providerLoader,
+      connections,
+      runs: new MemoryRunLogStore(),
+      approvals: { requestAction: async () => ({ allowed: false, approval }) },
+    });
+    const waitForExecution = vi.fn(async () => ({
+      ...approval,
+      status: "consumed" as const,
+      execution: {
+        executionId: "approved-execution",
+        auditPersisted: true,
+        result: { ok: true, output: { message: "sent once" } },
+        completedAt: "2026-08-09T01:01:00.000Z",
+      },
+    }));
+    const server = createMcpServer({
+      catalog,
+      providerLoader,
+      connections,
+      actions,
+      approvals: { waitForExecution },
+    });
+    const client = new Client({ name: "mcp-test", version: "0.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const result = await client.callTool({
+        name: "execute_action",
+        arguments: { actionId: echoAction.id, input: { message: "hello" } },
+      });
+
+      expect(result.structuredContent).toEqual({
+        ok: true,
+        data: { message: "sent once" },
+        executionId: "approved-execution",
+        auditPersisted: true,
+      });
+      expect(waitForExecution).toHaveBeenCalledWith("approval-1", expect.any(AbortSignal));
+    } finally {
+      await client.close();
+    }
   });
 
   it("returns a structured error when a selected connection does not exist", async () => {

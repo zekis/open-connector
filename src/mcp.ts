@@ -5,6 +5,8 @@ import type { ActionSearchIndexProvider } from "./core/action-search.ts";
 import type { JsonSchema, ProviderDefinition } from "./core/types.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
 import type { ActionRunner, ActionRunResult } from "./server/actions/action-runner.ts";
+import type { ConnectionApprovalService } from "./server/approvals/connection-approval-service.ts";
+import type { ActionApprovalExecution } from "./server/approvals/connection-approval-types.ts";
 import type { RuntimeGrant } from "./server/storage/runtime-token-service.ts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
@@ -23,6 +25,7 @@ export interface IMcpServerOptions {
   providerLoader: IProviderLoader;
   connections: ConnectionService;
   actions: ActionRunner;
+  approvals?: Pick<ConnectionApprovalService, "waitForExecution">;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
   getPolicySnapshot?(): Promise<ActionPolicySnapshot>;
@@ -182,8 +185,8 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
         connectionName: optionalConnectionNameSchema,
       },
     },
-    async ({ actionId, input, connectionName }) =>
-      toolResult(await executeAction(options, actionId, input, connectionName)),
+    async ({ actionId, input, connectionName }, request) =>
+      toolResult(await executeAction(options, actionId, input, connectionName, request.signal)),
   );
 
   return server;
@@ -293,6 +296,7 @@ async function executeAction(
   actionId: string,
   input: Record<string, unknown>,
   connectionName: string | undefined,
+  signal?: AbortSignal,
 ): Promise<ToolPayload> {
   const action = options.catalog.actionsById.get(actionId);
   if (!action) {
@@ -323,22 +327,18 @@ async function executeAction(
   if (!run) {
     return errorPayload("unknown_action", `Unknown action: ${actionId}`);
   }
-  const executionMeta = createExecutionMeta(run);
-  if (!run.result.ok) {
-    return {
-      ok: false,
-      error: run.result.error ?? {
-        code: "execution_failed",
-        message: "Action execution failed.",
-      },
-      ...executionMeta,
-    };
+  const approvalId = approvalIdFromRun(run);
+  if (approvalId && options.approvals) {
+    const approval = await options.approvals.waitForExecution(approvalId, signal);
+    if (approval.execution) {
+      return actionExecutionPayload(approval.execution);
+    }
+    if (approval.status === "denied") {
+      return errorPayload("approval_denied", "The connector action request was denied.");
+    }
+    return errorPayload("approval_expired", "The connector action approval expired before execution.");
   }
-  return {
-    ok: true,
-    data: run.result.output,
-    ...executionMeta,
-  };
+  return actionExecutionPayload(run);
 }
 
 function summarizeInputSchema(schema: JsonSchema): unknown {
@@ -479,7 +479,7 @@ function serializeConnection(connection: ConnectionSummary): Record<string, unkn
   };
 }
 
-function createExecutionMeta(run: ActionRunResult): ToolExecutionMeta {
+function createExecutionMeta(run: ActionRunResult | ActionApprovalExecution): ToolExecutionMeta {
   const meta: ToolExecutionMeta = {
     executionId: run.executionId,
     auditPersisted: run.auditPersisted,
@@ -488,6 +488,33 @@ function createExecutionMeta(run: ActionRunResult): ToolExecutionMeta {
     meta.connection = serializeConnection(run.connection);
   }
   return meta;
+}
+
+function actionExecutionPayload(run: ActionRunResult | ActionApprovalExecution): ToolPayload {
+  const executionMeta = createExecutionMeta(run);
+  if (!run.result.ok) {
+    return {
+      ok: false,
+      error: run.result.error ?? {
+        code: "execution_failed",
+        message: "Action execution failed.",
+      },
+      ...executionMeta,
+    };
+  }
+  return {
+    ok: true,
+    data: run.result.output,
+    ...executionMeta,
+  };
+}
+
+function approvalIdFromRun(run: ActionRunResult): string | undefined {
+  if (run.result.error?.code !== "approval_required") return undefined;
+  const details = run.result.error.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
+  const approvalId = (details as Record<string, unknown>).approvalId;
+  return typeof approvalId === "string" && approvalId ? approvalId : undefined;
 }
 
 function toolResult(payload: ToolPayload): CallToolResult {

@@ -96,12 +96,12 @@ export class RuntimeTokenService {
     }
 
     await this.recordLastUsed(matched.id);
-    return {
-      tokenId: matched.id,
-      allowedActions: matched.allowedActions,
-      blockedActions: matched.blockedActions,
-      allowedProxies: matched.allowedProxies,
-    };
+    return runtimeGrant(matched);
+  }
+
+  async getGrantById(id: string): Promise<RuntimeGrant | undefined> {
+    const matched = (await this.store.list()).find((record) => record.id === id);
+    return matched ? runtimeGrant(matched) : undefined;
   }
 
   async verifyToken(token: string): Promise<boolean> {
@@ -134,6 +134,15 @@ export function summarizeRuntimeToken(record: RuntimeTokenRecord): RuntimeTokenS
     allowedProxies: record.allowedProxies,
     createdAt: record.createdAt,
     lastUsedAt: record.lastUsedAt,
+  };
+}
+
+function runtimeGrant(record: RuntimeTokenRecord): RuntimeGrant {
+  return {
+    tokenId: record.id,
+    allowedActions: record.allowedActions,
+    blockedActions: record.blockedActions,
+    allowedProxies: record.allowedProxies,
   };
 }
 

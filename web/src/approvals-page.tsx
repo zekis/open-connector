@@ -74,8 +74,8 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
         const detail = await apiPost<FlowRunDetail>(`/api/flow-approvals/${item.approval.id}/${decision}`, {});
         setStatus(flowDecisionMessage(decision, detail.run.status));
       } else {
-        await apiPost<ActionApproval>(`/api/action-approvals/${item.approval.id}/${decision}`, {});
-        setStatus(actionDecisionMessage(decision, item.approval.caller));
+        const resolved = await apiPost<ActionApproval>(`/api/action-approvals/${item.approval.id}/${decision}`, {});
+        setStatus(actionDecisionMessage(decision, resolved));
       }
       setResolvedKeys((current) => new Set(current).add(key));
       props.onRefresh();
@@ -206,6 +206,7 @@ function ApprovalDetail(props: {
   onDeny(): void;
 }): ReactNode {
   const approval = props.item.approval;
+  const actionApproval = props.item.kind === "action" ? props.item.approval : undefined;
   const flow = props.item.kind === "flow" ? findFlow(props.data, props.item.approval) : undefined;
   const action = findAction(props.data, approval.actionId);
   const connection = props.data.connections.find((item) => item.id === approval.connectionId);
@@ -280,6 +281,24 @@ function ApprovalDetail(props: {
         <pre>{JSON.stringify(approval.input, null, 2)}</pre>
       </section>
 
+      {actionApproval?.execution ? (
+        <section className="approval-payload">
+          <div>
+            <strong>Execution result</strong>
+            <span>{shortId(actionApproval.execution.executionId)}</span>
+          </div>
+          <pre>
+            {JSON.stringify(
+              actionApproval.execution.result.ok
+                ? actionApproval.execution.result.output
+                : actionApproval.execution.result.error,
+              null,
+              2,
+            )}
+          </pre>
+        </section>
+      ) : null}
+
       {pending ? (
         <div className="approval-actions">
           <Button disabled={props.busy !== null} onClick={props.onApprove}>
@@ -339,17 +358,19 @@ function approvalImpact(item: ApprovalItem): string {
     }
     return item.approval.caller === "chat"
       ? "Approving executes this exact connector action and resumes the waiting Chat automatically. Denying stops the pending Chat request."
-      : "Approving authorizes one identical retry from the same caller for 15 minutes. Denying leaves the connector action blocked.";
+      : "Approving executes this exact connector action once using the connection and payload shown here. No retry is authorized.";
   }
   const resolvedAt = approval.resolvedAt ? ` on ${formatApprovalDate(approval.resolvedAt)}` : "";
-  if (approval.status === "approved" && item.kind === "action") {
-    return `Approved${resolvedAt}. One identical retry remains authorized until the approval expires.`;
-  }
   if (approval.status === "consumed") {
-    return `Approved${resolvedAt} and consumed by the matching connector request.`;
+    if (item.kind === "action" && approval.execution) {
+      return approval.execution.result.ok
+        ? `Approved${resolvedAt} and executed exactly once.`
+        : `Approved${resolvedAt}, but execution failed: ${approval.execution.result.error?.message ?? "Unknown error"}`;
+    }
+    return `Approved${resolvedAt} and executed exactly once.`;
   }
   if (approval.status === "expired") {
-    return `Approved${resolvedAt}, but the authorization expired before a matching retry.`;
+    return `This request expired before it could execute${resolvedAt}.`;
   }
   return `This request was ${approval.status}${resolvedAt}.`;
 }
@@ -358,12 +379,12 @@ function denialPrompt(item: ApprovalItem): string {
   if (item.kind === "flow") return "Deny this request and cancel the current Flow run?";
   return item.approval.caller === "chat"
     ? "Deny this connector request and stop the waiting Chat?"
-    : "Deny this connector request? A matching retry will request approval again.";
+    : "Deny this exact connector request without executing it?";
 }
 
 function approvalButtonLabel(item: ApprovalItem): string {
   if (item.kind === "flow") return "Approve and continue";
-  return item.approval.caller === "chat" ? "Approve and resume Chat" : "Approve next retry";
+  return item.approval.caller === "chat" ? "Approve and resume Chat" : "Approve and run";
 }
 
 function findFlow(data: AppData, approval: FlowApproval): FlowDefinition | undefined {
@@ -419,10 +440,10 @@ function flowDecisionMessage(decision: ApprovalDecision, status: FlowRunStatus):
   return status === "completed" ? "Request approved. The Flow completed." : "Request approved. The Flow continued.";
 }
 
-function actionDecisionMessage(decision: ApprovalDecision, caller: ActionApproval["caller"]): string {
-  return decision === "deny"
-    ? "Request denied. The connector action remains blocked."
-    : caller === "chat"
-      ? "Request approved. Chat resumed automatically."
-      : "Request approved. Retry the identical request within 15 minutes to run it once.";
+function actionDecisionMessage(decision: ApprovalDecision, approval: ActionApproval): string {
+  if (decision === "deny") return "Request denied. The connector action was not executed.";
+  if (approval.caller === "chat") return "Request approved. Chat resumed automatically.";
+  return approval.execution?.result.ok
+    ? "Request approved and executed exactly once."
+    : `Request approved, but execution failed: ${approval.execution?.result.error?.message ?? "Unknown error"}`;
 }

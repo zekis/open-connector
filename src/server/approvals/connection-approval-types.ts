@@ -1,3 +1,5 @@
+import type { ConnectionSummary } from "../../connection-service.ts";
+import type { ExecutionResult } from "../../core/types.ts";
 import type { AgentChatApprovalContinuation } from "../chat/agent-chat-types.ts";
 import type { RunLogCaller } from "../storage/runtime-store.ts";
 
@@ -9,6 +11,14 @@ export interface ConnectionActionPermission {
   actionId: string;
   approval: ConnectionApprovalMode;
   updatedAt: string;
+}
+
+export interface ActionApprovalExecution {
+  executionId: string;
+  auditPersisted: boolean;
+  result: ExecutionResult;
+  connection?: ConnectionSummary;
+  completedAt: string;
 }
 
 export interface ActionApproval {
@@ -24,6 +34,7 @@ export interface ActionApproval {
   resolvedAt?: string;
   expiresAt?: string;
   consumedAt?: string;
+  execution?: ActionApprovalExecution;
   chat?: AgentChatApprovalContinuation;
 }
 

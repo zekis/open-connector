@@ -222,6 +222,16 @@ export interface ActionApproval {
   resolvedAt?: string;
   expiresAt?: string;
   consumedAt?: string;
+  execution?: {
+    executionId: string;
+    auditPersisted: boolean;
+    result: {
+      ok: boolean;
+      output?: unknown;
+      error?: { code: string; message: string; details?: unknown };
+    };
+    completedAt: string;
+  };
 }
 
 export interface FlowDefinition {

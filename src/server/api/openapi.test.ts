@@ -180,7 +180,7 @@ describe("action execution OpenAPI", () => {
     expect(triggerPath.post.responses["401"]).toBeDefined();
   });
 
-  it("documents connector-wide defaults, Flow overrides, and one-time approval retries", () => {
+  it("documents connector-wide defaults, Flow overrides, and exact one-time execution", () => {
     const document = createOpenApiDocument([provider]);
     const permissionsPath = document.paths["/api/connection-permissions/{connectionId}"] as {
       put: { description: string; responses: Record<string, unknown> };
@@ -206,11 +206,12 @@ describe("action execution OpenAPI", () => {
       expect.objectContaining({ 200: expect.anything(), 400: expect.anything(), 404: expect.anything() }),
     );
     expect(approvalsPath.get.responses["200"]).toBeDefined();
-    expect(approvePath.post.description).toContain("one identical retry");
-    expect(approvePath.post.description).toContain("Resumes a paused Chat automatically");
+    expect(approvePath.post.description).toContain("Executes this exact connector request once");
+    expect(approvePath.post.description).toContain("MCP callers resume automatically");
     expect(flowGrant.properties.approval.enum).toEqual(["inherit", "always_allow", "require_approval"]);
     expect(flowGrant.description).toContain("override");
-    expect(actionApproval.description).toContain("15 minutes");
+    expect(actionApproval.description).toContain("never authorizes a matching retry");
+    expect(actionApproval.properties).toHaveProperty("execution");
     expect(actionApproval.properties).not.toHaveProperty("requestHash");
   });
 

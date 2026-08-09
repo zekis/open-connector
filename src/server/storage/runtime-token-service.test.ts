@@ -51,6 +51,36 @@ describe("RuntimeTokenService", () => {
     expect(store.markUsed).toHaveBeenCalledWith("token-1", expect.any(String));
   });
 
+  it("resolves the current policy for a stored token id without requiring its secret", async () => {
+    const record = {
+      id: "token-1",
+      name: "Issue bot",
+      tokenHash: hashRuntimeToken("oct_secret"),
+      allowedActions: ["github.*"],
+      blockedActions: ["github.delete_repository"],
+      allowedProxies: ["github"],
+      createdAt: "2026-07-20T00:00:00.000Z",
+    };
+    const store: IRuntimeTokenStore = {
+      add: vi.fn(),
+      list: vi.fn(async () => [record]),
+      findByHash: vi.fn(),
+      updatePolicy: vi.fn(),
+      revoke: vi.fn(async () => false),
+      markUsed: vi.fn(),
+    };
+
+    await expect(new RuntimeTokenService(store).getGrantById("token-1")).resolves.toEqual({
+      tokenId: "token-1",
+      allowedActions: ["github.*"],
+      blockedActions: ["github.delete_repository"],
+      allowedProxies: ["github"],
+    });
+    await expect(new RuntimeTokenService(store).getGrantById("missing")).resolves.toBeUndefined();
+    expect(store.findByHash).not.toHaveBeenCalled();
+    expect(store.markUsed).not.toHaveBeenCalled();
+  });
+
   it("keeps a matched token valid when the last-use write fails", async () => {
     const token = "oct_secret";
     const record = {

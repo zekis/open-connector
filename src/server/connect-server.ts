@@ -8,7 +8,7 @@ import type { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
-import type { ActionApproval } from "./approvals/connection-approval-types.ts";
+import type { ActionApproval, ActionApprovalExecution } from "./approvals/connection-approval-types.ts";
 import type { IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
@@ -770,6 +770,7 @@ export class ConnectServer {
       providerLoader: this.options.providerLoader,
       connections: this.options.connections,
       actions: this.options.actions,
+      approvals: this.options.connectionApprovals,
       actionPolicy: this.actionPolicy,
       actionSearch: this.actionSearch,
       getPolicySnapshot: () => this.getPolicySnapshot(context),
@@ -915,7 +916,7 @@ export class ConnectServer {
         const resumed = await this.options.connectionApprovals!.getActionApproval(id);
         return context.json(serializeActionApproval(resumed ?? approval));
       }
-      return context.json(serializeActionApproval(approval));
+      return context.json(serializeActionApproval(await this.executeApprovedAction(approval)));
     } catch (error) {
       if (error instanceof ConnectionApprovalError) {
         return jsonError(context, error.status, error.code, error.message);
@@ -943,6 +944,58 @@ export class ConnectServer {
       }
       throw error;
     }
+  }
+
+  private async executeApprovedAction(approval: ActionApproval): Promise<ActionApproval> {
+    await this.options.connectionApprovals!.consumeApproved(approval.id, approval.caller);
+    let execution: ActionApprovalExecution;
+    try {
+      const policy = await this.loadApprovedActionPolicy(approval);
+      const run = await this.options.actions.run({
+        actionId: approval.actionId,
+        input: approval.input,
+        caller: approval.caller,
+        connectionId: approval.connectionId,
+        runtimeTokenId: approval.runtimeTokenId,
+        policy,
+        approvalPolicy: "bypass",
+      });
+      execution = {
+        executionId: run?.executionId ?? crypto.randomUUID(),
+        auditPersisted: run?.auditPersisted ?? false,
+        result: run?.result ?? {
+          ok: false,
+          error: { code: "invalid_input", message: `Unknown action: ${approval.actionId}.` },
+        },
+        connection: run?.connection,
+        completedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.options.logger?.error({ approvalId: approval.id, err: error }, "approved action execution failed");
+      execution = {
+        executionId: crypto.randomUUID(),
+        auditPersisted: false,
+        result: {
+          ok: false,
+          error: { code: "internal_error", message: "The approved action could not be executed." },
+        },
+        completedAt: new Date().toISOString(),
+      };
+    }
+    return this.options.connectionApprovals!.storeExecution(approval.id, execution);
+  }
+
+  private async loadApprovedActionPolicy(approval: ActionApproval): Promise<ActionPolicySnapshot> {
+    const record = await this.options.runtimePolicyStore.get();
+    const runtimeGrant = approval.runtimeTokenId
+      ? ((await this.options.runtimeTokens.getGrantById(approval.runtimeTokenId)) ?? {
+          tokenId: approval.runtimeTokenId,
+          allowedActions: [],
+          blockedActions: ["*"],
+          allowedProxies: [],
+        })
+      : undefined;
+    return this.actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), runtimeGrant, record?.updatedAt);
   }
 
   private async createFlow(context: Context): Promise<Response> {
@@ -1407,6 +1460,14 @@ function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval,
     resolvedAt: approval.resolvedAt,
     expiresAt: approval.expiresAt,
     consumedAt: approval.consumedAt,
+    execution: approval.execution
+      ? {
+          executionId: approval.execution.executionId,
+          auditPersisted: approval.execution.auditPersisted,
+          result: approval.execution.result,
+          completedAt: approval.execution.completedAt,
+        }
+      : undefined,
   };
 }
 

@@ -2413,7 +2413,7 @@ describe("ConnectServer", () => {
     expect((await runs.list()).items).toHaveLength(3);
   });
 
-  it("enforces connector-wide approvals and releases idempotency claims for the approved retry", async () => {
+  it("executes the exact approved connector request once without granting a retry", async () => {
     let executions = 0;
     const approvalStore = new MemoryConnectionApprovalStore();
     const providerLoader = new ActionProviderLoader(async (input, context) => {
@@ -2471,15 +2471,27 @@ describe("ConnectServer", () => {
       }),
     ]);
     expect(JSON.stringify(listed)).not.toContain("requestHash");
-    const approved = await app.request(`/api/action-approvals/${pendingBody.data.approvalId}/approve`, {
-      method: "POST",
+    const decisions = await Promise.all([
+      app.request(`/api/action-approvals/${pendingBody.data.approvalId}/approve`, { method: "POST" }),
+      app.request(`/api/action-approvals/${pendingBody.data.approvalId}/approve`, { method: "POST" }),
+    ]);
+    const approved = decisions.find((response) => response.status === 200);
+    expect(approved).toBeDefined();
+    if (!approved) throw new Error("Expected one approval request to execute.");
+    expect(decisions.filter((response) => response.status === 400)).toHaveLength(1);
+    await expect(approved.json()).resolves.toMatchObject({
+      status: "consumed",
+      execution: {
+        executionId: expect.any(String),
+        auditPersisted: true,
+        result: { ok: true, output: { message: "hello" } },
+      },
     });
-    expect(approved.status).toBe(200);
-    await expect(approved.json()).resolves.toMatchObject({ status: "approved" });
+    expect(executions).toBe(1);
 
-    const completed = await request("approved-request");
-    expect(completed.status).toBe(200);
-    await expect(completed.json()).resolves.toMatchObject({ success: true, data: { message: "hello" } });
+    const retry = await request("approved-request");
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toMatchObject({ errorCode: "approval_required" });
     expect(executions).toBe(1);
 
     const nextPending = await request("new-request");
