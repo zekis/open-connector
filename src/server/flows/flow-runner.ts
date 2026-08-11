@@ -340,7 +340,10 @@ export class FlowRunner {
       }
 
       if (run.stepCount >= flow.maxSteps) {
-        throw new FlowError("step_limit_exceeded", `Flow exceeded its ${flow.maxSteps}-step limit.`);
+        throw new FlowError(
+          "step_limit_exceeded",
+          `Flow reached its ${flow.maxSteps}-tool-call limit. Increase Maximum tool calls in the Flow editor to allow a longer run.`,
+        );
       }
 
       const binding = bindingsByName.get(turn.functionCall.name);

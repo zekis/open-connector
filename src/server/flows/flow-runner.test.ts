@@ -62,6 +62,23 @@ describe("FlowRunner", () => {
     }
   });
 
+  it("counts connector calls against the configured limit and explains how to extend it", async () => {
+    const harness = createHarness("always_allow");
+    harness.flow.maxSteps = 2;
+    harness.agent.requestToolCalls(3);
+
+    const detail = await harness.runner.start(harness.flow.id);
+
+    expect(detail.run).toMatchObject({
+      status: "failed",
+      stepCount: 2,
+      errorCode: "step_limit_exceeded",
+      errorMessage:
+        "Flow reached its 2-tool-call limit. Increase Maximum tool calls in the Flow editor to allow a longer run.",
+    });
+    expect(harness.actions.toolCalls).toHaveLength(2);
+  });
+
   it("starts a manual run in the background without waiting for the agent loop", async () => {
     const harness = createHarness("always_allow");
     const releaseAgent = harness.agent.holdNextResponse();
@@ -230,6 +247,11 @@ class FakeActionRunner implements IActionRunner {
 class FakeFlowAgent implements IFlowAgent {
   readonly inputs: FlowAgentTurnInput[] = [];
   private nextResponseGate?: Promise<void>;
+  private toolCallsBeforeCompletion = 1;
+
+  requestToolCalls(count: number): void {
+    this.toolCallsBeforeCompletion = count;
+  }
 
   holdNextResponse(): () => void {
     let release = (): void => {};
@@ -244,17 +266,17 @@ class FakeFlowAgent implements IFlowAgent {
     const gate = this.nextResponseGate;
     this.nextResponseGate = undefined;
     await gate;
-    return this.inputs.length === 1
+    return this.inputs.length <= this.toolCallsBeforeCompletion
       ? {
-          responseId: "response-1",
+          responseId: `response-${this.inputs.length}`,
           functionCall: {
-            callId: "call-1",
+            callId: `call-${this.inputs.length}`,
             name: "flow_1_source_read",
             arguments: JSON.stringify({ query: "today" }),
           },
         }
       : {
-          responseId: "response-2",
+          responseId: `response-${this.inputs.length}`,
           text: "Synchronized one source item.",
         };
   }

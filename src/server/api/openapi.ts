@@ -6,6 +6,7 @@ import {
   idempotencyKeyMaxBytes,
   idempotencyRetentionHours,
 } from "../actions/action-idempotency.ts";
+import { defaultFlowMaxSteps, maximumFlowMaxSteps } from "../flows/flow-types.ts";
 import { policyRequestMaxBytes, policyRuleListMaxItems, policyRuleMaxBytes } from "./policy-input.ts";
 
 /**
@@ -1131,9 +1132,9 @@ function flowDefinitionProperties(agent: JsonSchema): Record<string, JsonSchema>
     tools: jsonSchema.array({ $ref: "#/components/schemas/FlowToolGrant" }, { minItems: 1, maxItems: 32 }),
     maxSteps: jsonSchema.integer({
       minimum: 1,
-      maximum: 20,
-      default: 8,
-      description: "Maximum agent turns for one Flow run. Defaults to 8 when omitted.",
+      maximum: maximumFlowMaxSteps,
+      default: defaultFlowMaxSteps,
+      description: `Maximum connector tool calls for one Flow run. Defaults to ${defaultFlowMaxSteps} when omitted.`,
     }),
   };
 }

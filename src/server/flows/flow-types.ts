@@ -58,6 +58,9 @@ export interface FlowToolGrant {
   approval: FlowApprovalSetting;
 }
 
+export const defaultFlowMaxSteps = 20;
+export const maximumFlowMaxSteps = 50;
+
 /**
  * Durable definition for one directional, two-connection agent flow.
  */

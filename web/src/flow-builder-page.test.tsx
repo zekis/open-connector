@@ -126,6 +126,8 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain("Create a Flow");
     expect(html).toContain("Back to Flows");
     expect(html).toContain("Connect a Claude subscription from the Agents panel");
+    expect(html).toContain('max="50"');
+    expect(html).toContain('value="20"');
     expect(html).not.toContain("Codex");
   });
 

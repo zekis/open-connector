@@ -3230,7 +3230,6 @@ describe("ConnectServer", () => {
           approval: "inherit",
         },
       ],
-      maxSteps: 8,
     };
 
     const unauthorized = await app.request("/api/flows", {
@@ -3249,6 +3248,7 @@ describe("ConnectServer", () => {
     const created = (await createResponse.json()) as FlowDefinition;
     expect(created).toMatchObject({
       ...input,
+      maxSteps: 20,
       trigger: { type: "manual" },
       agent: {
         ...input.agent,
@@ -3270,7 +3270,7 @@ describe("ConnectServer", () => {
           approval: "require_approval",
         },
       ],
-      maxSteps: 12,
+      maxSteps: 50,
     };
     const updateResponse = await app.request(`/api/flows/${created.id}`, {
       method: "PUT",
@@ -3284,7 +3284,7 @@ describe("ConnectServer", () => {
       name: updateInput.name,
       status: "paused",
       instructions: updateInput.instructions,
-      maxSteps: 12,
+      maxSteps: 50,
       trigger: updateInput.trigger,
       createdAt: created.createdAt,
       agent: { model: "opus" },
@@ -3311,6 +3311,14 @@ describe("ConnectServer", () => {
     });
     expect(invalidSchedule.status).toBe(400);
     await expect(invalidSchedule.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+
+    const excessiveSteps = await app.request(`/api/flows/${created.id}`, {
+      method: "PUT",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ ...updateInput, maxSteps: 51 }),
+    });
+    expect(excessiveSteps.status).toBe(400);
+    await expect(excessiveSteps.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
   });
 
   it("starts API-triggered Flows through runtime authentication", async () => {

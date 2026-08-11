@@ -15,9 +15,9 @@ import type {
 import { defaultAgentModel } from "../agents/agent-settings-service.ts";
 import { validateCronExpression, validateTimeZone } from "./cron-schedule.ts";
 import { createFlowPollPlan, supportsConnectionFlowTrigger } from "./flow-trigger-adapters.ts";
+import { defaultFlowMaxSteps, maximumFlowMaxSteps } from "./flow-types.ts";
 
 const defaultReasoningEffort: FlowReasoningEffort = "medium";
-const defaultMaxSteps = 8;
 
 export interface FlowServiceOptions {
   catalog: CatalogStore;
@@ -313,10 +313,10 @@ function readAgentProvider(value: unknown): "claude_code" {
 
 function readMaxSteps(value: unknown): number {
   if (value === undefined) {
-    return defaultMaxSteps;
+    return defaultFlowMaxSteps;
   }
-  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 20) {
-    throw new FlowError("invalid_flow", "maxSteps must be an integer between 1 and 20.");
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > maximumFlowMaxSteps) {
+    throw new FlowError("invalid_flow", `maxSteps must be an integer between 1 and ${maximumFlowMaxSteps}.`);
   }
   return value as number;
 }

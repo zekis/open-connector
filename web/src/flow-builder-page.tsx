@@ -38,6 +38,9 @@ interface FlowBuilderPageProps {
   onRefresh(): void;
 }
 
+const defaultFlowMaxSteps = 20;
+const maximumFlowMaxSteps = 50;
+
 interface AgentChoice {
   id: string;
   label: string;
@@ -125,7 +128,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const [fileExtension, setFileExtension] = useState(
     props.flow?.trigger.type === "file_created" ? (props.flow.trigger.extension ?? "") : "",
   );
-  const [maxSteps, setMaxSteps] = useState(props.flow?.maxSteps ?? 8);
+  const [maxSteps, setMaxSteps] = useState(props.flow?.maxSteps ?? defaultFlowMaxSteps);
   const [toolSearch, setToolSearch] = useState("");
   const [selectedTools, setSelectedTools] = useState<Record<string, FlowApprovalSetting>>(() =>
     Object.fromEntries(
@@ -336,7 +339,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               <Input
                 type="number"
                 min={1}
-                max={20}
+                max={maximumFlowMaxSteps}
                 value={maxSteps}
                 onChange={(event) => setMaxSteps(Number(event.target.value))}
                 required
