@@ -8,14 +8,23 @@ import type {
 } from "./model";
 import type { FormEvent, ReactNode } from "react";
 
-import { AlarmClock, Braces, CalendarClock, Copy, Pencil, Plus, Radio, Trash2, Zap } from "lucide-react";
+import { AlarmClock, Braces, CalendarClock, Copy, Pencil, Plus, Radio, Trash2, Workflow, Zap } from "lucide-react";
 import { useState } from "react";
 import { apiDelete, apiPut } from "./api";
 import { flowConnectionDisplayName } from "./flow-connection-picker";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface TriggersPageProps {
   data: AppData;
@@ -25,6 +34,7 @@ interface TriggersPageProps {
 type TriggerMode = "api" | "schedule" | "event";
 
 interface TriggerEditorState {
+  intent: "create" | "edit";
   flowId: string;
   mode: TriggerMode;
   cron: string;
@@ -39,6 +49,7 @@ const defaultPollIntervalSeconds = 60;
 export function TriggersPage(props: TriggersPageProps): ReactNode {
   const flows = props.data.flows ?? [];
   const configuredFlows = flows.filter((flow) => flow.trigger.type !== "manual");
+  const availableFlows = flows.filter((flow) => flow.trigger.type === "manual");
   const [editor, setEditor] = useState<TriggerEditorState | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletingFlowId, setDeletingFlowId] = useState<string | null>(null);
@@ -54,18 +65,18 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
       : (providerEvents[0]?.id ?? "");
 
   function openEditor(flow?: FlowDefinition): void {
-    const target = flow ?? flows[0];
+    const target = flow ?? availableFlows[0];
     if (!target) {
       return;
     }
     setError(null);
-    setEditor(createEditorState(target, props.data.providers, props.data.connections));
+    setEditor(createEditorState(target, props.data.providers, props.data.connections, flow ? "edit" : "create"));
   }
 
   function selectFlow(flowId: string): void {
     const flow = flows.find((candidate) => candidate.id === flowId);
     if (flow) {
-      setEditor(createEditorState(flow, props.data.providers, props.data.connections));
+      setEditor(createEditorState(flow, props.data.providers, props.data.connections, editor?.intent ?? "create"));
     }
   }
 
@@ -116,30 +127,44 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
             Start an existing Flow on a schedule, through the API, or from an event declared by its source connector.
           </p>
         </div>
-        <Button onClick={() => openEditor()} disabled={flows.length === 0}>
+        <Button
+          onClick={() => openEditor()}
+          disabled={availableFlows.length === 0}
+          title={availableFlows.length === 0 ? "Every Flow already has an automatic trigger" : undefined}
+        >
           <Plus size={16} />
           New trigger
         </Button>
       </div>
 
-      {error ? <InlineError message={error} /> : null}
+      {!editor && error ? <InlineError message={error} /> : null}
 
-      {editor && targetFlow ? (
-        <TriggerEditor
-          state={editor}
-          flows={flows}
-          targetFlow={targetFlow}
-          sourceConnection={sourceConnection}
-          sourceProvider={sourceProvider}
-          providerEvents={providerEvents}
-          selectedEventId={selectedEventId}
-          saving={saving}
-          onChange={setEditor}
-          onFlowChange={selectFlow}
-          onSubmit={save}
-          onCancel={() => setEditor(null)}
-        />
-      ) : null}
+      <Dialog
+        open={Boolean(editor && targetFlow)}
+        onOpenChange={(open) => {
+          if (!open && !saving) setEditor(null);
+        }}
+      >
+        {editor && targetFlow ? (
+          <DialogContent className="trigger-dialog">
+            <TriggerEditor
+              state={editor}
+              flows={editor.intent === "create" ? availableFlows : [targetFlow]}
+              targetFlow={targetFlow}
+              sourceConnection={sourceConnection}
+              sourceProvider={sourceProvider}
+              providerEvents={providerEvents}
+              selectedEventId={selectedEventId}
+              saving={saving}
+              error={error}
+              onChange={setEditor}
+              onFlowChange={selectFlow}
+              onSubmit={save}
+              onCancel={() => setEditor(null)}
+            />
+          </DialogContent>
+        ) : null}
+      </Dialog>
 
       {configuredFlows.length === 0 ? (
         <EmptyState
@@ -173,165 +198,237 @@ function TriggerEditor(props: {
   providerEvents: ProviderEventDefinition[];
   selectedEventId: string;
   saving: boolean;
+  error: string | null;
   onChange(state: TriggerEditorState): void;
   onFlowChange(flowId: string): void;
   onSubmit(event: FormEvent): Promise<void>;
   onCancel(): void;
 }): ReactNode {
   const apiUrl = `${window.location.origin}/v1/flows/${props.targetFlow.id}/trigger`;
+  const selectedEvent = props.providerEvents.find((event) => event.id === props.selectedEventId);
+  const ConfigurationIcon =
+    props.state.mode === "event" ? Radio : props.state.mode === "schedule" ? CalendarClock : Braces;
   return (
-    <form className="trigger-editor detail-panel" onSubmit={(event) => void props.onSubmit(event)}>
-      <div className="trigger-editor-heading">
+    <form className="trigger-editor" onSubmit={(event) => void props.onSubmit(event)}>
+      <DialogHeader className="trigger-dialog-header">
+        <span className="trigger-heading-icon">
+          <Zap size={19} />
+        </span>
         <div>
-          <span className="trigger-heading-icon">
-            <Zap size={19} />
-          </span>
-          <div>
-            <h3>Configure trigger</h3>
-            <p>Each Flow has one automatic trigger. Saving here replaces its current trigger.</p>
-          </div>
+          <DialogTitle>{props.state.intent === "create" ? "Create trigger" : "Edit trigger"}</DialogTitle>
+          <DialogDescription>
+            {props.state.intent === "create"
+              ? "Choose a Flow and one clear condition that starts it."
+              : `Update when “${props.targetFlow.name}” starts automatically.`}
+          </DialogDescription>
         </div>
-        <Badge>{props.targetFlow.status}</Badge>
-      </div>
+      </DialogHeader>
 
-      <div className="trigger-editor-fields">
-        <Label className="field">
-          <span>Target Flow</span>
-          <select value={props.state.flowId} onChange={(event) => props.onFlowChange(event.target.value)} required>
-            {props.flows.map((flow) => (
-              <option key={flow.id} value={flow.id}>
-                {flow.name}
-              </option>
-            ))}
-          </select>
-        </Label>
-        <div className="field">
-          <span>Source connector</span>
-          <div className="trigger-source-summary">
-            {props.sourceProvider ? <ProviderIcon provider={props.sourceProvider} /> : <Radio size={18} />}
+      {props.error ? <InlineError message={props.error} /> : null}
+
+      <div className="trigger-dialog-body">
+        <section className="trigger-form-section">
+          <div className="trigger-section-heading">
+            <span>1</span>
             <div>
-              <strong>{props.sourceProvider?.displayName ?? "Unavailable"}</strong>
+              <strong>Choose the Flow</strong>
+              <small>The trigger watches the Flow’s source connection and starts its existing instructions.</small>
+            </div>
+          </div>
+          <div className="trigger-context-grid">
+            <div className="field">
+              <span>Target Flow</span>
+              {props.state.intent === "create" ? (
+                <Select value={props.state.flowId} onValueChange={props.onFlowChange}>
+                  <SelectTrigger className="trigger-select" aria-label="Target Flow">
+                    <SelectValue placeholder="Choose a Flow" />
+                  </SelectTrigger>
+                  <SelectContent className="trigger-select-content" position="popper" align="start" sideOffset={6}>
+                    {props.flows.map((flow) => (
+                      <SelectItem key={flow.id} value={flow.id}>
+                        {flow.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="trigger-flow-summary">
+                  <Workflow size={18} />
+                  <div>
+                    <strong>{props.targetFlow.name}</strong>
+                    <small>{props.targetFlow.status}</small>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="field">
+              <span>Source connector</span>
+              <div className="trigger-source-summary">
+                {props.sourceProvider ? <ProviderIcon provider={props.sourceProvider} /> : <Radio size={18} />}
+                <div>
+                  <strong>{props.sourceProvider?.displayName ?? "Unavailable"}</strong>
+                  <small>
+                    {props.sourceConnection ? flowConnectionDisplayName(props.sourceConnection) : "Missing connection"}
+                  </small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="trigger-form-section">
+          <div className="trigger-section-heading">
+            <span>2</span>
+            <div>
+              <strong>Choose how it starts</strong>
+              <small>Select one trigger type; only its relevant settings appear below.</small>
+            </div>
+          </div>
+          <div className="trigger-mode-grid">
+            <TriggerModeButton
+              mode="event"
+              current={props.state.mode}
+              icon={Radio}
+              title="Connector event"
+              description="Something happens in the source app"
+              onSelect={(mode) => props.onChange({ ...props.state, mode })}
+            />
+            <TriggerModeButton
+              mode="schedule"
+              current={props.state.mode}
+              icon={CalendarClock}
+              title="Schedule"
+              description="A scheduled date and time occurs"
+              onSelect={(mode) => props.onChange({ ...props.state, mode })}
+            />
+            <TriggerModeButton
+              mode="api"
+              current={props.state.mode}
+              icon={Braces}
+              title="API call"
+              description="An authenticated request is received"
+              onSelect={(mode) => props.onChange({ ...props.state, mode })}
+            />
+          </div>
+        </section>
+
+        <section className="trigger-configuration">
+          <div className="trigger-configuration-heading">
+            <span>
+              <ConfigurationIcon size={18} />
+            </span>
+            <div>
+              <strong>
+                {props.state.mode === "event"
+                  ? "Event details"
+                  : props.state.mode === "schedule"
+                    ? "Schedule details"
+                    : "API endpoint"}
+              </strong>
               <small>
-                {props.sourceConnection ? flowConnectionDisplayName(props.sourceConnection) : "Missing connection"}
+                {props.state.mode === "event"
+                  ? `Choose an event built into ${props.sourceProvider?.displayName ?? "the source connector"}.`
+                  : props.state.mode === "schedule"
+                    ? "Set when this Flow should run in its local time zone."
+                    : "Call this endpoint with a runtime token and JSON payload."}
               </small>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div className="trigger-mode-grid">
-        <TriggerModeButton
-          mode="event"
-          current={props.state.mode}
-          icon={Radio}
-          title="Connector event"
-          description="Use an event declared by the source connector"
-          onSelect={(mode) => props.onChange({ ...props.state, mode })}
-        />
-        <TriggerModeButton
-          mode="schedule"
-          current={props.state.mode}
-          icon={CalendarClock}
-          title="Schedule"
-          description="Use a five-field cron schedule"
-          onSelect={(mode) => props.onChange({ ...props.state, mode })}
-        />
-        <TriggerModeButton
-          mode="api"
-          current={props.state.mode}
-          icon={Braces}
-          title="API call"
-          description="POST an event payload with a runtime token"
-          onSelect={(mode) => props.onChange({ ...props.state, mode })}
-        />
-      </div>
+          {props.state.mode === "event" ? (
+            props.providerEvents.length > 0 ? (
+              <div className="trigger-config-fields">
+                <div className="field">
+                  <span>Event</span>
+                  <Select
+                    value={props.selectedEventId}
+                    onValueChange={(eventId) => props.onChange({ ...props.state, eventId })}
+                  >
+                    <SelectTrigger className="trigger-select" aria-label="Connector event">
+                      <SelectValue placeholder="Choose an event" />
+                    </SelectTrigger>
+                    <SelectContent className="trigger-select-content" position="popper" align="start" sideOffset={6}>
+                      {props.providerEvents.map((event) => (
+                        <SelectItem key={event.id} value={event.id}>
+                          {event.displayName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <small>{selectedEvent?.description}</small>
+                </div>
+                <PollIntervalField
+                  value={props.state.pollIntervalSeconds}
+                  onChange={(pollIntervalSeconds) => props.onChange({ ...props.state, pollIntervalSeconds })}
+                />
+                <p className="trigger-baseline-note">
+                  First check records a baseline; existing items do not start the Flow.
+                </p>
+              </div>
+            ) : (
+              <InlineError
+                message={`${props.sourceProvider?.displayName ?? "This connector"} does not declare events yet.`}
+              />
+            )
+          ) : null}
 
-      {props.state.mode === "event" ? (
-        <div className="trigger-event-fields">
-          {props.providerEvents.length > 0 ? (
-            <Label className="field">
-              <span>Event</span>
-              <select
-                value={props.selectedEventId}
-                onChange={(event) => props.onChange({ ...props.state, eventId: event.target.value })}
-                required
+          {props.state.mode === "schedule" ? (
+            <div className="trigger-config-fields">
+              <Label className="field">
+                <span>Cron schedule</span>
+                <Input
+                  value={props.state.cron}
+                  placeholder={defaultSchedule}
+                  maxLength={120}
+                  onChange={(event) => props.onChange({ ...props.state, cron: event.target.value })}
+                  required
+                />
+                <small>Minute, hour, day, month, weekday.</small>
+              </Label>
+              <Label className="field">
+                <span>Time zone</span>
+                <Input
+                  value={props.state.timeZone}
+                  placeholder="Australia/Perth"
+                  maxLength={100}
+                  onChange={(event) => props.onChange({ ...props.state, timeZone: event.target.value })}
+                  required
+                />
+                <small>Use an IANA time zone name.</small>
+              </Label>
+            </div>
+          ) : null}
+
+          {props.state.mode === "api" ? (
+            <div className="trigger-api-detail">
+              <Braces size={18} />
+              <div>
+                <strong>Authenticated runtime endpoint</strong>
+                <code>{apiUrl}</code>
+                <small>POST a JSON object. Its payload becomes trigger context for the Flow agent.</small>
+              </div>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                type="button"
+                aria-label="Copy trigger endpoint"
+                onClick={() => void navigator.clipboard.writeText(apiUrl)}
               >
-                {props.providerEvents.map((event) => (
-                  <option key={event.id} value={event.id}>
-                    {event.displayName}
-                  </option>
-                ))}
-              </select>
-              <small>{props.providerEvents.find((event) => event.id === props.selectedEventId)?.description}</small>
-            </Label>
-          ) : (
-            <InlineError
-              message={`${props.sourceProvider?.displayName ?? "This connector"} does not declare events yet.`}
-            />
-          )}
-          <PollIntervalField
-            value={props.state.pollIntervalSeconds}
-            onChange={(pollIntervalSeconds) => props.onChange({ ...props.state, pollIntervalSeconds })}
-          />
-          <p className="trigger-baseline-note">First check records a baseline; existing items do not start the Flow.</p>
-        </div>
-      ) : null}
+                <Copy size={15} />
+              </Button>
+            </div>
+          ) : null}
+        </section>
+      </div>
 
-      {props.state.mode === "schedule" ? (
-        <div className="trigger-schedule-fields">
-          <Label className="field">
-            <span>Cron schedule</span>
-            <Input
-              value={props.state.cron}
-              placeholder={defaultSchedule}
-              maxLength={120}
-              onChange={(event) => props.onChange({ ...props.state, cron: event.target.value })}
-              required
-            />
-            <small>Minute, hour, day, month, weekday.</small>
-          </Label>
-          <Label className="field">
-            <span>Time zone</span>
-            <Input
-              value={props.state.timeZone}
-              placeholder="Australia/Perth"
-              maxLength={100}
-              onChange={(event) => props.onChange({ ...props.state, timeZone: event.target.value })}
-              required
-            />
-            <small>Use an IANA time zone name.</small>
-          </Label>
-        </div>
-      ) : null}
-
-      {props.state.mode === "api" ? (
-        <div className="trigger-api-detail">
-          <Braces size={18} />
-          <div>
-            <strong>Authenticated runtime endpoint</strong>
-            <code>{apiUrl}</code>
-            <small>POST a JSON object with a runtime bearer token. Its payload becomes trigger context.</small>
-          </div>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            type="button"
-            aria-label="Copy trigger endpoint"
-            onClick={() => void navigator.clipboard.writeText(apiUrl)}
-          >
-            <Copy size={15} />
-          </Button>
-        </div>
-      ) : null}
-
-      <div className="button-row">
-        <Button type="submit" disabled={props.saving || (props.state.mode === "event" && !props.selectedEventId)}>
-          {props.saving ? "Saving…" : "Save trigger"}
-        </Button>
+      <DialogFooter className="trigger-dialog-footer">
         <Button variant="outline" type="button" disabled={props.saving} onClick={props.onCancel}>
           Cancel
         </Button>
-      </div>
+        <Button type="submit" disabled={props.saving || (props.state.mode === "event" && !props.selectedEventId)}>
+          {props.saving ? "Saving…" : props.state.intent === "create" ? "Create trigger" : "Save changes"}
+        </Button>
+      </DialogFooter>
     </form>
   );
 }
@@ -416,15 +513,21 @@ function TriggerCard(props: {
 
 function PollIntervalField(props: { value: number; onChange(value: number): void }): ReactNode {
   return (
-    <Label className="field trigger-poll-field">
+    <div className="field trigger-poll-field">
       <span>Check every</span>
-      <select value={props.value} onChange={(event) => props.onChange(Number(event.target.value))}>
-        <option value={30}>30 seconds</option>
-        <option value={60}>1 minute</option>
-        <option value={300}>5 minutes</option>
-        <option value={900}>15 minutes</option>
-      </select>
-    </Label>
+      <Select value={String(props.value)} onValueChange={(value) => props.onChange(Number(value))}>
+        <SelectTrigger className="trigger-select" aria-label="Polling interval">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="trigger-select-content" position="popper" align="start" sideOffset={6}>
+          <SelectItem value="30">30 seconds</SelectItem>
+          <SelectItem value="60">1 minute</SelectItem>
+          <SelectItem value="300">5 minutes</SelectItem>
+          <SelectItem value="900">15 minutes</SelectItem>
+        </SelectContent>
+      </Select>
+      <small>Shorter checks react faster but make more connector requests.</small>
+    </div>
   );
 }
 
@@ -432,6 +535,7 @@ function createEditorState(
   flow: FlowDefinition,
   providers: ProviderDefinition[],
   connections: ConnectionRecord[],
+  intent: TriggerEditorState["intent"],
 ): TriggerEditorState {
   const source = connections.find((connection) => connection.id === flow.sourceConnectionId);
   const provider = providers.find((candidate) => candidate.service === source?.service);
@@ -445,6 +549,7 @@ function createEditorState(
         : undefined;
   const eventId = trigger.type === "event" ? trigger.eventId : (legacyEventId ?? providerEvents[0]?.id ?? "");
   return {
+    intent,
     flowId: flow.id,
     mode:
       trigger.type === "api" || trigger.type === "schedule" || trigger.type === "event"

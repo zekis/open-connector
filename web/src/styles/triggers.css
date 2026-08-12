@@ -4,8 +4,6 @@
 }
 
 .triggers-toolbar,
-.trigger-editor-heading,
-.trigger-editor-heading > div,
 .trigger-card,
 .trigger-card-title,
 .trigger-target,
@@ -16,7 +14,6 @@
 }
 
 .triggers-toolbar,
-.trigger-editor-heading,
 .trigger-card-title {
   justify-content: space-between;
 }
@@ -26,27 +23,46 @@
   gap: 18px;
 }
 
-.triggers-toolbar h2,
-.trigger-editor h3 {
+.triggers-toolbar h2 {
   margin: 0;
 }
 
 .triggers-toolbar p,
-.trigger-editor-heading p,
 .trigger-card p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
   font-size: 13px;
 }
 
-.trigger-editor {
-  display: grid;
-  gap: 18px;
-  max-height: none;
+.trigger-dialog {
+  width: min(780px, calc(100vw - 32px));
+  max-width: 780px;
+  max-height: calc(100vh - 32px);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
-.trigger-editor-heading > div {
+.trigger-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100vh - 32px);
+}
+
+.trigger-dialog-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
+  padding: 20px 56px 18px 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, color-mix(in oklab, var(--brand) 9%, var(--popover)), var(--popover) 56%);
+}
+
+.trigger-dialog-header > div {
+  display: grid;
+  align-content: center;
+  gap: 4px;
 }
 
 .trigger-heading-icon,
@@ -66,35 +82,114 @@
   height: 40px;
 }
 
-.trigger-editor-fields,
-.trigger-schedule-fields,
-.trigger-event-fields {
+.trigger-dialog-body {
+  display: grid;
+  gap: 20px;
+  padding: 18px 20px 20px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.trigger-form-section {
+  display: grid;
+  gap: 12px;
+}
+
+.trigger-section-heading,
+.trigger-configuration-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.trigger-section-heading > span,
+.trigger-configuration-heading > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid color-mix(in oklab, var(--brand) 35%, var(--border));
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--brand) 8%, var(--card));
+  color: var(--info);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.trigger-section-heading > div,
+.trigger-configuration-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.trigger-section-heading small,
+.trigger-configuration-heading small,
+.trigger-config-fields .field > small,
+.trigger-api-detail small,
+.trigger-baseline-note {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.trigger-context-grid,
+.trigger-config-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
-.trigger-source-summary {
+.trigger-source-summary,
+.trigger-flow-summary {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
+  min-height: 42px;
   padding: 7px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--muted);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--muted) 65%, var(--card));
 }
 
-.trigger-source-summary > div {
+.trigger-source-summary > div,
+.trigger-flow-summary > div {
   display: grid;
   min-width: 0;
 }
 
-.trigger-source-summary small {
+.trigger-source-summary small,
+.trigger-flow-summary small {
   overflow: hidden;
   color: var(--muted-foreground);
+  font-size: 11px;
+  text-transform: capitalize;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trigger-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.trigger-select-content {
+  z-index: 70;
+  min-width: var(--radix-select-trigger-width);
+  border-color: var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+}
+
+.trigger-select-content [data-slot="select-item"] {
+  color: var(--popover-foreground);
+}
+
+.trigger-select-content [data-slot="select-item"]:focus {
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .trigger-mode-grid {
@@ -105,10 +200,11 @@
 
 .trigger-mode {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 14px;
+  min-height: 78px;
+  padding: 13px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--card);
@@ -130,22 +226,40 @@
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 18%, transparent);
 }
 
+.trigger-mode.selected > svg {
+  color: var(--info);
+}
+
 .trigger-mode > span {
   display: grid;
   gap: 3px;
 }
 
-.trigger-mode small,
-.trigger-event-fields small,
-.trigger-schedule-fields small,
-.trigger-api-detail small,
-.trigger-baseline-note {
+.trigger-mode small {
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.4;
 }
 
-.trigger-event-fields {
+.trigger-configuration {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in oklab, var(--muted) 52%, var(--card));
+}
+
+.trigger-configuration-heading {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.trigger-configuration-heading > span {
+  border-radius: 8px;
+}
+
+.trigger-config-fields {
   align-items: start;
 }
 
@@ -162,7 +276,7 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--muted);
+  background: var(--card);
 }
 
 .trigger-api-detail > div {
@@ -175,6 +289,12 @@
   overflow-wrap: anywhere;
   color: var(--info);
   font-size: 12px;
+}
+
+.trigger-dialog-footer {
+  margin: 0;
+  padding: 14px 20px;
+  border-radius: 0;
 }
 
 .trigger-list {
@@ -253,9 +373,8 @@
 
 @media (max-width: 800px) {
   .trigger-mode-grid,
-  .trigger-editor-fields,
-  .trigger-schedule-fields,
-  .trigger-event-fields {
+  .trigger-context-grid,
+  .trigger-config-fields {
     grid-template-columns: 1fr;
   }
 
@@ -275,5 +394,21 @@
   .trigger-card {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .trigger-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .trigger-editor {
+    max-height: calc(100vh - 16px);
+  }
+
+  .trigger-dialog-header,
+  .trigger-dialog-body,
+  .trigger-dialog-footer {
+    padding-right: 16px;
+    padding-left: 16px;
   }
 }
