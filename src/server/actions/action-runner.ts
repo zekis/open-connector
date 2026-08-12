@@ -107,10 +107,12 @@ export class ActionRunner implements IActionRunner {
           result = {
             ok: false,
             error: {
-              code: "approval_required",
-              message: `Approval is required before ${action.id} can run on ${connection.summary?.profile.displayName ?? "this connection"}.`,
+              code: "approval_pending",
+              message: `${action.id} was queued and is pending approval for ${connection.summary?.profile.displayName ?? "this connection"}.`,
               details: {
                 approvalId: approval.approval.id,
+                status: "pending",
+                queued: true,
                 actionId: action.id,
                 connectionId: connection.summary?.id,
               },

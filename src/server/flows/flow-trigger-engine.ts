@@ -1,3 +1,4 @@
+import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionService } from "../../connection-service.ts";
 import type { ActionPolicySnapshot } from "../../core/action-policy.ts";
 import type { IActionRunner } from "../actions/action-runner.ts";
@@ -11,6 +12,7 @@ import type {
   FlowTriggerState,
   IFlowStore,
   NewEmailFlowTrigger,
+  ProviderEventFlowTrigger,
 } from "./flow-types.ts";
 
 import { matchCronSchedule } from "./cron-schedule.ts";
@@ -22,6 +24,7 @@ export interface FlowTriggerEngineOptions {
   runner: Pick<FlowRunner, "start">;
   store: IFlowStore;
   connections: Pick<ConnectionService, "getConnectionSummaryById">;
+  catalog: CatalogStore;
   actions: IActionRunner;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
   logger?: Logger;
@@ -80,7 +83,11 @@ export class FlowTriggerEngine {
         try {
           if (flow.trigger.type === "schedule") {
             await this.checkSchedule(flow, now);
-          } else if (flow.trigger.type === "new_email" || flow.trigger.type === "file_created") {
+          } else if (
+            flow.trigger.type === "event" ||
+            flow.trigger.type === "new_email" ||
+            flow.trigger.type === "file_created"
+          ) {
             await this.checkConnectionEvent(flow, flow.trigger, now);
           }
         } catch (error) {
@@ -129,7 +136,7 @@ export class FlowTriggerEngine {
 
   private async checkConnectionEvent(
     flow: FlowDefinition,
-    trigger: NewEmailFlowTrigger | FileCreatedFlowTrigger,
+    trigger: ProviderEventFlowTrigger | NewEmailFlowTrigger | FileCreatedFlowTrigger,
     now: Date,
   ): Promise<void> {
     const state = await this.readState(flow, now);
@@ -140,7 +147,11 @@ export class FlowTriggerEngine {
     if (!connection) {
       throw new Error(`Flow trigger connection is unavailable: ${trigger.connectionId}.`);
     }
-    const plan = createFlowPollPlan(trigger, connection.service);
+    const provider = this.options.catalog.providers.find((candidate) => candidate.service === connection.service);
+    if (!provider) {
+      throw new Error(`Flow trigger provider is unavailable: ${connection.service}.`);
+    }
+    const plan = createFlowPollPlan(trigger, provider);
     const policy = await this.options.getPolicySnapshot();
     const actionRun = await this.options.actions.run({
       actionId: plan.actionId,
@@ -178,6 +189,7 @@ export class FlowTriggerEngine {
       createEvent(trigger.type, now, {
         connectionId: trigger.connectionId,
         service: connection.service,
+        eventId: trigger.type === "event" ? trigger.eventId : undefined,
         detectorActionId: plan.actionId,
         items: newItems.map((item) => item.payload),
       }),

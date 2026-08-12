@@ -16,6 +16,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Radio,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -162,7 +163,7 @@ function FlowCard(props: {
         <FlowEndpoint role="destination" connection={destination} provider={destinationProvider} />
       </div>
       <div className="flow-card-meta">
-        <FlowTriggerBadge flow={props.flow} />
+        <FlowTriggerBadge flow={props.flow} sourceProvider={sourceProvider} />
         <span>{props.flow.tools.length} tools</span>
         <span>Claude Code</span>
         {latestRun ? (
@@ -303,12 +304,14 @@ function FlowEndpoint(props: {
   );
 }
 
-function FlowTriggerBadge(props: { flow: FlowDefinition }): ReactNode {
+function FlowTriggerBadge(props: { flow: FlowDefinition; sourceProvider: ProviderDefinition | undefined }): ReactNode {
   const trigger = props.flow.trigger;
+  const providerEvent =
+    trigger.type === "event" ? props.sourceProvider?.events?.find((event) => event.id === trigger.eventId) : undefined;
   const detail =
     trigger.type === "schedule"
       ? `${trigger.cron} · ${trigger.timeZone}`
-      : trigger.type === "new_email" || trigger.type === "file_created"
+      : trigger.type === "event" || trigger.type === "new_email" || trigger.type === "file_created"
         ? `every ${trigger.pollIntervalSeconds}s`
         : undefined;
   const config =
@@ -316,11 +319,13 @@ function FlowTriggerBadge(props: { flow: FlowDefinition }): ReactNode {
       ? { icon: Braces, label: "API call" }
       : trigger.type === "schedule"
         ? { icon: AlarmClock, label: "Schedule" }
-        : trigger.type === "new_email"
-          ? { icon: Mail, label: "New email" }
-          : trigger.type === "file_created"
-            ? { icon: FilePlus2, label: "File created" }
-            : { icon: MousePointerClick, label: "Manual" };
+        : trigger.type === "event"
+          ? { icon: Radio, label: providerEvent?.displayName ?? "Connector event" }
+          : trigger.type === "new_email"
+            ? { icon: Mail, label: "New email" }
+            : trigger.type === "file_created"
+              ? { icon: FilePlus2, label: "File created" }
+              : { icon: MousePointerClick, label: "Manual" };
   const Icon = config.icon;
   return (
     <span className="flow-trigger-badge" title={detail}>

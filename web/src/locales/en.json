@@ -44,6 +44,7 @@
     "agents": "Agents",
     "chat": "Chat",
     "flows": "Flows",
+    "triggers": "Triggers",
     "approvals": "Approvals",
     "runs": "Runs",
     "access": "API Key",
@@ -86,6 +87,10 @@
       "flows": {
         "title": "Flows",
         "subtitle": "Run focused agent synchronizations between two connections."
+      },
+      "triggers": {
+        "title": "Triggers",
+        "subtitle": "Start Flows from schedules, API calls, and connector events."
       },
       "approvals": {
         "title": "Approvals",

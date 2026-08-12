@@ -42,5 +42,17 @@ export const provider: ProviderDefinition = {
     },
   ],
   homepageUrl: "https://github.com/dsebastien/obsidian-cli-rest",
+  events: [
+    {
+      id: "obsidian.file_created",
+      displayName: "File created",
+      description: "Runs when a new file appears in the Obsidian vault.",
+      polling: {
+        actionId: "obsidian.list_files",
+        input: {},
+        result: { kind: "strings", collectionField: "files", payloadField: "path" },
+      },
+    },
+  ],
   actions: obsidianActions,
 };

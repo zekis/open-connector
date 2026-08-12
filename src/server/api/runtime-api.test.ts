@@ -120,6 +120,49 @@ describe("runtime action HTTP results", () => {
     });
   });
 
+  it("serializes a queued approval as a non-blocking accepted result", () => {
+    const result = serializeRuntimeActionResult({
+      actionId: "example.echo",
+      executionId: "queue-attempt-1",
+      auditPersisted: true,
+      result: {
+        ok: false,
+        error: {
+          code: "approval_pending",
+          message: "Action queued and pending approval.",
+          details: {
+            approvalId: "approval-1",
+            status: "pending",
+            queued: true,
+            actionId: "example.echo",
+            connectionId: "connection-1",
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      status: 202,
+      body: {
+        success: true,
+        message: "Queued for approval",
+        data: {
+          approvalId: "approval-1",
+          status: "pending",
+          queued: true,
+          actionId: "example.echo",
+          connectionId: "connection-1",
+        },
+        meta: {
+          executionId: "queue-attempt-1",
+          actionId: "example.echo",
+          auditPersisted: true,
+        },
+      },
+    });
+    expect(parseRuntimeActionHttpResult(result)).toEqual(result);
+  });
+
   it.each([
     { status: 201, body: { success: true, message: "OK", data: null, meta: {} } },
     { status: 200, body: { success: false, message: "Failed", data: null, errorCode: "failed", meta: {} } },

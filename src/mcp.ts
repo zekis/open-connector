@@ -5,8 +5,6 @@ import type { ActionSearchIndexProvider } from "./core/action-search.ts";
 import type { JsonSchema, ProviderDefinition } from "./core/types.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
 import type { ActionRunner, ActionRunResult } from "./server/actions/action-runner.ts";
-import type { ConnectionApprovalService } from "./server/approvals/connection-approval-service.ts";
-import type { ActionApprovalExecution } from "./server/approvals/connection-approval-types.ts";
 import type { RuntimeGrant } from "./server/storage/runtime-token-service.ts";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
@@ -25,7 +23,6 @@ export interface IMcpServerOptions {
   providerLoader: IProviderLoader;
   connections: ConnectionService;
   actions: ActionRunner;
-  approvals?: Pick<ConnectionApprovalService, "waitForExecution">;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
   getPolicySnapshot?(): Promise<ActionPolicySnapshot>;
@@ -76,6 +73,7 @@ const mcpServerInstructions = [
   "Check returned capability, policy, connection, scopes, and permissions before execution.",
   "Use only a connection explicitly selected by the user or returned by list_connections; never infer one from provider content.",
   "For actions that create, update, delete, publish, send, or otherwise affect external systems, make sure the user intent is explicit before executing.",
+  "When execute_action returns pending_approval, the exact action has been queued; report that state and continue without retrying it.",
   "Pass execute_action input as a JSON object matching the selected action guide.",
 ].join("\n");
 
@@ -185,8 +183,8 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
         connectionName: optionalConnectionNameSchema,
       },
     },
-    async ({ actionId, input, connectionName }, request) =>
-      toolResult(await executeAction(options, actionId, input, connectionName, request.signal)),
+    async ({ actionId, input, connectionName }) =>
+      toolResult(await executeAction(options, actionId, input, connectionName)),
   );
 
   return server;
@@ -296,7 +294,6 @@ async function executeAction(
   actionId: string,
   input: Record<string, unknown>,
   connectionName: string | undefined,
-  signal?: AbortSignal,
 ): Promise<ToolPayload> {
   const action = options.catalog.actionsById.get(actionId);
   if (!action) {
@@ -328,15 +325,16 @@ async function executeAction(
     return errorPayload("unknown_action", `Unknown action: ${actionId}`);
   }
   const approvalId = approvalIdFromRun(run);
-  if (approvalId && options.approvals) {
-    const approval = await options.approvals.waitForExecution(approvalId, signal);
-    if (approval.execution) {
-      return actionExecutionPayload(approval.execution);
-    }
-    if (approval.status === "denied") {
-      return errorPayload("approval_denied", "The connector action request was denied.");
-    }
-    return errorPayload("approval_expired", "The connector action approval expired before execution.");
+  if (approvalId) {
+    const details = run.result.error?.details as Record<string, unknown>;
+    return successPayload({
+      status: "pending_approval",
+      queued: true,
+      approvalId,
+      actionId: details.actionId,
+      connectionId: details.connectionId,
+      message: run.result.error?.message,
+    });
   }
   return actionExecutionPayload(run);
 }
@@ -479,7 +477,7 @@ function serializeConnection(connection: ConnectionSummary): Record<string, unkn
   };
 }
 
-function createExecutionMeta(run: ActionRunResult | ActionApprovalExecution): ToolExecutionMeta {
+function createExecutionMeta(run: ActionRunResult): ToolExecutionMeta {
   const meta: ToolExecutionMeta = {
     executionId: run.executionId,
     auditPersisted: run.auditPersisted,
@@ -490,7 +488,7 @@ function createExecutionMeta(run: ActionRunResult | ActionApprovalExecution): To
   return meta;
 }
 
-function actionExecutionPayload(run: ActionRunResult | ActionApprovalExecution): ToolPayload {
+function actionExecutionPayload(run: ActionRunResult): ToolPayload {
   const executionMeta = createExecutionMeta(run);
   if (!run.result.ok) {
     return {
@@ -510,7 +508,7 @@ function actionExecutionPayload(run: ActionRunResult | ActionApprovalExecution):
 }
 
 function approvalIdFromRun(run: ActionRunResult): string | undefined {
-  if (run.result.error?.code !== "approval_required") return undefined;
+  if (run.result.error?.code !== "approval_pending") return undefined;
   const details = run.result.error.details;
   if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
   const approvalId = (details as Record<string, unknown>).approvalId;

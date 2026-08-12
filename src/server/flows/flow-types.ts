@@ -1,12 +1,13 @@
 export type FlowStatus = "active" | "paused";
 export type FlowApprovalMode = "always_allow" | "require_approval";
 export type FlowApprovalSetting = FlowApprovalMode | "inherit";
+export type FlowConnectionRole = "source" | "destination";
 export type FlowReasoningEffort = "none" | "low" | "medium" | "high";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type FlowStepStatus = "pending" | "completed" | "failed" | "denied";
 export type FlowApprovalStatus = "pending" | "approved" | "denied";
 export type FlowAgentProvider = "claude_code";
-export type FlowTriggerType = "manual" | "api" | "schedule" | "new_email" | "file_created";
+export type FlowTriggerType = "manual" | "api" | "schedule" | "event" | "new_email" | "file_created";
 
 export interface ManualFlowTrigger {
   type: "manual";
@@ -20,6 +21,13 @@ export interface ScheduleFlowTrigger {
   type: "schedule";
   cron: string;
   timeZone: string;
+}
+
+export interface ProviderEventFlowTrigger {
+  type: "event";
+  connectionId: string;
+  eventId: string;
+  pollIntervalSeconds: number;
 }
 
 export interface NewEmailFlowTrigger {
@@ -41,6 +49,7 @@ export type FlowTrigger =
   | ManualFlowTrigger
   | ApiFlowTrigger
   | ScheduleFlowTrigger
+  | ProviderEventFlowTrigger
   | NewEmailFlowTrigger
   | FileCreatedFlowTrigger;
 
@@ -55,6 +64,8 @@ export interface FlowAgentConfig {
 export interface FlowToolGrant {
   actionId: string;
   connectionId: string;
+  /** Omitted only on definitions stored before role-specific grants were introduced. */
+  role?: FlowConnectionRole;
   approval: FlowApprovalSetting;
 }
 
@@ -90,6 +101,15 @@ export interface FlowDefinitionInput {
   agent: Pick<FlowAgentConfig, "connectionId"> & Partial<Pick<FlowAgentConfig, "provider" | "reasoningEffort">>;
   tools: FlowToolGrant[];
   maxSteps?: number;
+}
+
+/** Trigger configuration projected with the Flow fields needed by trigger-management clients. */
+export interface FlowTriggerBinding {
+  flowId: string;
+  flowName: string;
+  flowStatus: FlowStatus;
+  trigger: Exclude<FlowTrigger, ManualFlowTrigger>;
+  updatedAt: string;
 }
 
 export interface FlowRun {

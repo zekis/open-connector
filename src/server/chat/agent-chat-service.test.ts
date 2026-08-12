@@ -121,8 +121,8 @@ describe("AgentChatService", () => {
       {
         ok: false,
         error: {
-          code: "approval_required",
-          message: "Approval is required.",
+          code: "approval_pending",
+          message: "Action queued and pending approval.",
           details: { approvalId },
         },
       },

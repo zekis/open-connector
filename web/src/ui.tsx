@@ -35,6 +35,7 @@ import {
   RefreshCw,
   Sun,
   TerminalSquare,
+  Zap,
   Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -56,6 +57,7 @@ import { ResourcesPage } from "./resources-page";
 import { RunsPage } from "./runs-page";
 import { InlineError, StatusDot } from "./shared-ui";
 import { useThemeMode } from "./theme";
+import { TriggersPage } from "./triggers-page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,6 +70,7 @@ const navItems = [
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
   { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
   { path: "/flows", labelKey: "nav.flows", icon: Workflow },
+  { path: "/triggers", labelKey: "nav.triggers", icon: Zap },
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
   { path: "/runs", labelKey: "nav.runs", icon: Activity },
   { path: "/access", labelKey: "nav.access", icon: KeyRound },
@@ -464,6 +467,7 @@ function AppShell(props: {
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
             />
             <Route path="/flows" element={<FlowsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/triggers" element={<TriggersPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/approvals" element={<ApprovalsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/flows/new" element={<FlowBuilderPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
@@ -630,6 +634,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "flows") {
     return "flows";
+  }
+  if (section === "triggers") {
+    return "triggers";
   }
   if (section === "approvals") {
     return "approvals";

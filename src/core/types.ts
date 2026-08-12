@@ -192,6 +192,48 @@ export type ActionDefinition = {
   };
 };
 
+export interface ProviderEventItemFilter {
+  field: string;
+  exists?: boolean;
+  equals?: string;
+}
+
+export interface ProviderEventRecordResult {
+  kind: "records";
+  collectionField: string;
+  idFields: string[];
+  include?: ProviderEventItemFilter;
+}
+
+export interface ProviderEventStringResult {
+  kind: "strings";
+  collectionField: string;
+  payloadField: string;
+}
+
+export type ProviderEventPollingResult = ProviderEventRecordResult | ProviderEventStringResult;
+
+export interface ProviderEventPollingDefinition {
+  /** Read-only provider action invoked to inspect the connection. */
+  actionId: string;
+  /** Static action input owned by the provider definition. */
+  input: Record<string, unknown>;
+  /** Mapping from the action output to stable event items. */
+  result: ProviderEventPollingResult;
+}
+
+/** Declarative description of how a provider event is detected by polling a read-only action. */
+export interface ProviderEventDefinition {
+  /** Globally unique event id, usually `<service>.<name>`. */
+  id: string;
+  /** Human-readable event name shown by trigger builders. */
+  displayName: string;
+  /** Human-readable explanation of when the event fires. */
+  description: string;
+  /** Polling recipe interpreted by the Flow trigger engine. */
+  polling: ProviderEventPollingDefinition;
+}
+
 /**
  * Public catalog definition for one provider or app.
  */
@@ -212,6 +254,8 @@ export type ProviderDefinition = {
   homepageUrl?: string;
   /** Optional linked icon URL; third-party brand rights remain with their owners. */
   iconUrl?: string;
+  /** Provider-native events available to Flow triggers. */
+  events?: readonly ProviderEventDefinition[];
   /** Public action catalog for this provider. */
   actions: readonly ActionDefinition[];
 };

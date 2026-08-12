@@ -4,10 +4,12 @@ import type { AgentCredentialService } from "../agents/agent-credential-service.
 import type { AgentSettingsService } from "../agents/agent-settings-service.ts";
 import type {
   FlowApprovalSetting,
+  FlowConnectionRole,
   FlowDefinition,
   FlowReasoningEffort,
   FlowStatus,
   FlowTrigger,
+  FlowTriggerBinding,
   FlowToolGrant,
   IFlowStore,
 } from "./flow-types.ts";
@@ -87,6 +89,41 @@ export class FlowService {
     }
   }
 
+  async listTriggers(): Promise<FlowTriggerBinding[]> {
+    return (await this.list()).flatMap((flow) =>
+      flow.trigger.type === "manual"
+        ? []
+        : [
+            {
+              flowId: flow.id,
+              flowName: flow.name,
+              flowStatus: flow.status,
+              trigger: flow.trigger,
+              updatedAt: flow.updatedAt,
+            },
+          ],
+    );
+  }
+
+  async updateTrigger(id: string, input: unknown): Promise<FlowDefinition> {
+    const current = await this.getRequired(id);
+    const connections = await this.connectionMap();
+    const source = requiredConnection(connections, current.sourceConnectionId, "sourceConnectionId");
+    const trigger = this.normalizeTrigger(input, source);
+    const flow: FlowDefinition = {
+      ...current,
+      trigger,
+      revision: crypto.randomUUID(),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.options.store.setFlow(flow);
+    return flow;
+  }
+
+  async removeTrigger(id: string): Promise<FlowDefinition> {
+    return await this.updateTrigger(id, { type: "manual" });
+  }
+
   private async normalizeInput(
     input: unknown,
   ): Promise<Omit<FlowDefinition, "id" | "revision" | "createdAt" | "updatedAt">> {
@@ -95,13 +132,6 @@ export class FlowService {
     const instructions = requiredText(value.instructions, "instructions", 20_000);
     const sourceConnectionId = requiredText(value.sourceConnectionId, "sourceConnectionId", 200);
     const destinationConnectionId = requiredText(value.destinationConnectionId, "destinationConnectionId", 200);
-    if (sourceConnectionId === destinationConnectionId) {
-      throw new FlowError(
-        "invalid_flow",
-        "sourceConnectionId and destinationConnectionId must identify different connections.",
-      );
-    }
-
     const connections = await this.connectionMap();
     const source = requiredConnection(connections, sourceConnectionId, "sourceConnectionId");
     const destination = requiredConnection(connections, destinationConnectionId, "destinationConnectionId");
@@ -152,6 +182,27 @@ export class FlowService {
       }
       return { type: "schedule", cron, timeZone };
     }
+    if (value.type === "event") {
+      const connectionId = requiredText(value.connectionId, "trigger.connectionId", 200);
+      if (connectionId !== source.id) {
+        throw new FlowError("invalid_flow", "Provider-event triggers must use the Flow source connection.");
+      }
+      const eventId = requiredText(value.eventId, "trigger.eventId", 200);
+      const pollIntervalSeconds = readPollInterval(value.pollIntervalSeconds);
+      const trigger: FlowTrigger = { type: "event", connectionId, eventId, pollIntervalSeconds };
+      const provider = this.options.catalog.providers.find((candidate) => candidate.service === source.service);
+      if (!provider || !supportsConnectionFlowTrigger(trigger, provider)) {
+        throw new FlowError("invalid_flow", `${source.service} does not declare the ${eventId} event.`);
+      }
+      const action = this.options.catalog.actionsById.get(createFlowPollPlan(trigger, provider).actionId);
+      if (!action || action.service !== source.service) {
+        throw new FlowError("invalid_flow", `${eventId} does not use an action owned by ${source.service}.`);
+      }
+      if (!action.execution.locallyExecutable) {
+        throw new FlowError("invalid_flow", `${source.service} event detection is not executable in this runtime.`);
+      }
+      return trigger;
+    }
     if (value.type === "new_email" || value.type === "file_created") {
       const connectionId = requiredText(value.connectionId, "trigger.connectionId", 200);
       if (connectionId !== source.id) {
@@ -182,7 +233,10 @@ export class FlowService {
       }
       return trigger;
     }
-    throw new FlowError("invalid_flow", "trigger.type must be manual, api, schedule, new_email, or file_created.");
+    throw new FlowError(
+      "invalid_flow",
+      "trigger.type must be manual, api, schedule, event, new_email, or file_created.",
+    );
   }
 
   private normalizeTools(
@@ -198,12 +252,12 @@ export class FlowService {
       throw new FlowError("invalid_flow", "tools must not contain more than 32 tool grants.");
     }
 
-    const endpointIds = new Set([source.id, destination.id]);
     const keys = new Set<string>();
     return input.map((item, index) => {
       const value = requiredObject(item, `tools[${index}]`);
       const actionId = requiredText(value.actionId, `tools[${index}].actionId`, 200);
       const connectionId = requiredText(value.connectionId, `tools[${index}].connectionId`, 200);
+      const role = readToolRole(value.role, connectionId, source, destination, index);
       const approval = readApprovalMode(value.approval, index);
       const action = this.options.catalog.actionsById.get(actionId);
       if (!action) {
@@ -215,19 +269,20 @@ export class FlowService {
       if (action.inputSchema.type !== "object") {
         throw new FlowError("invalid_flow", `Action does not expose an object input schema: ${actionId}.`);
       }
-      if (!endpointIds.has(connectionId)) {
-        throw new FlowError("invalid_flow", `Tool ${actionId} must use the source or destination connection.`);
+      const endpoint = role === "source" ? source : destination;
+      if (connectionId !== endpoint.id) {
+        throw new FlowError("invalid_flow", `Tool ${actionId} does not use the Flow ${role} connection.`);
       }
       const connection = requiredConnection(connections, connectionId, `tools[${index}].connectionId`);
       if (connection.service !== action.service) {
         throw new FlowError("invalid_flow", `Tool ${actionId} cannot use a ${connection.service} connection.`);
       }
-      const key = `${actionId}\0${connectionId}`;
+      const key = `${role}\0${actionId}\0${connectionId}`;
       if (keys.has(key)) {
         throw new FlowError("invalid_flow", `Duplicate tool grant: ${actionId} on ${connectionId}.`);
       }
       keys.add(key);
-      return { actionId, connectionId, approval };
+      return { actionId, connectionId, role, approval };
     });
   }
 
@@ -294,6 +349,28 @@ function readApprovalMode(value: unknown, index: number): FlowApprovalSetting {
   throw new FlowError("invalid_flow", `tools[${index}].approval must be inherit, always_allow, or require_approval.`);
 }
 
+function readToolRole(
+  value: unknown,
+  connectionId: string,
+  source: ConnectionSummary,
+  destination: ConnectionSummary,
+  index: number,
+): FlowConnectionRole {
+  if (value === "source" || value === "destination") {
+    return value;
+  }
+  if (value !== undefined) {
+    throw new FlowError("invalid_flow", `tools[${index}].role must be source or destination.`);
+  }
+  if (source.id === destination.id) {
+    throw new FlowError(
+      "invalid_flow",
+      `tools[${index}].role is required when the source and destination use the same connection.`,
+    );
+  }
+  return connectionId === source.id ? "source" : "destination";
+}
+
 function readReasoningEffort(value: unknown): FlowReasoningEffort {
   if (value === undefined) {
     return defaultReasoningEffort;
@@ -332,5 +409,12 @@ function readPollInterval(value: unknown): number {
 }
 
 function normalizeStoredFlow(flow: FlowDefinition): FlowDefinition {
-  return flow.trigger ? flow : { ...flow, trigger: { type: "manual" } };
+  const normalized = flow.trigger ? flow : { ...flow, trigger: { type: "manual" as const } };
+  return {
+    ...normalized,
+    tools: normalized.tools.map((tool) => ({
+      ...tool,
+      role: tool.role ?? (tool.connectionId === normalized.sourceConnectionId ? "source" : "destination"),
+    })),
+  };
 }

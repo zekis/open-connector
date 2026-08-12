@@ -20,6 +20,7 @@ interface OutlookActionSource {
   providerPermissions: string[];
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
+  followUpActions?: string[];
 }
 
 const rawObject = s.record(true, { description: "A generic JSON object returned by Microsoft Graph." });
@@ -194,6 +195,30 @@ const actions: OutlookActionSource[] = [
     outlookMessage,
   ),
   action(
+    "create_reply_draft",
+    "Create an editable Outlook reply draft for an existing message without sending it, optionally adding reply content and recipients.",
+    outlookWriteScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input(
+      {
+        messageId,
+        comment: s.string({
+          description: "Comment to prepend to the reply. Do not provide body when using comment.",
+        }),
+        body: s.string({
+          description: "Replacement reply body content. Do not provide comment when using body.",
+        }),
+        isHtml: s.boolean({ description: "Whether the replacement reply body is already HTML content." }),
+        toRecipients: recipientList("Additional primary recipients for the reply draft."),
+        ccRecipients: recipientList("Additional Cc recipients for the reply draft."),
+        bccRecipients: recipientList("Additional Bcc recipients for the reply draft."),
+      },
+      ["messageId"],
+    ),
+    outlookMessage,
+    ["outlook.update_draft", "outlook.send_draft"],
+  ),
+  action(
     "update_draft",
     "Update an existing Outlook draft message before sending.",
     outlookWriteScopes,
@@ -280,6 +305,7 @@ function action(
   providerPermissions: string[],
   inputSchema: JsonSchema,
   outputSchema: JsonSchema,
+  followUpActions?: string[],
 ): OutlookActionSource {
-  return { name, description, requiredScopes, providerPermissions, inputSchema, outputSchema };
+  return { name, description, requiredScopes, providerPermissions, inputSchema, outputSchema, followUpActions };
 }

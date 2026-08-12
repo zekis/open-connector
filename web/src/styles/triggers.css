@@ -1,0 +1,279 @@
+.triggers-page {
+  display: grid;
+  gap: 20px;
+}
+
+.triggers-toolbar,
+.trigger-editor-heading,
+.trigger-editor-heading > div,
+.trigger-card,
+.trigger-card-title,
+.trigger-target,
+.trigger-provider,
+.trigger-card-actions {
+  display: flex;
+  align-items: center;
+}
+
+.triggers-toolbar,
+.trigger-editor-heading,
+.trigger-card-title {
+  justify-content: space-between;
+}
+
+.triggers-toolbar {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.triggers-toolbar h2,
+.trigger-editor h3 {
+  margin: 0;
+}
+
+.triggers-toolbar p,
+.trigger-editor-heading p,
+.trigger-card p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.trigger-editor {
+  display: grid;
+  gap: 18px;
+  max-height: none;
+}
+
+.trigger-editor-heading > div {
+  gap: 12px;
+}
+
+.trigger-heading-icon,
+.trigger-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in oklab, var(--brand) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--brand) 10%, var(--card));
+  color: var(--info);
+}
+
+.trigger-heading-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.trigger-editor-fields,
+.trigger-schedule-fields,
+.trigger-event-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.trigger-source-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+.trigger-source-summary > div {
+  display: grid;
+  min-width: 0;
+}
+
+.trigger-source-summary small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trigger-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.trigger-mode:hover,
+.trigger-mode:focus-visible,
+.trigger-mode.selected {
+  border-color: color-mix(in oklab, var(--brand) 60%, var(--border));
+  outline: none;
+}
+
+.trigger-mode.selected {
+  background: color-mix(in oklab, var(--brand) 9%, var(--card));
+  color: var(--info);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 18%, transparent);
+}
+
+.trigger-mode > span {
+  display: grid;
+  gap: 3px;
+}
+
+.trigger-mode small,
+.trigger-event-fields small,
+.trigger-schedule-fields small,
+.trigger-api-detail small,
+.trigger-baseline-note {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.trigger-event-fields {
+  align-items: start;
+}
+
+.trigger-baseline-note {
+  grid-column: 1 / -1;
+  margin: -6px 0 0;
+}
+
+.trigger-api-detail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+
+.trigger-api-detail > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trigger-api-detail code {
+  overflow-wrap: anywhere;
+  color: var(--info);
+  font-size: 12px;
+}
+
+.trigger-list {
+  display: grid;
+  gap: 12px;
+}
+
+.trigger-card {
+  position: relative;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.trigger-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(var(--info), var(--success));
+  content: "";
+}
+
+.trigger-card-icon {
+  width: 44px;
+  height: 44px;
+}
+
+.trigger-card-main {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 5px;
+  min-width: 0;
+}
+
+.trigger-card-title {
+  gap: 12px;
+}
+
+.trigger-card-title > strong {
+  font-size: 15px;
+}
+
+.trigger-target {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.trigger-target > span:first-child {
+  color: var(--muted-foreground);
+}
+
+.trigger-provider {
+  gap: 6px;
+  margin-left: 8px;
+  color: var(--muted-foreground);
+}
+
+.trigger-provider [data-provider-icon] {
+  width: 20px;
+  height: 20px;
+}
+
+.trigger-card-actions {
+  align-self: stretch;
+  gap: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 800px) {
+  .trigger-mode-grid,
+  .trigger-editor-fields,
+  .trigger-schedule-fields,
+  .trigger-event-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .trigger-card {
+    align-items: flex-start;
+  }
+
+  .trigger-card-actions {
+    align-self: auto;
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .triggers-toolbar,
+  .trigger-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

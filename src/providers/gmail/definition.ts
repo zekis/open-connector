@@ -27,5 +27,27 @@ export const provider: ProviderDefinition = {
     },
   ],
   homepageUrl: "https://mail.google.com",
+  events: [
+    {
+      id: "gmail.new_received_email",
+      displayName: "New received email",
+      description: "Runs when a new message appears in the Gmail inbox.",
+      polling: {
+        actionId: "gmail.fetch_emails",
+        input: { maxResults: 50, detail: "summary", query: "in:inbox" },
+        result: { kind: "records", collectionField: "messages", idFields: ["messageId", "id"] },
+      },
+    },
+    {
+      id: "gmail.new_sent_email",
+      displayName: "New sent email",
+      description: "Runs when a new message appears in Gmail Sent Mail.",
+      polling: {
+        actionId: "gmail.fetch_emails",
+        input: { maxResults: 50, detail: "summary", query: "in:sent" },
+        result: { kind: "records", collectionField: "messages", idFields: ["messageId", "id"] },
+      },
+    },
+  ],
   actions: gmailActions,
 };

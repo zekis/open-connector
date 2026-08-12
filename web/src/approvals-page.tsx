@@ -36,6 +36,7 @@ interface ApprovalsPageProps {
 type ApprovalView = "pending" | "history";
 type ApprovalDecision = "approve" | "deny";
 type ApprovalItem = { kind: "flow"; approval: FlowApproval } | { kind: "action"; approval: ActionApproval };
+const approvalRefreshIntervalMs = 2_000;
 
 export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
   const [view, setView] = useState<ApprovalView>("pending");
@@ -47,6 +48,8 @@ export function ApprovalsPage(props: ApprovalsPageProps): ReactNode {
 
   useEffect(() => {
     props.onRefresh();
+    const interval = window.setInterval(props.onRefresh, approvalRefreshIntervalMs);
+    return () => window.clearInterval(interval);
   }, [props.onRefresh]);
 
   const approvals: ApprovalItem[] = [

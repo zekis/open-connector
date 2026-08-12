@@ -46,6 +46,9 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   create_draft(input, deps) {
     return createDraft(input, deps);
   },
+  create_reply_draft(input, deps) {
+    return createReplyDraft(input, deps);
+  },
   update_draft(input, deps) {
     return updateDraft(input, deps);
   },
@@ -380,6 +383,25 @@ async function createDraft(input: Record<string, unknown>, { accessToken, fetche
       requireSubject: true,
       requireBody: true,
     }),
+  });
+}
+
+async function createReplyDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
+  if (typeof input.comment === "string" && typeof input.body === "string") {
+    throw new ProviderRequestError(400, "comment and body cannot both be provided for a reply draft");
+  }
+
+  const messagePayload = buildReplyMessagePayload(input);
+  const payload = compactObject({
+    comment: typeof input.comment === "string" ? input.comment : undefined,
+    message: Object.keys(messagePayload).length > 0 ? messagePayload : undefined,
+  });
+
+  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}/createReply`, {
+    accessToken,
+    fetcher,
+    method: "POST",
+    body: Object.keys(payload).length > 0 ? payload : undefined,
   });
 }
 

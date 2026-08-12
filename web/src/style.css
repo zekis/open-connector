@@ -12,6 +12,7 @@
 @import "./styles/chat.css";
 @import "./styles/runs.css";
 @import "./styles/flows.css";
+@import "./styles/triggers.css";
 @import "./styles/approvals.css";
 @import "./styles/access.css";
 @import "./styles/resources.css";

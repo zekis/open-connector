@@ -1,4 +1,5 @@
-import type { FileCreatedFlowTrigger, NewEmailFlowTrigger } from "./flow-types.ts";
+import type { ProviderDefinition, ProviderEventDefinition, ProviderEventItemFilter } from "../../core/types.ts";
+import type { FileCreatedFlowTrigger, NewEmailFlowTrigger, ProviderEventFlowTrigger } from "./flow-types.ts";
 
 export interface FlowPollItem {
   id: string;
@@ -11,17 +12,36 @@ export interface FlowPollPlan {
   readItems(output: unknown): FlowPollItem[];
 }
 
-type ConnectionFlowTrigger = NewEmailFlowTrigger | FileCreatedFlowTrigger;
+type ConnectionFlowTrigger = ProviderEventFlowTrigger | NewEmailFlowTrigger | FileCreatedFlowTrigger;
+type EventProvider = Pick<ProviderDefinition, "service" | "events">;
 
 const supportedEmailServices = new Set(["gmail", "outlook"]);
 const supportedFileServices = new Set(["obsidian", "one_drive", "dropbox"]);
 
-export function supportsConnectionFlowTrigger(trigger: ConnectionFlowTrigger, service: string): boolean {
+export function supportsConnectionFlowTrigger(
+  trigger: ConnectionFlowTrigger,
+  provider: EventProvider | string,
+): boolean {
+  const service = typeof provider === "string" ? provider : provider.service;
+  if (trigger.type === "event") {
+    return typeof provider !== "string" && Boolean(findProviderEvent(provider, trigger.eventId));
+  }
   return trigger.type === "new_email" ? supportedEmailServices.has(service) : supportedFileServices.has(service);
 }
 
 /** Build the read-only connector action used to detect a configured connection event. */
-export function createFlowPollPlan(trigger: ConnectionFlowTrigger, service: string): FlowPollPlan {
+export function createFlowPollPlan(trigger: ConnectionFlowTrigger, provider: EventProvider | string): FlowPollPlan {
+  const service = typeof provider === "string" ? provider : provider.service;
+  if (trigger.type === "event") {
+    if (typeof provider === "string") {
+      throw new Error(`${service} event metadata is unavailable.`);
+    }
+    const event = findProviderEvent(provider, trigger.eventId);
+    if (!event) {
+      throw new Error(`${service} does not declare the ${trigger.eventId} event.`);
+    }
+    return createProviderEventPollPlan(event);
+  }
   if (trigger.type === "new_email" && service === "outlook") {
     const input: Record<string, unknown> = {
       top: 50,
@@ -125,6 +145,25 @@ export function createFlowPollPlan(trigger: ConnectionFlowTrigger, service: stri
   throw new Error(`${service} does not support ${trigger.type} Flow triggers.`);
 }
 
+function findProviderEvent(provider: EventProvider, eventId: string): ProviderEventDefinition | undefined {
+  return provider.events?.find((event) => event.id === eventId);
+}
+
+function createProviderEventPollPlan(event: ProviderEventDefinition): FlowPollPlan {
+  const result = event.polling.result;
+  return {
+    actionId: event.polling.actionId,
+    input: structuredClone(event.polling.input),
+    readItems:
+      result.kind === "strings"
+        ? (output) => readStringItems(output, result.collectionField, result.payloadField)
+        : (output) =>
+            readRecordItems(output, result.collectionField, result.idFields, (item) =>
+              matchesInclude(item, result.include),
+            ),
+  };
+}
+
 function readRecordItems(
   output: unknown,
   field: string,
@@ -149,6 +188,16 @@ function readStringItems(output: unknown, field: string, payloadField: string): 
   return values.flatMap((value) =>
     typeof value === "string" && value ? [{ id: value, payload: { [payloadField]: value } }] : [],
   );
+}
+
+function matchesInclude(item: Record<string, unknown>, include: ProviderEventItemFilter | undefined): boolean {
+  if (!include) {
+    return true;
+  }
+  if (include.exists !== undefined && (item[include.field] !== undefined) !== include.exists) {
+    return false;
+  }
+  return include.equals === undefined || item[include.field] === include.equals;
 }
 
 function isOneDriveFile(item: Record<string, unknown>): boolean {

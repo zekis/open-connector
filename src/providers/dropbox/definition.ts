@@ -26,5 +26,22 @@ export const provider: ProviderDefinition = {
     },
   ],
   homepageUrl: "https://www.dropbox.com",
+  events: [
+    {
+      id: "dropbox.file_created",
+      displayName: "File created",
+      description: "Runs when a new file appears in the root Dropbox folder.",
+      polling: {
+        actionId: "dropbox.list_folder",
+        input: { recursive: false, includeDeleted: false, limit: 50 },
+        result: {
+          kind: "records",
+          collectionField: "entries",
+          idFields: ["id", "pathLower", "pathDisplay"],
+          include: { field: "tag", equals: "file" },
+        },
+      },
+    },
+  ],
   actions: dropboxActions,
 };

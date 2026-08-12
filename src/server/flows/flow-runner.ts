@@ -17,6 +17,7 @@ import type {
   FlowApproval,
   FlowApprovalMode,
   FlowDefinition,
+  FlowConnectionRole,
   FlowRun,
   FlowStep,
   FlowToolGrant,
@@ -400,16 +401,12 @@ export class FlowRunner {
   private async createToolBindings(flow: FlowDefinition): Promise<FlowToolBinding[]> {
     const source = await this.requiredConnection(flow.sourceConnectionId);
     const destination = await this.requiredConnection(flow.destinationConnectionId);
-    const endpoints = new Map([
-      [source.id, { connection: source, role: "source" }],
-      [destination.id, { connection: destination, role: "destination" }],
-    ]);
-
     return await Promise.all(
       flow.tools.map(async (grant, index) => {
         const action = this.options.catalog.actionsById.get(grant.actionId);
-        const endpoint = endpoints.get(grant.connectionId);
-        if (!action || !endpoint) {
+        const role = flowToolRole(flow, grant);
+        const connection = role === "source" ? source : destination;
+        if (!action || grant.connectionId !== connection.id) {
           throw new FlowError("invalid_flow", `Flow tool is no longer available: ${grant.actionId}.`);
         }
         return {
@@ -420,10 +417,10 @@ export class FlowRunner {
                 "always_allow")
               : grant.approval,
           action,
-          connection: endpoint.connection,
+          connection,
           agentTool: {
             name: createAgentToolName(index, action.id),
-            description: `${action.description} Uses the ${endpoint.role} connection "${endpoint.connection.profile.displayName}".`,
+            description: `${action.description} Uses the ${role} connection "${connection.profile.displayName}".`,
             parameters: action.inputSchema as JsonSchema,
           },
         };
@@ -533,7 +530,7 @@ function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding
   const toolRules = bindings
     .map(
       (binding) =>
-        `- ${binding.agentTool.name}: ${binding.action.id} on ${connectionRole(flow, binding.grant.connectionId)}; approval policy ${binding.approval}${binding.grant.approval === "inherit" ? " (inherited from connector settings)" : " (Flow override)"}.`,
+        `- ${binding.agentTool.name}: ${binding.action.id} on ${flowToolRole(flow, binding.grant)}; approval policy ${binding.approval}${binding.grant.approval === "inherit" ? " (inherited from connector settings)" : " (Flow override)"}.`,
     )
     .join("\n");
   return `Role: Execute a one-way synchronization from the source connection to the destination connection.
@@ -564,8 +561,8 @@ Tool bindings:
 ${toolRules}`;
 }
 
-function connectionRole(flow: FlowDefinition, connectionId: string): "source" | "destination" {
-  return connectionId === flow.sourceConnectionId ? "source" : "destination";
+function flowToolRole(flow: FlowDefinition, grant: FlowToolGrant): FlowConnectionRole {
+  return grant.role ?? (grant.connectionId === flow.sourceConnectionId ? "source" : "destination");
 }
 
 function createAgentToolName(index: number, actionId: string): string {

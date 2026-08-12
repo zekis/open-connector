@@ -44,6 +44,7 @@
     "agents": "Agents",
     "chat": "Discussion",
     "flows": "Flux",
+    "triggers": "Déclencheurs",
     "approvals": "Approbations",
     "runs": "Exécutions",
     "access": "API Key",
@@ -86,6 +87,10 @@
       "flows": {
         "title": "Flux",
         "subtitle": "Exécutez des synchronisations ciblées par agent entre deux connexions."
+      },
+      "triggers": {
+        "title": "Déclencheurs",
+        "subtitle": "Démarrez les flux à partir de planifications, d’appels API et d’événements de connecteur."
       },
       "approvals": {
         "title": "Approbations",

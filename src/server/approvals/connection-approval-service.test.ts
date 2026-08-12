@@ -64,7 +64,7 @@ describe("ConnectionApprovalService", () => {
     ).rejects.toMatchObject({ code: "invalid_connection_permissions" } satisfies Partial<ConnectionApprovalError>);
   });
 
-  it("deduplicates pending requests without turning approval into a retry grant", async () => {
+  it("queues identical pending requests as separate one-time approvals", async () => {
     const { service, store } = createService();
     await service.replacePermissions(connection.id, {
       permissions: [{ actionId: "example.echo", approval: "require_approval" }],
@@ -80,8 +80,11 @@ describe("ConnectionApprovalService", () => {
     const duplicate = await service.requestAction(request);
 
     expect(first.allowed).toBe(false);
-    expect(duplicate).toEqual(first);
+    expect(duplicate.allowed).toBe(false);
     if (first.allowed) throw new Error("Expected a pending approval.");
+    if (duplicate.allowed) throw new Error("Expected a second pending approval.");
+    expect(duplicate.approval.id).not.toBe(first.approval.id);
+    await expect(store.listActionApprovals()).resolves.toHaveLength(2);
     await expect(service.approve(first.approval.id)).resolves.toMatchObject({ status: "approved" });
     await service.consumeApproved(first.approval.id, "mcp");
     await service.storeExecution(first.approval.id, {
@@ -95,35 +98,6 @@ describe("ConnectionApprovalService", () => {
     const next = await service.requestAction(request);
     expect(next.allowed).toBe(false);
     if (!next.allowed) expect(next.approval.id).not.toBe(first.approval.id);
-  });
-
-  it("waits for the exact approved execution result", async () => {
-    const { service } = createService();
-    await service.replacePermissions(connection.id, {
-      permissions: [{ actionId: "example.echo", approval: "require_approval" }],
-    });
-    const requested = await service.requestAction({
-      actionId: "example.echo",
-      connection,
-      caller: "mcp",
-      input: { message: "hello" },
-    });
-    if (requested.allowed) throw new Error("Expected a pending approval.");
-
-    const waiting = service.waitForExecution(requested.approval.id);
-    await service.approve(requested.approval.id);
-    await service.consumeApproved(requested.approval.id, "mcp");
-    await service.storeExecution(requested.approval.id, {
-      executionId: "execution-1",
-      auditPersisted: true,
-      result: { ok: true, output: { message: "hello" } },
-      completedAt: "2026-08-09T01:00:00.000Z",
-    });
-
-    await expect(waiting).resolves.toMatchObject({
-      status: "consumed",
-      execution: { executionId: "execution-1", result: { ok: true, output: { message: "hello" } } },
-    });
   });
 
   it("persists Chat continuation state and consumes the approved action before storing its response", async () => {

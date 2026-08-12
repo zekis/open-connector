@@ -44,6 +44,7 @@
     "agents": "エージェント",
     "chat": "チャット",
     "flows": "フロー",
+    "triggers": "トリガー",
     "approvals": "承認",
     "runs": "実行履歴",
     "access": "API Key",
@@ -86,6 +87,10 @@
       "flows": {
         "title": "フロー",
         "subtitle": "2 つの接続間でエージェントによる同期を実行します。"
+      },
+      "triggers": {
+        "title": "トリガー",
+        "subtitle": "スケジュール、API 呼び出し、コネクターイベントからフローを開始します。"
       },
       "approvals": {
         "title": "承認",

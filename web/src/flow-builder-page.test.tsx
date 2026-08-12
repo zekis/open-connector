@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
-import { FlowBuilderPage } from "./flow-builder-page";
+import { FlowBuilderPage, flowToolSelectionKey } from "./flow-builder-page";
 import { emptyData } from "./model";
 
 const flow: FlowDefinition = {
@@ -141,17 +141,14 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain('value="Daily inbox sync"');
     expect(html).toContain("Copy today&#x27;s messages into a spreadsheet.");
     expect(html).toContain("Save changes");
-    expect(html).toContain("Start this Flow");
-    expect(html).toContain("API call");
-    expect(html).toContain("Schedule");
-    expect(html).toContain("New email");
-    expect(html).toContain("File created");
-    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain("Triggers are managed separately");
+    expect(html).toContain('href="/triggers"');
+    expect(html).not.toContain("Start this Flow");
     expect(html).not.toContain(">Model<");
     expect(html).not.toContain("opus");
   });
 
-  it("renders persisted schedule settings", () => {
+  it("keeps persisted schedule settings out of the Flow editor", () => {
     const scheduleFlow: FlowDefinition = {
       ...flow,
       trigger: { type: "schedule", cron: "0 9 * * 1-5", timeZone: "Australia/Perth" },
@@ -164,9 +161,9 @@ describe("FlowBuilderPage", () => {
       />,
     );
 
-    expect(html).toContain('value="0 9 * * 1-5"');
-    expect(html).toContain('value="Australia/Perth"');
-    expect(html).toContain("Five fields: minute, hour, day, month, weekday.");
+    expect(html).toContain("Triggers are managed separately");
+    expect(html).not.toContain('value="0 9 * * 1-5"');
+    expect(html).not.toContain('value="Australia/Perth"');
   });
 
   it("lays out provider connectors around the Flow instructions", () => {
@@ -237,6 +234,48 @@ describe("FlowBuilderPage", () => {
 
     expect(html).toContain('<option value="inherit" selected="">Use connector default (Require approval)</option>');
     expect(html).toContain('<option value="always_allow">Always allow</option>');
+  });
+
+  it("keeps source and destination grants independent when both use one connection", () => {
+    const sameConnectionFlow: FlowDefinition = {
+      ...flow,
+      sourceConnectionId: "outlook-1",
+      destinationConnectionId: "outlook-1",
+      tools: [
+        {
+          actionId: "outlook.search_emails",
+          connectionId: "outlook-1",
+          role: "source",
+          approval: "always_allow",
+        },
+        {
+          actionId: "outlook.search_emails",
+          connectionId: "outlook-1",
+          role: "destination",
+          approval: "require_approval",
+        },
+      ],
+    };
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route
+        path="/flows/:flowId/edit"
+        element={
+          <FlowBuilderPage
+            data={{ ...editorData, flows: [sameConnectionFlow], connections: [editorData.connections[0]!] }}
+            onRefresh={() => {}}
+          />
+        }
+      />,
+    );
+
+    expect(flowToolSelectionKey("source", "outlook-1", "outlook.search_emails")).not.toBe(
+      flowToolSelectionKey("destination", "outlook-1", "outlook.search_emails"),
+    );
+    expect(html.match(/1\/1 allowed/g)).toHaveLength(2);
+    expect(html).toContain('<option value="always_allow" selected="">Always allow</option>');
+    expect(html).toContain('<option value="require_approval" selected="">Require approval</option>');
+    expect(html).not.toContain("Connect at least two endpoint connections");
   });
 });
 

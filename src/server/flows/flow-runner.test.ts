@@ -158,6 +158,19 @@ describe("FlowRunner", () => {
     expect(harness.actions.toolCalls).toHaveLength(1);
   });
 
+  it("preserves a destination-role grant when both endpoints use one connection", async () => {
+    const harness = createHarness("always_allow");
+    harness.flow.destinationConnectionId = harness.flow.sourceConnectionId;
+    harness.flow.tools[0] = { ...harness.flow.tools[0]!, role: "destination" };
+
+    const detail = await harness.runner.start(harness.flow.id);
+
+    expect(detail.run.status).toBe("completed");
+    expect(harness.actions.toolCalls[0]).toMatchObject({ connectionId: "source-connection" });
+    expect(harness.agent.inputs[0]?.instructions).toContain("on destination");
+    expect(harness.agent.inputs[0]?.tools[0]?.description).toContain('destination connection "Source"');
+  });
+
   it("snapshots the current Agents-page model when a run starts", async () => {
     const harness = createHarness("always_allow", "sonnet");
 

@@ -232,6 +232,8 @@ export function createOpenApiDocument(
     "/api/agent-chat/approvals/{id}": createAgentChatApprovalPath(),
     "/api/flows": createFlowsPath(),
     "/api/flows/{id}": createFlowPath(),
+    "/api/flow-triggers": createFlowTriggersPath(),
+    "/api/flow-triggers/{id}": createFlowTriggerConfigurationPath(),
     "/v1/flows/{id}/trigger": createFlowTriggerPath(),
     "/api/oauth/configs": getOperation("OAuth", "List local OAuth client configurations.", {
       type: "array",
@@ -369,6 +371,7 @@ export function createOpenApiDocument(
         FlowToolGrant: createFlowToolGrantSchema(),
         FlowAgentInput: createFlowAgentInputSchema(),
         FlowTrigger: createFlowTriggerSchema(),
+        FlowTriggerBinding: createFlowTriggerBindingSchema(),
         FlowDefinitionInput: createFlowDefinitionInputSchema(),
         FlowAgentConfig: createFlowAgentConfigSchema(),
         FlowDefinition: createFlowDefinitionSchema(),
@@ -751,6 +754,52 @@ function createFlowPath(): Record<string, unknown> {
   };
 }
 
+function createFlowTriggersPath(): Record<string, unknown> {
+  return {
+    get: {
+      tags: ["Flows"],
+      summary: "List configured Flow triggers.",
+      description: "Lists non-manual triggers with the Flow fields needed by trigger-management clients.",
+      responses: {
+        200: jsonResponse(jsonSchema.array({ $ref: "#/components/schemas/FlowTriggerBinding" })),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
+function createFlowTriggerConfigurationPath(): Record<string, unknown> {
+  return {
+    put: {
+      tags: ["Flows"],
+      summary: "Set a Flow trigger.",
+      description: "Creates or replaces the trigger attached to an existing Flow.",
+      parameters: [flowIdParameter],
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: { $ref: "#/components/schemas/FlowTrigger" } } },
+      },
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }),
+        400: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+    delete: {
+      tags: ["Flows"],
+      summary: "Remove a Flow trigger.",
+      description: "Returns the Flow to manual-only execution.",
+      parameters: [flowIdParameter],
+      responses: {
+        200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }),
+        401: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+        404: jsonResponse({ $ref: "#/components/schemas/ErrorResponse" }),
+      },
+    },
+  };
+}
+
 function createFlowTriggerPath(): Record<string, unknown> {
   return {
     post: {
@@ -796,6 +845,10 @@ function createFlowToolGrantSchema(): JsonSchema {
       connectionId: jsonSchema.nonWhitespaceString("Source or destination connection used by the action.", {
         maxLength: 200,
       }),
+      role: jsonSchema.stringEnum(
+        "Flow endpoint role used by this action grant. Required when both endpoints use the same connection.",
+        ["source", "destination"],
+      ),
       approval: jsonSchema.stringEnum("Permission mode applied whenever the Flow agent requests this action.", [
         "inherit",
         "always_allow",
@@ -971,7 +1024,7 @@ function createActionApprovalDecisionPath(decision: "approve" | "deny"): Record<
       summary: `${decision === "approve" ? "Approve" : "Deny"} a direct connector action request.`,
       description:
         decision === "approve"
-          ? "Executes this exact connector request once. Paused Chat and MCP callers resume automatically with the result."
+          ? "Executes this exact connector request once. Paused Chat resumes automatically; MCP and Runtime API callers already received the pending queue result."
           : "Denies this exact pending request without executing it.",
       parameters: [approvalIdParameter],
       responses: {
@@ -1016,6 +1069,14 @@ function createFlowTriggerSchema(): JsonSchema {
       ),
       jsonSchema.object(
         {
+          type: jsonSchema.literal("event"),
+          ...pollingProperties,
+          eventId: jsonSchema.nonWhitespaceString("Provider-declared event identifier.", { maxLength: 200 }),
+        },
+        { required: ["type", "connectionId", "eventId", "pollIntervalSeconds"] },
+      ),
+      jsonSchema.object(
+        {
           type: jsonSchema.literal("new_email"),
           ...pollingProperties,
           query: jsonSchema.string({
@@ -1037,6 +1098,22 @@ function createFlowTriggerSchema(): JsonSchema {
     ],
     description: "Event that starts the Flow. Omitted inputs default to manual.",
   };
+}
+
+function createFlowTriggerBindingSchema(): JsonSchema {
+  return jsonSchema.object(
+    {
+      flowId: jsonSchema.uuid("Flow definition identifier."),
+      flowName: jsonSchema.nonWhitespaceString("Flow name.", { maxLength: 120 }),
+      flowStatus: jsonSchema.stringEnum("Flow availability.", ["active", "paused"]),
+      trigger: { $ref: "#/components/schemas/FlowTrigger" },
+      updatedAt: jsonSchema.dateTime("Latest Flow update timestamp."),
+    },
+    {
+      required: ["flowId", "flowName", "flowStatus", "trigger", "updatedAt"],
+      description: "Configured automatic trigger and its target Flow.",
+    },
+  );
 }
 
 function createFlowAgentInputSchema(): JsonSchema {
@@ -1502,6 +1579,7 @@ function createRunPath(): Record<string, unknown> {
             actionResultMetaSchema,
           ),
         ),
+        202: jsonResponse(runtimePendingApprovalSchema(actionResultMetaSchema), "Action queued for approval."),
         400: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
         403: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
         404: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
@@ -1790,6 +1868,7 @@ function createConcreteRunOperation(action: ActionDefinition): Record<string, un
     },
     responses: {
       200: jsonResponse(runtimeSuccessSchema(action.outputSchema, actionResultMetaSchema)),
+      202: jsonResponse(runtimePendingApprovalSchema(actionResultMetaSchema), "Action queued for approval."),
       400: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
       403: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
       404: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
@@ -1798,6 +1877,35 @@ function createConcreteRunOperation(action: ActionDefinition): Record<string, un
       500: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema)),
     },
   };
+}
+
+function runtimePendingApprovalSchema(meta: JsonSchema): JsonSchema {
+  return jsonSchema.object(
+    {
+      success: { const: true, type: "boolean" },
+      message: { const: "Queued for approval", type: "string" },
+      data: jsonSchema.object(
+        {
+          approvalId: jsonSchema.uuid("Queued approval request identifier."),
+          status: { const: "pending", type: "string" },
+          queued: { const: true, type: "boolean" },
+          actionId: jsonSchema.nonWhitespaceString("Queued catalog action.", { maxLength: 200 }),
+          connectionId: jsonSchema.nonWhitespaceString("Connection selected for queued execution.", {
+            maxLength: 200,
+          }),
+        },
+        {
+          required: ["approvalId", "status", "queued", "actionId", "connectionId"],
+          description: "Non-blocking confirmation that this exact action is pending approval.",
+        },
+      ),
+      meta,
+    },
+    {
+      required: ["success", "message", "data", "meta"],
+      description: "Runtime pending-approval envelope.",
+    },
+  );
 }
 
 function runtimeSuccessSchema(

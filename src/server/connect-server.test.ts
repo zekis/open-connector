@@ -2451,12 +2451,17 @@ describe("ConnectServer", () => {
         body: JSON.stringify({ input: { message: "hello" } }),
       });
     const pendingResponse = await request("approved-request");
-    expect(pendingResponse.status).toBe(409);
+    expect(pendingResponse.status).toBe(202);
     const pendingBody = (await pendingResponse.json()) as {
-      errorCode: string;
+      success: boolean;
+      message: string;
       data: { approvalId: string };
     };
-    expect(pendingBody).toMatchObject({ errorCode: "approval_required" });
+    expect(pendingBody).toMatchObject({
+      success: true,
+      message: "Queued for approval",
+      data: { status: "pending", queued: true, actionId: echoAction.id },
+    });
     expect(executions).toBe(0);
 
     const listedResponse = await app.request("/api/action-approvals");
@@ -2490,12 +2495,17 @@ describe("ConnectServer", () => {
     expect(executions).toBe(1);
 
     const retry = await request("approved-request");
-    expect(retry.status).toBe(409);
-    await expect(retry.json()).resolves.toMatchObject({ errorCode: "approval_required" });
+    expect(retry.status).toBe(202);
+    await expect(retry.json()).resolves.toEqual(pendingBody);
     expect(executions).toBe(1);
 
-    const nextPending = await request("new-request");
-    expect(nextPending.status).toBe(409);
+    const [nextPending, duplicatePending] = await Promise.all([request("new-request"), request("duplicate-request")]);
+    expect(nextPending.status).toBe(202);
+    expect(duplicatePending.status).toBe(202);
+    const nextPendingBody = (await nextPending.json()) as { data: { approvalId: string } };
+    const duplicatePendingBody = (await duplicatePending.json()) as { data: { approvalId: string } };
+    expect(nextPendingBody.data.approvalId).not.toBe(duplicatePendingBody.data.approvalId);
+    expect(nextPendingBody.data.approvalId).not.toBe(pendingBody.data.approvalId);
     expect(executions).toBe(1);
   });
 
@@ -3319,6 +3329,58 @@ describe("ConnectServer", () => {
     });
     expect(excessiveSteps.status).toBe(400);
     await expect(excessiveSteps.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+
+    const sameConnectionResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Review and update one account",
+        destinationConnectionId: input.sourceConnectionId,
+        tools: [
+          { ...input.tools[0], role: "source", approval: "always_allow" },
+          { ...input.tools[0], role: "destination", approval: "require_approval" },
+        ],
+      }),
+    });
+    expect(sameConnectionResponse.status).toBe(200);
+    await expect(sameConnectionResponse.json()).resolves.toMatchObject({
+      sourceConnectionId: "source-connection",
+      destinationConnectionId: "source-connection",
+      tools: [
+        { role: "source", approval: "always_allow" },
+        { role: "destination", approval: "require_approval" },
+      ],
+    });
+
+    const triggerList = await app.request("/api/flow-triggers", { headers: { authorization } });
+    expect(triggerList.status).toBe(200);
+    await expect(triggerList.json()).resolves.toMatchObject([
+      { flowId: created.id, flowName: updateInput.name, trigger: updateInput.trigger },
+    ]);
+
+    const eventResponse = await app.request(`/api/flow-triggers/${created.id}`, {
+      method: "PUT",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "event",
+        connectionId: "source-connection",
+        eventId: "example.item_created",
+        pollIntervalSeconds: 60,
+      }),
+    });
+    expect(eventResponse.status).toBe(200);
+    await expect(eventResponse.json()).resolves.toMatchObject({
+      id: created.id,
+      trigger: { type: "event", eventId: "example.item_created" },
+    });
+
+    const removeTriggerResponse = await app.request(`/api/flow-triggers/${created.id}`, {
+      method: "DELETE",
+      headers: { authorization },
+    });
+    expect(removeTriggerResponse.status).toBe(200);
+    await expect(removeTriggerResponse.json()).resolves.toMatchObject({ trigger: { type: "manual" } });
   });
 
   it("starts API-triggered Flows through runtime authentication", async () => {
@@ -3482,9 +3544,29 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
 }
 
 function createTestFlowService(): FlowService {
-  const catalog = createCatalogStore([{ ...apiKeyProvider, actions: [echoAction] }], {
-    executableActionIds: [echoAction.id],
-  });
+  const catalog = createCatalogStore(
+    [
+      {
+        ...apiKeyProvider,
+        events: [
+          {
+            id: "example.item_created",
+            displayName: "Item created",
+            description: "Runs when an item is created.",
+            polling: {
+              actionId: echoAction.id,
+              input: {},
+              result: { kind: "records", collectionField: "items", idFields: ["id"] },
+            },
+          },
+        ],
+        actions: [echoAction],
+      },
+    ],
+    {
+      executableActionIds: [echoAction.id],
+    },
+  );
   const connections: ConnectionSummary[] = [
     createFlowConnection("source-connection", "source"),
     createFlowConnection("destination-connection", "destination"),

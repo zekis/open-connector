@@ -259,7 +259,7 @@ describe("MCP server", () => {
     });
   });
 
-  it("waits for an exact MCP approval and returns that execution result", async () => {
+  it("returns immediately when an exact MCP action is queued for approval", async () => {
     const catalog = createCatalogStore([exampleProvider], { executableActionIds: [echoAction.id] });
     const providerLoader = new EchoProviderLoader();
     const connections = new ConnectionService({
@@ -284,22 +284,11 @@ describe("MCP server", () => {
       runs: new MemoryRunLogStore(),
       approvals: { requestAction: async () => ({ allowed: false, approval }) },
     });
-    const waitForExecution = vi.fn(async () => ({
-      ...approval,
-      status: "consumed" as const,
-      execution: {
-        executionId: "approved-execution",
-        auditPersisted: true,
-        result: { ok: true, output: { message: "sent once" } },
-        completedAt: "2026-08-09T01:01:00.000Z",
-      },
-    }));
     const server = createMcpServer({
       catalog,
       providerLoader,
       connections,
       actions,
-      approvals: { waitForExecution },
     });
     const client = new Client({ name: "mcp-test", version: "0.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -313,11 +302,16 @@ describe("MCP server", () => {
 
       expect(result.structuredContent).toEqual({
         ok: true,
-        data: { message: "sent once" },
-        executionId: "approved-execution",
-        auditPersisted: true,
+        data: {
+          status: "pending_approval",
+          queued: true,
+          approvalId: "approval-1",
+          actionId: echoAction.id,
+          connectionId: "example:default",
+          message: "example.echo was queued and is pending approval for Example Public.",
+        },
       });
-      expect(waitForExecution).toHaveBeenCalledWith("approval-1", expect.any(AbortSignal));
+      expect(result.isError).not.toBe(true);
     } finally {
       await client.close();
     }

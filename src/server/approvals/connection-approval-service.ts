@@ -112,10 +112,6 @@ export class ConnectionApprovalService {
       input: input.input,
       runtimeTokenId: input.runtimeTokenId,
     });
-    const pending = await this.options.store.findActionApproval(requestHash, "pending");
-    if (pending) {
-      return { allowed: false, approval: pending };
-    }
     const approval: ActionApproval = {
       id: crypto.randomUUID(),
       status: "pending",
@@ -230,19 +226,6 @@ export class ConnectionApprovalService {
     return updated;
   }
 
-  async waitForExecution(id: string, signal?: AbortSignal): Promise<ActionApproval> {
-    while (true) {
-      const approval = await this.options.store.getActionApproval(id);
-      if (!approval) {
-        throw new ConnectionApprovalError("approval_not_found", `Approval not found: ${id}.`, 404);
-      }
-      if (approval.execution || approval.status === "denied" || approval.status === "expired") {
-        return approval;
-      }
-      await waitForApprovalPoll(signal);
-    }
-  }
-
   async approve(id: string): Promise<ActionApproval> {
     const approval = await this.getPendingApproval(id);
     const now = new Date();
@@ -344,21 +327,4 @@ function readApprovalMode(value: unknown, field: string): ConnectionApprovalMode
     "invalid_connection_permissions",
     `${field} must be always_allow or require_approval.`,
   );
-}
-
-function waitForApprovalPoll(signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(signal.reason ?? new DOMException("The approval wait was aborted.", "AbortError"));
-  }
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, 250);
-    const abort = (): void => {
-      clearTimeout(timeout);
-      reject(signal?.reason ?? new DOMException("The approval wait was aborted.", "AbortError"));
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-  });
 }

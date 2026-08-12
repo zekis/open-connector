@@ -150,7 +150,7 @@ describe("ActionRunner", () => {
     });
   });
 
-  it("blocks globally gated actions before loading an executor and exposes the approval id", async () => {
+  it("queues globally gated actions before loading an executor and exposes the pending approval", async () => {
     const runs = new MemoryRunLogStore();
     const { logger } = createTestLogger();
     const providerLoader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
@@ -179,10 +179,12 @@ describe("ActionRunner", () => {
     expect(run?.result).toEqual({
       ok: false,
       error: {
-        code: "approval_required",
-        message: "Approval is required before example.echo can run on Example Public.",
+        code: "approval_pending",
+        message: "example.echo was queued and is pending approval for Example Public.",
         details: {
           approvalId: "approval-1",
+          status: "pending",
+          queued: true,
           actionId: echoAction.id,
           connectionId: "example:default",
         },
@@ -192,7 +194,7 @@ describe("ActionRunner", () => {
       expect.objectContaining({ actionId: echoAction.id, caller: "chat", input: { message: "hello" } }),
     );
     expect(loadExecutor).not.toHaveBeenCalled();
-    expect(runs.items[0]).toMatchObject({ ok: false, errorCode: "approval_required" });
+    expect(runs.items[0]).toMatchObject({ ok: false, errorCode: "approval_pending" });
   });
 
   it("bypasses the shared connector gate for callers that enforce approval themselves", async () => {

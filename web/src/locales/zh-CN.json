@@ -44,6 +44,7 @@
     "agents": "智能体",
     "chat": "聊天",
     "flows": "流程",
+    "triggers": "触发器",
     "approvals": "审批",
     "runs": "运行记录",
     "access": "API Key",
@@ -86,6 +87,10 @@
       "flows": {
         "title": "流程",
         "subtitle": "在两个连接之间运行聚焦的 Agent 同步。"
+      },
+      "triggers": {
+        "title": "触发器",
+        "subtitle": "通过计划、API 调用和连接器事件启动流程。"
       },
       "approvals": {
         "title": "审批",

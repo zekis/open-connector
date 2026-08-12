@@ -64,6 +64,7 @@ describe("action execution OpenAPI", () => {
         "For idempotency, idempotency_request_in_progress means the original request is still running or its outcome is uncertain, while idempotency_key_conflict means the key was reused for a different action, input, effective connection, or stored runtime token. Other runtime conflicts may return their own error code with the same status.",
       );
       expect(path.post.responses["403"]).toBeDefined();
+      expect(path.post.responses["202"]?.description).toBe("Action queued for approval.");
       expect(path.post.responses["429"]).toBeDefined();
       expect(path.post.description).toContain("24-hour replay window");
       expect(path.post.description).toContain("original HTTP status and body");
@@ -144,6 +145,10 @@ describe("action execution OpenAPI", () => {
     const triggerPath = document.paths["/v1/flows/{id}/trigger"] as {
       post: { description: string; responses: Record<string, unknown> };
     };
+    const triggerConfigurationPath = document.paths["/api/flow-triggers/{id}"] as {
+      put: { requestBody: { content: { "application/json": { schema: { $ref: string } } } } };
+      delete: { responses: Record<string, unknown> };
+    };
 
     expect(flowsPath.post.requestBody.content["application/json"].schema.$ref).toBe(
       "#/components/schemas/FlowDefinitionInput",
@@ -174,7 +179,11 @@ describe("action execution OpenAPI", () => {
     expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
     expect(definition.required).toContain("trigger");
     expect(input.properties).toHaveProperty("trigger");
-    expect(trigger.oneOf).toHaveLength(5);
+    expect(trigger.oneOf).toHaveLength(6);
+    expect(triggerConfigurationPath.put.requestBody.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/FlowTrigger",
+    );
+    expect(triggerConfigurationPath.delete.responses["200"]).toBeDefined();
     expect(triggerPath.post.description).toContain("runtime bearer token");
     expect(triggerPath.post.responses["200"]).toBeDefined();
     expect(triggerPath.post.responses["401"]).toBeDefined();
@@ -193,7 +202,7 @@ describe("action execution OpenAPI", () => {
     };
     const flowGrant = document.components.schemas.FlowToolGrant as {
       description: string;
-      properties: { approval: { enum: string[] } };
+      properties: { approval: { enum: string[] }; role: { description: string } };
     };
     const actionApproval = document.components.schemas.ActionApproval as {
       description: string;
@@ -207,8 +216,9 @@ describe("action execution OpenAPI", () => {
     );
     expect(approvalsPath.get.responses["200"]).toBeDefined();
     expect(approvePath.post.description).toContain("Executes this exact connector request once");
-    expect(approvePath.post.description).toContain("MCP callers resume automatically");
+    expect(approvePath.post.description).toContain("MCP and Runtime API callers already received");
     expect(flowGrant.properties.approval.enum).toEqual(["inherit", "always_allow", "require_approval"]);
+    expect(flowGrant.properties.role.description).toContain("Required when both endpoints use the same connection");
     expect(flowGrant.description).toContain("override");
     expect(actionApproval.description).toContain("never authorizes a matching retry");
     expect(actionApproval.properties).toHaveProperty("execution");

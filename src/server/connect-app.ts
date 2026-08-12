@@ -116,6 +116,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     getPolicySnapshot,
   });
   const flowTriggers = new FlowTriggerEngine({
+    catalog: options.catalog,
     flows,
     runner: flowRunner,
     store: options.runtimeDatabase.flowStore,

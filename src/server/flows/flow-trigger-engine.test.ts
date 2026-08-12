@@ -14,6 +14,8 @@ import type {
 } from "./flow-types.ts";
 
 import { describe, expect, it } from "vitest";
+import { createCatalogStore } from "../../catalog-store.ts";
+import { provider as outlookProvider } from "../../providers/outlook/definition.ts";
 import { FlowTriggerEngine } from "./flow-trigger-engine.ts";
 
 describe("FlowTriggerEngine", () => {
@@ -62,6 +64,31 @@ describe("FlowTriggerEngine", () => {
     });
   });
 
+  it("launches provider-declared connector events", async () => {
+    const harness = createHarness({
+      type: "event",
+      connectionId: "source-1",
+      eventId: "outlook.new_sent_email",
+      pollIntervalSeconds: 60,
+    });
+    harness.actions.outputs.push(
+      { messages: [{ id: "sent-1", subject: "Existing" }] },
+      { messages: [{ id: "sent-2", subject: "New sent message" }] },
+    );
+
+    await harness.engine.tick(new Date("2026-08-05T01:00:00.000Z"));
+    await harness.engine.tick(new Date("2026-08-05T01:01:00.000Z"));
+
+    expect(harness.actions.inputs[0]?.input).toMatchObject({ mailFolderId: "sentitems" });
+    expect(harness.starts[0]?.event).toMatchObject({
+      type: "event",
+      payload: {
+        eventId: "outlook.new_sent_email",
+        items: [{ id: "sent-2", subject: "New sent message" }],
+      },
+    });
+  });
+
   it("accepts API payloads only for API-triggered flows", async () => {
     const harness = createHarness({ type: "api" });
 
@@ -92,7 +119,7 @@ function createHarness(trigger: FlowTrigger): TriggerHarness {
   const actions = new StubActionRunner();
   const connection: ConnectionSummary = {
     id: "source-1",
-    service: trigger.type === "new_email" ? "outlook" : "obsidian",
+    service: trigger.type === "new_email" || trigger.type === "event" ? "outlook" : "obsidian",
     connectionName: "default",
     authType: "oauth2",
     configured: true,
@@ -101,6 +128,7 @@ function createHarness(trigger: FlowTrigger): TriggerHarness {
     profile: { accountId: "account-1", displayName: "Source", grantedScopes: [] },
   };
   const engine = new FlowTriggerEngine({
+    catalog: createCatalogStore([outlookProvider], { executableActionIds: ["outlook.list_messages"] }),
     flows: {
       async list(): Promise<FlowDefinition[]> {
         return [flow];

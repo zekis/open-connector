@@ -63,8 +63,43 @@ export interface ProviderDefinition {
   auth: AuthDefinition[];
   homepageUrl?: string;
   iconUrl?: string;
+  events?: ProviderEventDefinition[];
   actions: ActionDefinition[];
 }
+
+export interface ProviderEventDefinition {
+  id: string;
+  displayName: string;
+  description: string;
+  polling: ProviderEventPollingDefinition;
+}
+
+export interface ProviderEventPollingDefinition {
+  actionId: string;
+  input: Record<string, unknown>;
+  result: ProviderEventPollingResult;
+}
+
+export interface ProviderEventItemFilter {
+  field: string;
+  exists?: boolean;
+  equals?: string;
+}
+
+export interface ProviderEventRecordResult {
+  kind: "records";
+  collectionField: string;
+  idFields: string[];
+  include?: ProviderEventItemFilter;
+}
+
+export interface ProviderEventStringResult {
+  kind: "strings";
+  collectionField: string;
+  payloadField: string;
+}
+
+export type ProviderEventPollingResult = ProviderEventRecordResult | ProviderEventStringResult;
 
 export interface ConnectionRecord {
   id?: string;
@@ -176,12 +211,13 @@ export interface RuntimeActionResponse {
 export type FlowApprovalMode = "always_allow" | "require_approval";
 export type FlowApprovalSetting = FlowApprovalMode | "inherit";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
-export type FlowTriggerType = "manual" | "api" | "schedule" | "new_email" | "file_created";
+export type FlowTriggerType = "manual" | "api" | "schedule" | "event" | "new_email" | "file_created";
 
 export type FlowTrigger =
   | { type: "manual" }
   | { type: "api" }
   | { type: "schedule"; cron: string; timeZone: string }
+  | { type: "event"; connectionId: string; eventId: string; pollIntervalSeconds: number }
   | { type: "new_email"; connectionId: string; pollIntervalSeconds: number; query?: string }
   | {
       type: "file_created";
@@ -200,6 +236,7 @@ export interface FlowTriggerEvent {
 export interface FlowToolGrant {
   actionId: string;
   connectionId: string;
+  role?: "source" | "destination";
   approval: FlowApprovalSetting;
 }
 

@@ -24,4 +24,10 @@ Action definitions also declare provider-native `requiredScopes` and `providerPe
 runtime exposes those fields through HTTP and MCP discovery together with the current connection
 profile, so agents can see both the capability they are about to use and the account it will run as.
 
+Provider definitions may declare `events` for the Flow trigger builder. Each event owns a stable
+id, display metadata, and a polling recipe that names a read-only provider action, its static input,
+and the output collection/id mapping. Keep provider-specific mailbox filters, folders, and result
+shapes in this catalog metadata so trigger clients can offer named events without asking users to
+write provider-native queries.
+
 For the full contribution workflow, see `.codex/skills/add-provider/SKILL.md`.

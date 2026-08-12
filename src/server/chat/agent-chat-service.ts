@@ -535,7 +535,7 @@ function failedResumeResponse(error: AgentChatError): AgentChatResponse {
 }
 
 function approvalIdFromResult(result: ExecutionResult): string | undefined {
-  if (result.error?.code !== "approval_required" || !isRecord(result.error.details)) return undefined;
+  if (result.error?.code !== "approval_pending" || !isRecord(result.error.details)) return undefined;
   const approvalId = result.error.details.approvalId;
   return typeof approvalId === "string" && approvalId ? approvalId : undefined;
 }

@@ -254,6 +254,11 @@ export class ConnectServer {
       app.get("/api/flows/:id", (context) => this.getFlow(context, context.req.param("id")));
       app.put("/api/flows/:id", (context) => this.updateFlow(context, context.req.param("id")));
       app.delete("/api/flows/:id", (context) => this.deleteFlow(context, context.req.param("id")));
+      app.get("/api/flow-triggers", (context) => this.listFlowTriggers(context));
+      app.put("/api/flow-triggers/:flowId", (context) => this.updateFlowTrigger(context, context.req.param("flowId")));
+      app.delete("/api/flow-triggers/:flowId", (context) =>
+        this.deleteFlowTrigger(context, context.req.param("flowId")),
+      );
     }
     if (this.options.flowRunner) {
       app.post("/api/flows/:id/runs", (context) => this.startFlowRun(context, context.req.param("id")));
@@ -615,13 +620,6 @@ export class ConnectServer {
     }
 
     const result = await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant);
-    if (!result.body.success && result.body.errorCode === "approval_required") {
-      const abandoned = await this.options.idempotency.abandon({ keyHash, requestHash, claimId });
-      if (!abandoned) {
-        throw new Error("Idempotency claim was replaced before approval handoff.");
-      }
-      return writeRuntimeActionHttpResult(context, result);
-    }
     const completed = await this.options.idempotency.complete({
       keyHash,
       requestHash,
@@ -770,7 +768,6 @@ export class ConnectServer {
       providerLoader: this.options.providerLoader,
       connections: this.options.connections,
       actions: this.options.actions,
-      approvals: this.options.connectionApprovals,
       actionPolicy: this.actionPolicy,
       actionSearch: this.actionSearch,
       getPolicySnapshot: () => this.getPolicySnapshot(context),
@@ -888,6 +885,19 @@ export class ConnectServer {
 
   private async listFlows(context: Context): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowService().list());
+  }
+
+  private async listFlowTriggers(context: Context): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowService().listTriggers());
+  }
+
+  private async updateFlowTrigger(context: Context, flowId: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    return this.writeFlowResult(context, this.requiredFlowService().updateTrigger(flowId, body));
+  }
+
+  private async deleteFlowTrigger(context: Context, flowId: string): Promise<Response> {
+    return this.writeFlowResult(context, this.requiredFlowService().removeTrigger(flowId));
   }
 
   private async listConnectionPermissions(context: Context): Promise<Response> {

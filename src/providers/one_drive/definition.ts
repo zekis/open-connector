@@ -42,5 +42,36 @@ export const provider: ProviderDefinition = {
     },
   ],
   homepageUrl: "https://www.microsoft.com/microsoft-365/onedrive/online-cloud-storage",
+  events: [
+    {
+      id: "one_drive.file_created",
+      displayName: "File created",
+      description: "Runs when a new file appears in the root OneDrive folder.",
+      polling: {
+        actionId: "one_drive.list_folder_children",
+        input: {
+          top: 50,
+          orderBy: "createdDateTime desc",
+          select: [
+            "id",
+            "name",
+            "webUrl",
+            "size",
+            "createdDateTime",
+            "lastModifiedDateTime",
+            "parentReference",
+            "file",
+            "folder",
+          ],
+        },
+        result: {
+          kind: "records",
+          collectionField: "items",
+          idFields: ["id"],
+          include: { field: "file", exists: true },
+        },
+      },
+    },
+  ],
   actions: oneDriveActions,
 };

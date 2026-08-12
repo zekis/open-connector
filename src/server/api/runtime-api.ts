@@ -24,6 +24,13 @@ export interface RuntimeFailureEnvelope<TData = unknown> {
   meta: RuntimeResponseMeta;
 }
 
+export interface RuntimePendingApprovalEnvelope {
+  success: true;
+  message: "Queued for approval";
+  data: unknown;
+  meta: RuntimeResponseMeta;
+}
+
 export interface RuntimeProviderMetadata {
   service: string;
   displayName: string;
@@ -90,6 +97,7 @@ export interface RuntimeActionResultInput {
 /** HTTP status and JSON envelope persisted for idempotent action replay. */
 export type RuntimeActionHttpResult =
   | { status: 200; body: RuntimeSuccessEnvelope<unknown> }
+  | { status: 202; body: RuntimePendingApprovalEnvelope }
   | { status: RuntimeStatus; body: RuntimeFailureEnvelope };
 
 export function serializeRuntimeProvider(provider: ProviderDefinition): RuntimeProviderMetadata {
@@ -186,6 +194,18 @@ export function serializeRuntimeActionResult(input: RuntimeActionResultInput): R
     };
   }
 
+  if (result.error?.code === "approval_pending") {
+    return {
+      status: 202,
+      body: {
+        success: true,
+        message: "Queued for approval",
+        data: result.error.details ?? null,
+        meta,
+      },
+    };
+  }
+
   return serializeRuntimeFailure({
     status: mapExecutionErrorStatus(result.error?.code),
     errorCode: result.error?.code ?? "provider_error",
@@ -208,6 +228,10 @@ export function parseRuntimeActionHttpResult(value: unknown): RuntimeActionHttpR
 
   if (result.status === 200 && body.success === true && body.message === "OK") {
     return { status: 200, body: body as unknown as RuntimeSuccessEnvelope<unknown> };
+  }
+
+  if (result.status === 202 && body.success === true && body.message === "Queued for approval") {
+    return { status: 202, body: body as unknown as RuntimePendingApprovalEnvelope };
   }
 
   if (isRuntimeStatus(result.status) && body.success === false && typeof body.errorCode === "string") {
@@ -239,7 +263,7 @@ function mapExecutionErrorStatus(code: string | undefined): RuntimeStatus {
   if (code === "oauth_token_expired" || code === "oauth_refresh_unavailable") {
     return 409;
   }
-  if (code === "approval_required") {
+  if (code === "approval_pending") {
     return 409;
   }
   if (code === "connection_not_found" || code === "unknown_service") {
