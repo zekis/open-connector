@@ -63,11 +63,52 @@ describe("Sayna voice helpers", () => {
     expect(runtime.sockets[0]!.closed).toBe(false);
     client.close();
   });
+
+  it("serializes speech and drops stale progress before the final response", async () => {
+    const runtime = installVoiceRuntime();
+    const client = createClient();
+    const starting = client.startListening();
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await starting;
+
+    await client.speakProgress("Hmm, I'm checking that.");
+    await client.speakProgress("Okay, I'm checking Outlook now.");
+    await client.speakProgress("Yes, I can see the messages from Outlook.");
+    await client.speak("Here are today's important emails.");
+
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual(["Hmm, I'm checking that."]);
+    runtime.sockets[0]!.receive('{"type":"tts_playback_complete"}');
+    await vi.waitFor(() =>
+      expect(sentSpeech(runtime.sockets[0]!)).toEqual([
+        "Hmm, I'm checking that.",
+        "Here are today's important emails.",
+      ]),
+    );
+    client.close();
+  });
+
+  it("primes PCM playback with enough look-ahead for Chromium scheduling jitter", async () => {
+    const runtime = installVoiceRuntime();
+    const client = createClient();
+    const starting = client.startListening();
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await starting;
+    await client.speakProgress("Checking Outlook now.");
+
+    runtime.sockets[0]!.receive(new Int16Array(480).buffer);
+    await vi.waitFor(() => expect(runtime.playbackStarts).toHaveLength(1));
+
+    expect(runtime.playbackStarts[0]).toBeGreaterThanOrEqual(1.16);
+    client.close();
+  });
 });
 
 interface VoiceRuntime {
   sockets: FakeWebSocket[];
   track: { stop: ReturnType<typeof vi.fn> };
+  playbackStarts: number[];
 }
 
 class FakeWebSocket {
@@ -97,6 +138,7 @@ class FakeWebSocket {
 function installVoiceRuntime(): VoiceRuntime {
   const sockets: FakeWebSocket[] = [];
   const track = { stop: vi.fn() };
+  playbackStarts = [];
   vi.stubGlobal("window", {
     location: { href: "https://connector.example/chat" },
     setTimeout,
@@ -119,13 +161,16 @@ function installVoiceRuntime(): VoiceRuntime {
     },
   );
   vi.stubGlobal("AudioContext", FakeAudioContext);
-  return { sockets, track };
+  return { sockets, track, playbackStarts };
 }
+
+let playbackStarts: number[] = [];
 
 class FakeAudioContext {
   readonly sampleRate: number;
   readonly state = "running";
   readonly destination = {};
+  readonly currentTime = 1;
 
   constructor(options?: AudioContextOptions) {
     this.sampleRate = options?.sampleRate ?? 48_000;
@@ -143,6 +188,23 @@ class FakeAudioContext {
     return { connect: vi.fn(), disconnect: vi.fn(), gain: { value: 1 } as AudioParam };
   }
 
+  createBuffer(_channels: number, length: number, sampleRate: number): AudioBuffer {
+    return {
+      duration: length / sampleRate,
+      getChannelData: () => new Float32Array(length),
+    } as unknown as AudioBuffer;
+  }
+
+  createBufferSource(): AudioBufferSourceNode {
+    return {
+      buffer: null,
+      connect: vi.fn(),
+      start: (when?: number) => playbackStarts.push(when ?? 0),
+      stop: vi.fn(),
+      onended: null,
+    } as unknown as AudioBufferSourceNode;
+  }
+
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -150,6 +212,25 @@ class FakeAudioContext {
   resume(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+function createClient(): SaynaVoiceClient {
+  return new SaynaVoiceClient(createConfiguration(), {
+    onStateChange: () => {},
+    onListeningChange: () => {},
+    onTranscript: () => {},
+    onError: (message) => {
+      throw new Error(message);
+    },
+  });
+}
+
+function sentSpeech(socket: FakeWebSocket): string[] {
+  return socket.sent.flatMap((value) => {
+    if (typeof value !== "string") return [];
+    const parsed = JSON.parse(value) as { type?: unknown; text?: unknown };
+    return parsed.type === "speak" && typeof parsed.text === "string" ? [parsed.text] : [];
+  });
 }
 
 function createConfiguration() {

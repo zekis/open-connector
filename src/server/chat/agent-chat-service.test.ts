@@ -5,7 +5,7 @@ import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts"
 import type { AgentModelOption } from "../agents/agent-settings-service.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
-import type { AgentChatResponse } from "./agent-chat-types.ts";
+import type { AgentChatProgress, AgentChatResponse } from "./agent-chat-types.ts";
 
 import { describe, expect, it } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
@@ -76,9 +76,15 @@ describe("AgentChatService", () => {
     const actions = new FakeActionRunner();
     const service = createService(claude, actions);
 
-    const response = await service.respond({
-      messages: [{ role: "user", content: "Is record 42 active?" }],
-    });
+    const progress: AgentChatProgress[] = [];
+    const response = await service.respond(
+      {
+        messages: [{ role: "user", content: "Is record 42 active?" }],
+      },
+      (update) => {
+        progress.push(update);
+      },
+    );
 
     expect(response.message).toMatchObject({ role: "assistant", content: "Record 42 is active." });
     expect(response.status).toBe("completed");
@@ -111,6 +117,18 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.systemPrompt).toContain("call the action so the host can create the approval request");
     expect(claude.inputs[1]?.prompt).toContain("example.lookup");
     expect(claude.inputs[2]?.prompt).toContain("Record 42 is active");
+    expect(progress.map((update) => update.phase)).toEqual([
+      "tool_started",
+      "tool_completed",
+      "tool_started",
+      "tool_completed",
+    ]);
+    expect(progress.map((update) => update.speech)).toEqual([
+      "Hmm, I'm finding the right connection and action.",
+      "Okay, I found the connection and action I need.",
+      "Okay, I'm checking Example now.",
+      "Okay, Example completed that step.",
+    ]);
   });
 
   it("pauses on approval and resumes the exact action with saved agent context", async () => {

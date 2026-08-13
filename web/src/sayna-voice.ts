@@ -2,6 +2,8 @@ import type { SaynaVoiceConfiguration } from "./model";
 
 const microphoneSampleRate = 16_000;
 const voiceConnectionTimeoutMs = 30_000;
+const playbackBufferLeadSeconds = 0.16;
+const playbackSafetyMarginSeconds = 0.04;
 
 export type SaynaVoiceState = "offline" | "connecting" | "ready" | "listening" | "speaking" | "error";
 
@@ -33,6 +35,11 @@ interface VoiceConnectionWaiter {
   reject(error: Error): void;
 }
 
+interface QueuedSpeech {
+  text: string;
+  kind: "progress" | "response";
+}
+
 /** Browser voice session backed by Open Connector's authenticated Sayna bridge. */
 export class SaynaVoiceClient {
   private socket?: WebSocket;
@@ -46,6 +53,8 @@ export class SaynaVoiceClient {
   private playbackContext?: AudioContext;
   private playbackSources = new Set<AudioBufferSourceNode>();
   private nextPlaybackTime = 0;
+  private speechQueue: QueuedSpeech[] = [];
+  private speechInFlight?: QueuedSpeech;
   private finalTranscriptSegments: string[] = [];
   private incomingMessages = Promise.resolve();
   private playbackComplete = false;
@@ -112,11 +121,28 @@ export class SaynaVoiceClient {
   async speak(markdown: string): Promise<void> {
     const text = plainTextForSpeech(markdown);
     if (!text) return;
+    await this.queueSpeech({ text, kind: "response" });
+  }
+
+  async speakProgress(text: string): Promise<void> {
+    const normalized = plainTextForSpeech(text);
+    if (!normalized) return;
+    await this.queueSpeech({ text: normalized, kind: "progress" });
+  }
+
+  private async queueSpeech(speech: QueuedSpeech): Promise<void> {
     try {
       await this.ensureConnected();
       await this.resumePlayback();
-      this.interruptPlayback();
-      this.socket?.send(JSON.stringify({ type: "speak", text }));
+      if (this.closed || this.speechInFlight?.text === speech.text) return;
+      if (speech.kind === "response") {
+        this.speechQueue = this.speechQueue.filter((item) => item.kind === "response");
+      } else {
+        if (this.speechQueue.some((item) => item.kind === "response")) return;
+        this.speechQueue = this.speechQueue.filter((item) => item.kind !== "progress");
+      }
+      if (this.speechQueue.at(-1)?.text !== speech.text) this.speechQueue.push(speech);
+      this.startNextSpeech();
     } catch (error) {
       this.fail(describeVoiceError(error, "Could not speak the agent reply."));
     }
@@ -245,6 +271,7 @@ export class SaynaVoiceClient {
       return;
     }
     if (message.type === "tts_playback_complete") {
+      if (!this.speechInFlight) return;
       this.playbackComplete = true;
       if (this.playbackSources.size === 0) this.finishPlayback();
       return;
@@ -324,7 +351,7 @@ export class SaynaVoiceClient {
   }
 
   private async playPcm(value: ArrayBuffer): Promise<void> {
-    if (value.byteLength < 2) return;
+    if (value.byteLength < 2 || !this.speechInFlight) return;
     const context = await this.resumePlayback();
     const samples = new Int16Array(value, 0, Math.floor(value.byteLength / 2));
     const buffer = context.createBuffer(1, samples.length, this.configuration.ttsSampleRate ?? 24_000);
@@ -334,21 +361,21 @@ export class SaynaVoiceClient {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
-    const startAt = Math.max(context.currentTime + 0.01, this.nextPlaybackTime);
+    const hasBufferedAudio = this.nextPlaybackTime > context.currentTime + playbackSafetyMarginSeconds;
+    const startAt = hasBufferedAudio ? this.nextPlaybackTime : context.currentTime + playbackBufferLeadSeconds;
     this.nextPlaybackTime = startAt + buffer.duration;
     this.playbackSources.add(source);
     source.onended = () => {
       this.playbackSources.delete(source);
       if (this.playbackSources.size !== 0 || this.closed) return;
       if (this.playbackComplete) this.finishPlayback();
-      else if (this.state === "speaking") this.setState(this.microphoneStream ? "listening" : "ready");
     };
     source.start(startAt);
     this.setState("speaking");
   }
 
   private async resumePlayback(): Promise<AudioContext> {
-    this.playbackContext ??= new AudioContext();
+    this.playbackContext ??= new AudioContext({ latencyHint: "playback" });
     if (this.playbackContext.state === "suspended") await this.playbackContext.resume();
     return this.playbackContext;
   }
@@ -364,6 +391,8 @@ export class SaynaVoiceClient {
     this.playbackSources.clear();
     this.nextPlaybackTime = 0;
     this.playbackComplete = false;
+    this.speechQueue = [];
+    this.speechInFlight = undefined;
   }
 
   private interruptPlayback(): void {
@@ -374,7 +403,25 @@ export class SaynaVoiceClient {
 
   private finishPlayback(): void {
     this.playbackComplete = false;
-    if (!this.closed) this.setState(this.microphoneStream ? "listening" : "ready");
+    this.speechInFlight = undefined;
+    this.nextPlaybackTime = 0;
+    if (this.closed) return;
+    if (this.speechQueue.length > 0) {
+      this.startNextSpeech();
+      return;
+    }
+    this.setState(this.microphoneStream ? "listening" : "ready");
+  }
+
+  private startNextSpeech(): void {
+    if (this.speechInFlight || this.closed || this.socket?.readyState !== WebSocket.OPEN) return;
+    const speech = this.speechQueue.shift();
+    if (!speech) return;
+    this.speechInFlight = speech;
+    this.playbackComplete = false;
+    this.nextPlaybackTime = 0;
+    this.socket.send(JSON.stringify({ type: "speak", text: speech.text }));
+    this.setState("speaking");
   }
 
   private setState(state: SaynaVoiceState): void {

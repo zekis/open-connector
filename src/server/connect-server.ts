@@ -10,6 +10,7 @@ import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import type { ActionApproval, ActionApprovalExecution } from "./approvals/connection-approval-types.ts";
 import type { IAgentChatService } from "./chat/agent-chat-service.ts";
+import type { AgentChatStreamEvent } from "./chat/agent-chat-types.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
@@ -241,6 +242,7 @@ export class ConnectServer {
     }
     if (this.options.agentChat) {
       app.post("/api/agent-chat/messages", (context) => this.sendAgentChatMessage(context));
+      app.post("/api/agent-chat/messages/stream", (context) => this.streamAgentChatMessage(context));
       app.get("/api/agent-chat/approvals/:id", (context) =>
         this.getAgentChatApproval(context, context.req.param("id")),
       );
@@ -872,6 +874,41 @@ export class ConnectServer {
     }
   }
 
+  private async streamAgentChatMessage(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    const responseBody = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        const write = (event: AgentChatStreamEvent): void => {
+          if (cancelled) return;
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          } catch {
+            cancelled = true;
+          }
+        };
+        void this.options
+          .agentChat!.respond(body, (progress) => write({ type: "progress", progress }))
+          .then((response) => write({ type: "response", response }))
+          .catch((error: unknown) => write(agentChatStreamError(error)))
+          .finally(() => {
+            if (!cancelled) controller.close();
+          });
+      },
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    return new Response(responseBody, {
+      headers: {
+        "Cache-Control": "no-store, no-transform",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
   private async getAgentChatApproval(context: Context, approvalId: string): Promise<Response> {
     try {
       return context.json(await this.options.agentChat!.getApprovalResult(approvalId));
@@ -1455,6 +1492,12 @@ export class ConnectServer {
       throw new Error("Runtime policy is unavailable.");
     }
   }
+}
+
+function agentChatStreamError(error: unknown): AgentChatStreamEvent {
+  return error instanceof AgentChatError
+    ? { type: "error", error: { code: error.code, message: error.message } }
+    : { type: "error", error: { code: "agent_chat_failed", message: "Chat failed unexpectedly." } };
 }
 
 function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval, "requestHash" | "chat"> {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiDelete, ApiError, apiGet } from "./api";
+import { apiDelete, ApiError, apiGet, apiPostNdjson } from "./api";
 
 describe("readJson", () => {
   afterEach(() => {
@@ -39,6 +39,30 @@ describe("readJson", () => {
     stubFetch(new Response("<html>502</html>", { status: 502 }));
 
     await expect(apiGet("/api/providers")).rejects.toThrow("Request failed with 502");
+  });
+
+  it("decodes NDJSON items split across browser stream chunks", async () => {
+    const encoder = new TextEncoder();
+    stubFetch(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"type":"progress","value":'));
+            controller.enqueue(encoder.encode('1}\n{"type":"response","value":2}\n'));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "application/x-ndjson" } },
+      ),
+    );
+    const items: unknown[] = [];
+
+    await apiPostNdjson("/api/agent-chat/messages/stream", { messages: [] }, (item) => items.push(item));
+
+    expect(items).toEqual([
+      { type: "progress", value: 1 },
+      { type: "response", value: 2 },
+    ]);
   });
 });
 

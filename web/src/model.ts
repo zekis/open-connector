@@ -378,6 +378,13 @@ export interface AgentChatToolActivity {
   output: unknown;
 }
 
+export interface AgentChatProgress {
+  id: string;
+  phase: "tool_started" | "tool_completed";
+  message: string;
+  speech: string;
+}
+
 export interface AgentChatResponse {
   status: "completed" | "waiting_for_approval" | "failed";
   approvalId?: string;
@@ -393,6 +400,11 @@ export interface AgentChatApprovalResult {
   status: ActionApproval["status"];
   response?: AgentChatResponse;
 }
+
+export type AgentChatStreamEvent =
+  | { type: "progress"; progress: AgentChatProgress }
+  | { type: "response"; response: AgentChatResponse }
+  | { type: "error"; error: { code: string; message: string } };
 
 export interface SaynaVoiceConfiguration {
   available: boolean;

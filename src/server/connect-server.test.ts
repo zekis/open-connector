@@ -21,7 +21,7 @@ import type {
   ConnectionActionPermission,
   IConnectionApprovalStore,
 } from "./approvals/connection-approval-types.ts";
-import type { AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
+import type { AgentChatProgressListener, AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { FlowRunDetail } from "./flows/flow-runner.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type {
@@ -209,7 +209,15 @@ describe("ConnectServer", () => {
       toolActivity: [],
     };
     const agentChat: IAgentChatService = {
-      respond: vi.fn(async () => response),
+      respond: vi.fn(async (_input: unknown, onProgress?: AgentChatProgressListener) => {
+        await onProgress?.({
+          id: "progress-1",
+          phase: "tool_started",
+          message: "Checking Example…",
+          speech: "Okay, I'm checking Example now.",
+        });
+        return response;
+      }),
       resume: vi.fn(async () => response),
       getApprovalResult: vi.fn(async (approvalId: string) => ({ approvalId, status: "pending" as const })),
     };
@@ -235,6 +243,32 @@ describe("ConnectServer", () => {
     expect(authorized.status).toBe(200);
     await expect(authorized.json()).resolves.toEqual(response);
     expect(agentChat.respond).toHaveBeenCalledWith(body);
+
+    const streamed = await app.request("/api/agent-chat/messages/stream", {
+      method: "POST",
+      headers: { authorization: "Bearer local-token", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(streamed.status).toBe(200);
+    expect(streamed.headers.get("content-type")).toContain("application/x-ndjson");
+    expect(streamed.headers.get("x-accel-buffering")).toBe("no");
+    expect(
+      (await streamed.text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      {
+        type: "progress",
+        progress: {
+          id: "progress-1",
+          phase: "tool_started",
+          message: "Checking Example…",
+          speech: "Okay, I'm checking Example now.",
+        },
+      },
+      { type: "response", response },
+    ]);
 
     const approvalStatus = await app.request("/api/agent-chat/approvals/approval-1", {
       headers: { authorization: "Bearer local-token" },

@@ -31,6 +31,40 @@ export async function apiPost<T = unknown>(path: string, body: unknown, options:
   );
 }
 
+export async function apiPostNdjson<T>(
+  path: string,
+  body: unknown,
+  onItem: (item: T) => void,
+  options: RequestOptions = {},
+): Promise<void> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: headersFor(options, true),
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = parseJson(await response.text());
+    throw new ApiError(response.status, errorMessage(payload) ?? `Request failed with ${response.status}`);
+  }
+  if (!response.body) {
+    throw new ApiError(response.status, "Chat streaming is unavailable in this browser or proxy.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    pending += decoder.decode(value, { stream: !done });
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) emitNdjsonLine(line, onItem, response.status);
+    if (done) break;
+  }
+  emitNdjsonLine(pending, onItem, response.status);
+}
+
 export async function apiPut<T = unknown>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
   return readJson<T>(
     await fetch(path, {
@@ -106,4 +140,13 @@ function errorMessage(payload: unknown): string | undefined {
     return typeof error.message === "string" ? error.message : undefined;
   }
   return undefined;
+}
+
+function emitNdjsonLine<T>(line: string, onItem: (item: T) => void, status: number): void {
+  if (!line.trim()) return;
+  const item = parseJson(line);
+  if (item === undefined) {
+    throw new ApiError(status, "Chat returned an invalid streaming response.");
+  }
+  onItem(item as T);
 }

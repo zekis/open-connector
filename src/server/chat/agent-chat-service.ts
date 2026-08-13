@@ -10,6 +10,8 @@ import type { ConnectionApprovalService } from "../approvals/connection-approval
 import type {
   AgentChatApprovalResult,
   AgentChatMessage,
+  AgentChatProgress,
+  AgentChatProgressListener,
   AgentChatResponse,
   AgentChatToolActivity,
 } from "./agent-chat-types.ts";
@@ -27,6 +29,8 @@ import { ConnectionApprovalError } from "../approvals/connection-approval-servic
 export type {
   AgentChatApprovalResult,
   AgentChatMessage,
+  AgentChatProgress,
+  AgentChatProgressListener,
   AgentChatResponse,
   AgentChatToolActivity,
 } from "./agent-chat-types.ts";
@@ -46,7 +50,7 @@ export interface AgentChatServiceOptions {
 }
 
 export interface IAgentChatService {
-  respond(input: unknown): Promise<AgentChatResponse>;
+  respond(input: unknown, onProgress?: AgentChatProgressListener): Promise<AgentChatResponse>;
   resume(approvalId: string): Promise<AgentChatResponse>;
   getApprovalResult(approvalId: string): Promise<AgentChatApprovalResult>;
 }
@@ -56,6 +60,7 @@ interface ChatContext {
   connectionsById: Map<string, ConnectionSummary>;
   actions: RuntimeActionDefinition[];
   actionsById: Map<string, RuntimeActionDefinition>;
+  providerDisplayNamesByService: Map<string, string>;
   actionSearch: ReturnType<typeof buildActionSearchIndex>;
   policy: ActionPolicySnapshot;
 }
@@ -116,9 +121,11 @@ export class AgentChatService implements IAgentChatService {
     this.options = options;
   }
 
-  async respond(input: unknown): Promise<AgentChatResponse> {
+  async respond(input: unknown, onProgress?: AgentChatProgressListener): Promise<AgentChatResponse> {
     const messages = readMessages(input);
-    return await this.withErrorHandling(async () => this.continueConversation(messages, await this.prepareChat(), []));
+    return await this.withErrorHandling(async () =>
+      this.continueConversation(messages, await this.prepareChat(), [], onProgress),
+    );
   }
 
   async resume(approvalId: string): Promise<AgentChatResponse> {
@@ -206,6 +213,7 @@ export class AgentChatService implements IAgentChatService {
     messages: AgentChatMessage[],
     prepared: PreparedChat,
     initialToolActivity: AgentChatToolActivity[],
+    onProgress?: AgentChatProgressListener,
   ): Promise<AgentChatResponse> {
     const toolActivity = [...initialToolActivity];
     for (let step = 0; step <= maxToolSteps; step++) {
@@ -233,7 +241,9 @@ export class AgentChatService implements IAgentChatService {
       if (step === maxToolSteps) {
         throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
       }
+      await emitProgress(onProgress, toolStartedProgress(decision.toolName, decision.arguments, prepared.context));
       const activity = await this.runTool(decision.toolName, decision.arguments, prepared.context);
+      await emitProgress(onProgress, toolCompletedProgress(activity, prepared.context));
       if (activity.approvalId) {
         await this.options.approvals.attachChatContinuation(activity.approvalId, messages, toolActivity);
         return waitingResponse(activity.approvalId, [...toolActivity, activity]);
@@ -280,6 +290,9 @@ export class AgentChatService implements IAgentChatService {
       connectionsById: new Map(connections.map((connection) => [connection.id, connection])),
       actions,
       actionsById: new Map(actions.map((action) => [action.id, action])),
+      providerDisplayNamesByService: new Map(
+        this.options.catalog.providers.map((provider) => [provider.service, provider.displayName]),
+      ),
       actionSearch: buildActionSearchIndex(actions),
       policy,
     };
@@ -492,6 +505,102 @@ function failedActivity(
     input: boundedValue(input),
     output: { error },
   };
+}
+
+async function emitProgress(
+  listener: AgentChatProgressListener | undefined,
+  progress: AgentChatProgress,
+): Promise<void> {
+  await listener?.(progress);
+}
+
+function toolStartedProgress(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ChatContext,
+): AgentChatProgress {
+  if (toolName === searchToolName) {
+    return createProgress(
+      "tool_started",
+      "Finding the right connected action…",
+      "Hmm, I'm finding the right connection and action.",
+    );
+  }
+
+  const action = typeof input.actionId === "string" ? context.actionsById.get(input.actionId) : undefined;
+  const providerName = action ? providerDisplayName(action.service, context) : "the connected app";
+  return createProgress(
+    "tool_started",
+    action ? `Running ${humanizeActionName(action.name)} in ${providerName}…` : "Running the connected action…",
+    `Okay, I'm checking ${providerName} now.`,
+  );
+}
+
+function toolCompletedProgress(activity: AgentChatToolActivity, context: ChatContext): AgentChatProgress {
+  if (activity.type === "search") {
+    const matches = searchResultCount(activity.output);
+    if (!activity.ok || matches === 0) {
+      return createProgress(
+        "tool_completed",
+        "No matching connected action was found.",
+        "Hmm, I couldn't find a matching connected action yet.",
+      );
+    }
+    return createProgress(
+      "tool_completed",
+      `Found ${matches} matching connected action${matches === 1 ? "" : "s"}.`,
+      "Okay, I found the connection and action I need.",
+    );
+  }
+
+  const action = activity.actionId ? context.actionsById.get(activity.actionId) : undefined;
+  const providerName = action ? providerDisplayName(action.service, context) : "the connected app";
+  if (activity.approvalId) {
+    return createProgress(
+      "tool_completed",
+      `${providerName} is waiting for approval before ${action ? humanizeActionName(action.name) : "the action"}.`,
+      "I need your approval before I can continue. You can approve the request here in Chat.",
+    );
+  }
+  if (!activity.ok) {
+    return createProgress(
+      "tool_completed",
+      `${providerName} could not complete ${action ? humanizeActionName(action.name) : "the action"}.`,
+      `Hmm, ${providerName} couldn't complete that step. I'm checking what happened.`,
+    );
+  }
+
+  const readableSubject = action ? readableActionSubject(action.name) : undefined;
+  return createProgress(
+    "tool_completed",
+    `${providerName} completed ${action ? humanizeActionName(action.name) : "the action"}.`,
+    readableSubject
+      ? `Yes, I can see the ${readableSubject} from ${providerName}.`
+      : `Okay, ${providerName} completed that step.`,
+  );
+}
+
+function createProgress(phase: AgentChatProgress["phase"], message: string, speech: string): AgentChatProgress {
+  return { id: crypto.randomUUID(), phase, message, speech };
+}
+
+function providerDisplayName(service: string, context: ChatContext): string {
+  return context.providerDisplayNamesByService.get(service) ?? humanizeActionName(service);
+}
+
+function humanizeActionName(value: string): string {
+  const words = value.replace(/[._-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "connected action";
+}
+
+function readableActionSubject(actionName: string): string | undefined {
+  const match = /^(?:get|list|search|find|read|fetch)_+(.+)$/i.exec(actionName);
+  return match?.[1]?.replace(/_+/g, " ");
+}
+
+function searchResultCount(output: unknown): number {
+  if (!isRecord(output) || !Array.isArray(output.results)) return 0;
+  return output.results.length;
 }
 
 function completedResponse(content: string, toolActivity: AgentChatToolActivity[]): AgentChatResponse {

@@ -1,7 +1,9 @@
 import type {
   AgentChatApprovalResult,
   AgentChatMessage,
+  AgentChatProgress,
   AgentChatResponse,
+  AgentChatStreamEvent,
   AgentChatToolActivity,
   AppData,
   SaynaVoiceConfiguration,
@@ -31,7 +33,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { apiDelete, apiGet, apiPost, apiPut } from "./api";
+import { apiDelete, apiGet, apiPost, apiPostNdjson, apiPut } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
 import { evaluatePolicy, policyLayers } from "./policy";
 import { SaynaVoiceClient } from "./sayna-voice";
@@ -66,7 +68,7 @@ interface ChatSession {
 
 const chatSessionStorageKey = "open-connector.agent-chat-session.v1";
 const voiceWorkingCueDelayMs = 1_200;
-const voiceWorkingCue = "I'm working on that with your connected apps.";
+const voiceWorkingCue = "Hmm, let me check that.";
 const voiceApprovalCue = "I need your approval before I can continue. You can approve the request here in Chat.";
 
 const suggestions = [
@@ -79,6 +81,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const [session, setSession] = useState<ChatSession>(readStoredChatSession);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [agentProgress, setAgentProgress] = useState<AgentChatProgress>();
   const [approvalDecision, setApprovalDecision] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -96,7 +99,6 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const voiceRepliesRef = useRef(false);
   const queuedVoiceTurnsRef = useRef<string[]>([]);
   const workingCueTimerRef = useRef<number | undefined>(undefined);
-  const workingCueActiveRef = useRef(false);
   const spokenMessageIds = useRef(new Set(session.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
@@ -252,11 +254,27 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     sendingRef.current = true;
     setSending(true);
     setError(null);
-    if (source === "voice") startWorkingCue();
+    setAgentProgress(undefined);
+    if (voiceRepliesRef.current) startWorkingCue();
     try {
-      const response = await apiPost<AgentChatResponse>("/api/agent-chat/messages", {
-        messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
-      });
+      let response: AgentChatResponse | undefined;
+      await apiPostNdjson<AgentChatStreamEvent>(
+        "/api/agent-chat/messages/stream",
+        {
+          messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+        },
+        (event) => {
+          if (event.type === "error") throw new Error(event.error.message);
+          if (event.type === "response") {
+            response = event.response;
+            return;
+          }
+          stopWorkingCue();
+          setAgentProgress(event.progress);
+          if (voiceRepliesRef.current) void voiceClientRef.current?.speakProgress(event.progress.speech);
+        },
+      );
+      if (!response) throw new Error("Chat ended before Claude returned a response.");
       const assistantMessage: DisplayMessage = {
         ...response.message,
         toolActivity: response.toolActivity,
@@ -273,6 +291,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
     } finally {
       stopWorkingCue();
+      setAgentProgress(undefined);
       sendingRef.current = false;
       setSending(false);
     }
@@ -313,6 +332,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     setDraft("");
     setError(null);
     setVoiceError(null);
+    setAgentProgress(undefined);
   }
 
   function toggleVoiceInput(): void {
@@ -364,17 +384,13 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     workingCueTimerRef.current = window.setTimeout(() => {
       workingCueTimerRef.current = undefined;
       if (!sendingRef.current || !voiceRepliesRef.current) return;
-      workingCueActiveRef.current = true;
-      void voiceClientRef.current?.speak(voiceWorkingCue);
+      void voiceClientRef.current?.speakProgress(voiceWorkingCue);
     }, voiceWorkingCueDelayMs);
   }
 
   function stopWorkingCue(): void {
     if (workingCueTimerRef.current !== undefined) window.clearTimeout(workingCueTimerRef.current);
     workingCueTimerRef.current = undefined;
-    if (!workingCueActiveRef.current) return;
-    workingCueActiveRef.current = false;
-    voiceClientRef.current?.stopSpeaking();
   }
 
   const connectionSummary = `${connectedServices.size} connected application${connectedServices.size === 1 ? "" : "s"}`;
@@ -469,7 +485,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
                 </span>
                 <div className="chat-bubble assistant thinking">
                   <Loader2 className="spin" size={16} aria-hidden="true" />
-                  <span>Claude is working with your connections…</span>
+                  <span>{agentProgress?.message ?? "Claude is working with your connections…"}</span>
                 </div>
               </div>
             ) : null}
