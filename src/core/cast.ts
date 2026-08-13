@@ -246,6 +246,22 @@ export function optionalNumber(value: unknown): number | undefined {
 }
 
 /**
+ * Return a finite number or throw a caller-provided error.
+ */
+export function requiredNumber(
+  value: unknown,
+  fieldName: string,
+  createError: CastErrorFactory = (message) => new CastError(message),
+): number {
+  const result = optionalNumber(value);
+  if (result !== undefined) {
+    return result;
+  }
+
+  throw createError(`${fieldName} must be a number`);
+}
+
+/**
  * Return an integer from a number or numeric string. Examples:
  * `integer("2", "count") => 2`, `integer("x", "count")` throws.
  */

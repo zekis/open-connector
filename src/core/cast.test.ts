@@ -4,6 +4,7 @@ import {
   optionalStringArray,
   positiveInteger,
   requiredBoolean,
+  requiredNumber,
   requiredRawString,
   requiredStringArray,
 } from "./cast.ts";
@@ -35,6 +36,12 @@ describe("cast helpers", () => {
   it("requires a boolean without coercion", () => {
     expect(requiredBoolean(false, "enabled")).toBe(false);
     expect(() => requiredBoolean(0, "enabled")).toThrow("enabled must be a boolean");
+  });
+
+  it("requires a finite number without coercion", () => {
+    expect(requiredNumber(1.25, "amount")).toBe(1.25);
+    expect(() => requiredNumber("1.25", "amount")).toThrow("amount must be a number");
+    expect(() => requiredNumber(Number.POSITIVE_INFINITY, "amount")).toThrow("amount must be a number");
   });
 
   it("reads an array containing only strings", () => {
