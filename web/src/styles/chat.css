@@ -51,6 +51,112 @@
   font-size: 12px;
 }
 
+.chat-context-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-voice-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-voice-state.ready,
+.chat-voice-state.speaking {
+  border-color: color-mix(in oklab, var(--success) 35%, var(--border));
+  color: var(--success);
+}
+
+.chat-voice-state.connecting svg {
+  animation: chat-voice-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-voice-state.listening {
+  border-color: color-mix(in oklab, var(--destructive) 42%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 7%, var(--background));
+  color: var(--destructive);
+}
+
+.chat-voice-state.listening svg {
+  animation: chat-voice-pulse 0.9s ease-in-out infinite;
+}
+
+.chat-voice-state.error {
+  border-color: color-mix(in oklab, var(--destructive) 35%, var(--border));
+  color: var(--destructive);
+}
+
+.chat-voice-settings-dialog {
+  max-width: min(520px, calc(100vw - 2rem));
+}
+
+.chat-voice-settings-form {
+  display: grid;
+  gap: 18px;
+}
+
+.chat-voice-provider {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--primary) 5%, var(--background));
+}
+
+.chat-voice-provider > svg {
+  color: var(--primary);
+}
+
+.chat-voice-provider > span {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-voice-provider small,
+.chat-voice-settings-form .field small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.chat-voice-settings-form .field {
+  display: grid;
+  gap: 7px;
+}
+
+.chat-voice-settings-status {
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.chat-voice-settings-actions {
+  justify-content: space-between;
+}
+
+@keyframes chat-voice-pulse {
+  50% {
+    opacity: 0.38;
+    transform: scale(0.88);
+  }
+}
+
 .chat-agent-icon,
 .chat-avatar,
 .chat-welcome-icon {
@@ -503,17 +609,22 @@
 .chat-composer textarea {
   min-height: 78px;
   max-height: 180px;
-  padding: 13px 54px 13px 14px;
+  padding: 13px 102px 13px 14px;
   resize: none;
   border-radius: 14px;
   background: var(--background);
   line-height: 1.45;
 }
 
-.chat-composer-box > button {
+.chat-composer-actions {
   position: absolute;
   right: 10px;
   bottom: 10px;
+  display: flex;
+  gap: 7px;
+}
+
+.chat-composer-actions > button {
   border-radius: 10px;
 }
 
@@ -542,6 +653,15 @@
 
   .chat-context-bar {
     align-items: flex-start;
+  }
+
+  .chat-context-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .chat-voice-state {
+    order: 3;
   }
 
   .chat-agent-state small {

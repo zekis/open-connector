@@ -4,11 +4,14 @@ import type {
   AgentChatResponse,
   AgentChatToolActivity,
   AppData,
+  SaynaVoiceConfiguration,
 } from "./model";
+import type { SaynaVoiceState } from "./sayna-voice";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
 import {
   Bot,
+  AudioWaveform,
   Cable,
   Check,
   CircleCheck,
@@ -16,17 +19,33 @@ import {
   Clock3,
   Loader2,
   MessageCircle,
+  Mic,
+  MicOff,
+  Settings2,
   Send,
   Trash2,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { apiGet, apiPost } from "./api";
+import { apiDelete, apiGet, apiPost, apiPut } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
 import { evaluatePolicy, policyLayers } from "./policy";
+import { SaynaVoiceClient } from "./sayna-voice";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 interface DisplayMessage extends AgentChatMessage {
@@ -59,7 +78,15 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const [sending, setSending] = useState(false);
   const [approvalDecision, setApprovalDecision] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceConfiguration, setVoiceConfiguration] = useState<SaynaVoiceConfiguration>();
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  const [voiceState, setVoiceState] = useState<SaynaVoiceState>("offline");
+  const [voiceReplies, setVoiceReplies] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
+  const sendVoiceMessageRef = useRef<(value: string) => Promise<void>>(async () => {});
+  const spokenMessageIds = useRef(new Set(session.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
   const agentConnection = props.data.agentConnections?.find((connection) => connection.provider === "claude_code");
@@ -98,6 +125,47 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   useEffect(() => {
     storeChatSession(session);
   }, [session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiGet<SaynaVoiceConfiguration>("/api/agent-chat/voice/config")
+      .then((configuration) => {
+        if (!cancelled) setVoiceConfiguration(configuration);
+      })
+      .catch(() => {
+        // Cloudflare and older Node runtimes do not expose the optional voice bridge.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!voiceConfiguration?.enabled || !voiceConfiguration.websocketPath) return;
+    const client = new SaynaVoiceClient(voiceConfiguration, {
+      onStateChange: setVoiceState,
+      onTranscript: (transcript) => {
+        setDraft(transcript.text);
+        if (transcript.speechFinal && transcript.text) {
+          setDraft("");
+          void sendVoiceMessageRef.current(transcript.text);
+        }
+      },
+      onError: setVoiceError,
+    });
+    voiceClientRef.current = client;
+    return () => {
+      client.close();
+      if (voiceClientRef.current === client) voiceClientRef.current = undefined;
+    };
+  }, [voiceConfiguration]);
+
+  useEffect(() => {
+    const lastMessage = messages.at(-1);
+    if (!lastMessage || lastMessage.role !== "assistant" || spokenMessageIds.current.has(lastMessage.id)) return;
+    spokenMessageIds.current.add(lastMessage.id);
+    if (voiceReplies && !pendingApproval) void voiceClientRef.current?.speak(lastMessage.content);
+  }, [messages, pendingApproval, voiceReplies]);
 
   useEffect(() => {
     if (!pendingApproval) return;
@@ -172,6 +240,8 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     }
   }
 
+  sendVoiceMessageRef.current = sendMessage;
+
   async function decideApproval(decision: "approve" | "deny"): Promise<void> {
     if (!pendingApproval || approvalDecision) return;
     if (decision === "deny" && !window.confirm("Deny this connector action and stop the waiting Chat?")) return;
@@ -198,9 +268,31 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }
 
   function resetChat(): void {
+    voiceClientRef.current?.stopSpeaking();
     setSession({ messages: [] });
     setDraft("");
     setError(null);
+    setVoiceError(null);
+  }
+
+  function toggleVoiceInput(): void {
+    const client = voiceClientRef.current;
+    if (!client) return;
+    setVoiceError(null);
+    setVoiceReplies(true);
+    if (voiceState === "listening") {
+      client.stopListening();
+      return;
+    }
+    void client.startListening();
+  }
+
+  function toggleVoiceReplies(): void {
+    const enabled = !voiceReplies;
+    setVoiceReplies(enabled);
+    setVoiceError(null);
+    if (enabled) void voiceClientRef.current?.preparePlayback();
+    else voiceClientRef.current?.stopSpeaking();
   }
 
   const connectionSummary = `${connectedServices.size} connected application${connectedServices.size === 1 ? "" : "s"}`;
@@ -230,12 +322,44 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             </small>
           </span>
         </div>
-        {messages.length > 0 ? (
-          <Button variant="outline" size="sm" onClick={resetChat} disabled={sending || Boolean(pendingApproval)}>
-            <Trash2 size={14} aria-hidden="true" />
-            New chat
-          </Button>
-        ) : null}
+        <div className="chat-context-actions">
+          {voiceConfiguration?.enabled ? (
+            <>
+              <span className={`chat-voice-state ${voiceState}`} title="Voice input and output provided by Sayna">
+                <AudioWaveform size={14} aria-hidden="true" />
+                {voiceStateLabel(voiceState)}
+              </span>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={toggleVoiceReplies}
+                aria-label={voiceReplies ? "Disable spoken agent replies" : "Enable spoken agent replies"}
+                aria-pressed={voiceReplies}
+                title={voiceReplies ? "Spoken replies enabled" : "Enable spoken replies"}
+              >
+                {voiceReplies ? <Volume2 size={15} /> : <VolumeX size={15} />}
+              </Button>
+            </>
+          ) : null}
+          {voiceConfiguration?.available ? (
+            <Button
+              variant="outline"
+              size={voiceConfiguration.configured ? "icon-sm" : "sm"}
+              onClick={() => setVoiceSettingsOpen(true)}
+              aria-label="Configure Sayna voice"
+              title="Configure Sayna voice"
+            >
+              <Settings2 size={15} aria-hidden="true" />
+              {voiceConfiguration.configured ? null : "Set up voice"}
+            </Button>
+          ) : null}
+          {messages.length > 0 ? (
+            <Button variant="outline" size="sm" onClick={resetChat} disabled={sending || Boolean(pendingApproval)}>
+              <Trash2 size={14} aria-hidden="true" />
+              New chat
+            </Button>
+          ) : null}
+        </div>
       </section>
 
       <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
@@ -271,7 +395,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       </div>
 
       <form className="chat-composer" onSubmit={(event) => void submit(event)}>
-        {error ? <div className="chat-error">{error}</div> : null}
+        {error || voiceError ? <div className="chat-error">{error ?? voiceError}</div> : null}
         <div className="chat-composer-box">
           <Textarea
             value={draft}
@@ -280,26 +404,178 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             placeholder={
               pendingApproval
                 ? "Waiting for the pending approval…"
-                : agentConnection
-                  ? "Ask Claude to find, explain, or do something…"
-                  : "Set up Claude to start chatting"
+                : voiceState === "listening"
+                  ? "Listening with Sayna…"
+                  : agentConnection
+                    ? "Ask Claude to find, explain, or do something…"
+                    : "Set up Claude to start chatting"
             }
             aria-label="Message Claude"
             disabled={!agentConnection || sending || Boolean(pendingApproval)}
             rows={3}
           />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!agentConnection || sending || Boolean(pendingApproval) || !draft.trim()}
-            aria-label="Send message"
-          >
-            {sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-          </Button>
+          <div className="chat-composer-actions">
+            {voiceConfiguration?.enabled ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={voiceState === "listening" ? "destructive" : "outline"}
+                onClick={toggleVoiceInput}
+                disabled={!agentConnection || sending || Boolean(pendingApproval) || voiceState === "connecting"}
+                aria-label={voiceState === "listening" ? "Stop listening" : "Talk with Sayna"}
+                aria-pressed={voiceState === "listening"}
+                title={voiceState === "listening" ? "Stop listening" : "Talk with Sayna"}
+              >
+                {voiceState === "connecting" ? (
+                  <Loader2 className="spin" size={17} />
+                ) : voiceState === "listening" ? (
+                  <MicOff size={17} />
+                ) : (
+                  <Mic size={17} />
+                )}
+              </Button>
+            ) : null}
+            <Button
+              type="submit"
+              size="icon"
+              disabled={!agentConnection || sending || Boolean(pendingApproval) || !draft.trim()}
+              aria-label="Send message"
+            >
+              {sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+            </Button>
+          </div>
         </div>
-        <p>Enter to send · Shift+Enter for a new line · Connector actions follow your runtime policy.</p>
+        <p>
+          {voiceConfiguration?.enabled ? "Sayna voice · " : ""}Enter to send · Shift+Enter for a new line · Connector
+          actions follow your runtime policy.
+        </p>
       </form>
+      {voiceConfiguration?.available ? (
+        <SaynaVoiceSettingsDialog
+          open={voiceSettingsOpen}
+          configuration={voiceConfiguration}
+          onOpenChange={setVoiceSettingsOpen}
+          onSaved={(configuration) => {
+            setVoiceConfiguration(configuration);
+            setVoiceError(null);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function SaynaVoiceSettingsDialog(props: {
+  open: boolean;
+  configuration: SaynaVoiceConfiguration;
+  onOpenChange(open: boolean): void;
+  onSaved(configuration: SaynaVoiceConfiguration): void;
+}): ReactNode {
+  const [apiKey, setApiKey] = useState("");
+  const [voiceId, setVoiceId] = useState(props.configuration.voiceId);
+  const [busy, setBusy] = useState<"save" | "delete" | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!props.open) return;
+    setApiKey("");
+    setVoiceId(props.configuration.voiceId);
+    setStatus(null);
+  }, [props.open]);
+
+  async function save(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    setBusy("save");
+    setStatus(null);
+    try {
+      const configuration = await apiPut<SaynaVoiceConfiguration>("/api/agent-chat/voice/settings", {
+        apiKey: apiKey.trim(),
+        voiceId: voiceId.trim(),
+      });
+      setApiKey("");
+      setStatus("Voice settings saved. Sayna is ready for Chat.");
+      props.onSaved(configuration);
+    } catch (caught) {
+      setStatus(caught instanceof Error ? caught.message : "Could not save Sayna voice settings.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(): Promise<void> {
+    if (!window.confirm("Remove the stored ElevenLabs key and disable voice Chat?")) return;
+    setBusy("delete");
+    setStatus(null);
+    try {
+      const configuration = await apiDelete<SaynaVoiceConfiguration>("/api/agent-chat/voice/settings");
+      setApiKey("");
+      setStatus("ElevenLabs key removed. Voice Chat is disabled.");
+      props.onSaved(configuration);
+    } catch (caught) {
+      setStatus(caught instanceof Error ? caught.message : "Could not remove Sayna voice settings.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="chat-voice-settings-dialog">
+        <DialogHeader>
+          <DialogTitle>Sayna voice</DialogTitle>
+          <DialogDescription>
+            Use ElevenLabs for live speech recognition and spoken Claude replies inside Chat.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="chat-voice-settings-form" onSubmit={(event) => void save(event)}>
+          <div className="chat-voice-provider">
+            <AudioWaveform size={18} aria-hidden="true" />
+            <span>
+              <strong>ElevenLabs</strong>
+              <small>{props.configuration.configured ? "Configured" : "API key required"}</small>
+            </span>
+          </div>
+          <Label className="field">
+            <span>{props.configuration.configured ? "Replace API key" : "API key"}</span>
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={props.configuration.configured ? "Leave blank to keep the current key" : "Paste API key"}
+              autoComplete="off"
+              required={!props.configuration.configured}
+            />
+            <small>Stored in the server credential store and never returned to the browser.</small>
+          </Label>
+          <Label className="field">
+            <span>Voice ID</span>
+            <Input
+              value={voiceId}
+              onChange={(event) => setVoiceId(event.target.value)}
+              placeholder="ElevenLabs voice ID"
+              required
+            />
+            <small>Uses ElevenLabs Flash v2.5 for low-latency spoken replies.</small>
+          </Label>
+          {status ? <div className="chat-voice-settings-status">{status}</div> : null}
+          <DialogFooter className="chat-voice-settings-actions">
+            {props.configuration.configured ? (
+              <Button variant="ghost" type="button" disabled={busy !== null} onClick={() => void remove()}>
+                {busy === "delete" ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
+                Remove key
+              </Button>
+            ) : null}
+            <Button
+              type="submit"
+              disabled={busy !== null || !voiceId.trim() || (!props.configuration.configured && !apiKey.trim())}
+            >
+              {busy === "save" ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+              Save voice settings
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -518,4 +794,12 @@ function isPendingChatApproval(value: unknown): value is PendingChatApproval {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function voiceStateLabel(state: SaynaVoiceState): string {
+  if (state === "connecting") return "Sayna connecting";
+  if (state === "listening") return "Listening";
+  if (state === "speaking") return "Speaking";
+  if (state === "error") return "Voice error";
+  return "Sayna voice";
 }

@@ -23,6 +23,7 @@ OpenConnector is configured with environment variables.
 | `OOMOL_CONNECT_TRANSIT_FILE_TTL_SECONDS` | `86400`                   | Transit file lifetime before cleanup.                                          |
 | `OOMOL_CONNECT_TRANSIT_FILE_MAX_BYTES`   | `104857600`               | Maximum transit file upload size.                                              |
 | `OOMOL_CONNECT_RUN_LIMIT`                | `5000`                    | Maximum number of recent action run audit records to retain.                   |
+| `OOMOL_CONNECT_SAYNA_URL`                | unset                     | Optional external Sayna WebSocket URL for non-Docker Node deployments.         |
 
 Example:
 
@@ -43,6 +44,26 @@ or `*`; those grants can only narrow the deployment and runtime proxy policy.
 `OOMOL_CONNECT_RUNTIME_TOKEN` remains available for bootstrap scripts and backward compatibility.
 Because the bootstrap token has no stored policy, its proxy access is controlled only by the
 deployment and runtime proxy rules.
+
+## Sayna voice chat
+
+Docker deployments include [Sayna](https://github.com/SaynaAI/sayna) in the Open Connector image and
+launch both runtimes inside one container. Open **Chat**, choose **Set up voice**, and enter an
+ElevenLabs API key and optional voice ID. Open Connector saves the key in its credential store,
+injects it into each server-side Sayna session, and never returns it to the browser. Set
+`OOMOL_CONNECT_ENCRYPTION_KEY` to encrypt stored credentials at rest.
+
+Sayna uses ElevenLabs Scribe v2 Realtime for microphone transcription and ElevenLabs Flash v2.5 for
+spoken replies. Its model and audio cache lives under the existing `/app/data` volume, so no second
+service or volume is required.
+
+Set `OOMOL_CONNECT_SAYNA_URL` directly when Sayna is already deployed. HTTP and HTTPS origins are
+accepted and normalized to WebSocket URLs; a root origin automatically receives the `/ws` path.
+Public Sayna endpoints work with the default egress policy. Private endpoints require
+`OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK=true` and remain subject to the guarded WebSocket SSRF policy.
+
+Chat receives linear 16-bit PCM from Sayna and schedules the streamed audio frames directly through
+the browser audio context. Cloudflare deployments do not expose this Node-only WebSocket bridge.
 
 ## JWT access tokens
 

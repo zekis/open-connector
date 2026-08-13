@@ -394,6 +394,17 @@ export interface AgentChatApprovalResult {
   response?: AgentChatResponse;
 }
 
+export interface SaynaVoiceConfiguration {
+  available: boolean;
+  configured: boolean;
+  enabled: boolean;
+  provider: "sayna";
+  speechProvider: "elevenlabs";
+  voiceId: string;
+  websocketPath?: string;
+  ttsSampleRate?: number;
+}
+
 export interface AppData {
   providers: ProviderDefinition[];
   connections: ConnectionRecord[];

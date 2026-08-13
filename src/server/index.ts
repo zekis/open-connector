@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { WebSocketServer } from "ws";
 import { loadCatalog } from "../catalog-store.ts";
 import { ActionPolicyService, parseActionPolicyList } from "../core/action-policy.ts";
 import { parsePrivateNetworkAccessFlag, setPrivateNetworkAccessAllowed } from "../core/request.ts";
@@ -8,6 +9,9 @@ import { ProviderLoader } from "../providers/provider-loader.ts";
 import { executableActionIds, executorModules } from "../providers/registry.generated.ts";
 import { createRuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
+import { readSaynaVoiceRuntimeConfiguration } from "./chat/sayna-voice-config.ts";
+import { registerSaynaVoiceRoutes } from "./chat/sayna-voice-proxy.ts";
+import { SaynaVoiceSettingsService } from "./chat/sayna-voice-settings-service.ts";
 import { createConnectApp } from "./connect-app.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { logger } from "./logger.ts";
@@ -22,6 +26,10 @@ const dataDir = process.env.OOMOL_CONNECT_DATA_DIR ?? join(process.cwd(), "data"
 const transitFileTtlSeconds = readPositiveIntegerEnv("OOMOL_CONNECT_TRANSIT_FILE_TTL_SECONDS", 86_400);
 const transitFileMaxBytes = readPositiveIntegerEnv("OOMOL_CONNECT_TRANSIT_FILE_MAX_BYTES", 100 * 1024 * 1024);
 const runLimit = readPositiveIntegerEnv("OOMOL_CONNECT_RUN_LIMIT", DEFAULT_RUN_LIMIT);
+const saynaVoiceRuntime = readSaynaVoiceRuntimeConfiguration({
+  embedded: process.env.OOMOL_CONNECT_SAYNA_EMBEDDED,
+  url: process.env.OOMOL_CONNECT_SAYNA_URL,
+});
 const secretCodec = createSecretCodec(process.env.OOMOL_CONNECT_ENCRYPTION_KEY);
 const adminToken = process.env.OOMOL_CONNECT_ADMIN_TOKEN;
 const runtimeToken = process.env.OOMOL_CONNECT_RUNTIME_TOKEN;
@@ -49,12 +57,14 @@ const runtimeDatabase = new SqliteRuntimeDatabase(join(dataDir, "connect.sqlite"
   secretCodec,
   runLimit,
 });
+const saynaVoiceSettings = new SaynaVoiceSettingsService(runtimeDatabase.connectionStore);
 const transitFiles = new TransitFileService({
   rootDir: join(dataDir, "files"),
   publicOrigin,
   ttlSeconds: transitFileTtlSeconds,
   maxBytes: transitFileMaxBytes,
 });
+const webSocketServer = new WebSocketServer({ noServer: true });
 await transitFiles.cleanupExpired();
 const { app, runtimeAuthConfigured, flowTriggers } = await createConnectApp({
   catalog,
@@ -67,18 +77,23 @@ const { app, runtimeAuthConfigured, flowTriggers } = await createConnectApp({
   runtimeToken,
   verifyRuntimeJwt,
   actionPolicy,
-  registerStaticRoutes: (app) => registerStaticRoutes(app, staticRoot),
+  registerStaticRoutes: (app) => {
+    registerSaynaVoiceRoutes(app, { runtime: saynaVoiceRuntime, settings: saynaVoiceSettings, logger });
+    registerStaticRoutes(app, staticRoot);
+  },
   logger,
 });
 flowTriggers.start();
 
 process.once("SIGINT", () => {
   flowTriggers.stop();
+  webSocketServer.close();
   runtimeDatabase.close();
   process.exit(0);
 });
 process.once("SIGTERM", () => {
   flowTriggers.stop();
+  webSocketServer.close();
   runtimeDatabase.close();
   process.exit(0);
 });
@@ -88,6 +103,7 @@ serve(
     fetch: app.fetch,
     port,
     hostname,
+    websocket: { server: webSocketServer },
   },
   (info) => {
     logger.info({ url: `http://${hostname}:${info.port}` }, "connect server listening");

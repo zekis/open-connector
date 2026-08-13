@@ -151,6 +151,10 @@ This pulls `ghcr.io/oomol-lab/open-connector:latest`. To build from source inste
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
+Docker includes Sayna voice input and spoken Chat replies in the Open Connector image. Open Chat,
+choose **Set up voice**, and save an ElevenLabs API key in the server credential store. See
+[`docs/configuration.md`](docs/configuration.md#sayna-voice-chat) for details.
+
 Open the local console and generated API reference:
 
 ```text

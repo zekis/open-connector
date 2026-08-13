@@ -19,7 +19,8 @@ export interface WebSocketCloseEvent {
  * the Node and workerd globals differ in details this layer does not depend on.
  */
 export interface WebSocketLike {
-  send(data: string): void;
+  binaryType?: "arraybuffer" | "blob";
+  send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
   addEventListener(type: "open", listener: () => void): void;
   addEventListener(type: "message", listener: (event: WebSocketMessageEvent) => void): void;

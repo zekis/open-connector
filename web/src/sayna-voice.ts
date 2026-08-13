@@ -1,0 +1,394 @@
+import type { SaynaVoiceConfiguration } from "./model";
+
+const microphoneSampleRate = 16_000;
+const voiceConnectionTimeoutMs = 30_000;
+
+export type SaynaVoiceState = "offline" | "connecting" | "ready" | "listening" | "speaking" | "error";
+
+export interface SaynaTranscript {
+  text: string;
+  final: boolean;
+  speechFinal: boolean;
+}
+
+export interface SaynaVoiceCallbacks {
+  onStateChange(state: SaynaVoiceState): void;
+  onTranscript(transcript: SaynaTranscript): void;
+  onError(message: string): void;
+}
+
+interface SaynaServerMessage {
+  type: string;
+  message?: string;
+  transcript?: string;
+  is_final?: boolean;
+  is_speech_final?: boolean;
+}
+
+interface VoiceConnectionWaiter {
+  promise: Promise<void>;
+  resolve(): void;
+  reject(error: Error): void;
+}
+
+/** Browser voice session backed by Open Connector's authenticated Sayna bridge. */
+export class SaynaVoiceClient {
+  private socket?: WebSocket;
+  private connection?: VoiceConnectionWaiter;
+  private state: SaynaVoiceState = "offline";
+  private microphoneStream?: MediaStream;
+  private microphoneContext?: AudioContext;
+  private microphoneSource?: MediaStreamAudioSourceNode;
+  private microphoneProcessor?: ScriptProcessorNode;
+  private microphoneSink?: GainNode;
+  private playbackContext?: AudioContext;
+  private playbackSources = new Set<AudioBufferSourceNode>();
+  private nextPlaybackTime = 0;
+  private finalTranscriptSegments: string[] = [];
+  private closed = false;
+
+  constructor(
+    private readonly configuration: SaynaVoiceConfiguration,
+    private readonly callbacks: SaynaVoiceCallbacks,
+  ) {}
+
+  async startListening(): Promise<void> {
+    if (this.state === "listening") {
+      this.stopListening();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.fail("Microphone access is unavailable in this browser or page context.");
+      return;
+    }
+
+    if (this.state === "speaking") this.stopSpeaking();
+    else this.stopPlayback();
+    let stream: MediaStream | undefined;
+    try {
+      await this.resumePlayback();
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      await this.ensureConnected();
+      if (this.closed) {
+        stopMediaStream(stream);
+        return;
+      }
+      this.beginMicrophone(stream);
+    } catch (error) {
+      if (stream) stopMediaStream(stream);
+      this.fail(describeVoiceError(error, "Could not start Sayna voice input."));
+    }
+  }
+
+  stopListening(): void {
+    this.microphoneProcessor?.disconnect();
+    this.microphoneSource?.disconnect();
+    this.microphoneSink?.disconnect();
+    this.microphoneProcessor = undefined;
+    this.microphoneSource = undefined;
+    this.microphoneSink = undefined;
+    if (this.microphoneStream) stopMediaStream(this.microphoneStream);
+    this.microphoneStream = undefined;
+    if (this.microphoneContext) void this.microphoneContext.close();
+    this.microphoneContext = undefined;
+    if (!this.closed && this.state === "listening") this.setState("ready");
+  }
+
+  async speak(markdown: string): Promise<void> {
+    const text = plainTextForSpeech(markdown);
+    if (!text) return;
+    try {
+      await this.ensureConnected();
+      await this.resumePlayback();
+      this.socket?.send(JSON.stringify({ type: "speak", text }));
+    } catch (error) {
+      this.fail(describeVoiceError(error, "Could not speak the agent reply."));
+    }
+  }
+
+  async preparePlayback(): Promise<void> {
+    try {
+      await this.resumePlayback();
+    } catch (error) {
+      this.fail(describeVoiceError(error, "Could not enable spoken agent replies."));
+    }
+  }
+
+  stopSpeaking(): void {
+    const connected = this.socket?.readyState === WebSocket.OPEN;
+    if (connected) this.socket?.send(JSON.stringify({ type: "clear" }));
+    this.stopPlayback();
+    if (!this.closed) this.setState(this.microphoneStream ? "listening" : connected ? "ready" : "offline");
+  }
+
+  close(): void {
+    this.closed = true;
+    this.stopListening();
+    this.stopPlayback();
+    if (this.playbackContext) void this.playbackContext.close();
+    this.playbackContext = undefined;
+    this.socket?.close(1000, "Chat closed");
+    this.socket = undefined;
+    this.connection = undefined;
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (!this.configuration.enabled || !this.configuration.websocketPath) {
+      throw new Error("Sayna voice is not configured.");
+    }
+    if (this.socket?.readyState === WebSocket.OPEN && this.state !== "connecting" && this.state !== "error") return;
+    if (this.connection) return await this.connection.promise;
+
+    this.closed = false;
+    this.setState("connecting");
+    const socket = new WebSocket(webSocketUrl(this.configuration.websocketPath));
+    socket.binaryType = "arraybuffer";
+    this.socket = socket;
+
+    let resolveConnection = (): void => {};
+    let rejectConnection = (_error: Error): void => {};
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveConnection = resolve;
+      rejectConnection = reject;
+    });
+    const connection: VoiceConnectionWaiter = {
+      promise,
+      resolve: resolveConnection,
+      reject: rejectConnection,
+    };
+    this.connection = connection;
+
+    const timer = window.setTimeout(() => {
+      if (this.connection !== connection) return;
+      this.connection = undefined;
+      socket.close(1011, "Voice connection timed out");
+      connection.reject(new Error("Sayna voice did not become ready within 30 seconds."));
+    }, voiceConnectionTimeoutMs);
+
+    socket.onmessage = (event) => void this.handleMessage(event.data, connection, timer);
+    socket.onerror = () => {
+      if (this.connection !== connection) return;
+      window.clearTimeout(timer);
+      this.connection = undefined;
+      connection.reject(new Error("The Sayna WebSocket connection failed."));
+    };
+    socket.onclose = () => {
+      if (this.socket !== socket && this.connection !== connection) return;
+      if (this.connection === connection) {
+        window.clearTimeout(timer);
+        this.connection = undefined;
+        connection.reject(new Error("Sayna disconnected before voice became ready."));
+      }
+      if (this.socket === socket) this.socket = undefined;
+      this.stopListening();
+      if (!this.closed && this.state !== "error") this.setState("offline");
+    };
+
+    return await promise;
+  }
+
+  private async handleMessage(value: unknown, connection: VoiceConnectionWaiter, timer: number): Promise<void> {
+    if (value instanceof ArrayBuffer) {
+      await this.playPcm(value);
+      return;
+    }
+    if (typeof value !== "string") return;
+    const message = parseSaynaMessage(value);
+    if (!message) return;
+
+    if (message.type === "ready") {
+      if (this.connection === connection) {
+        window.clearTimeout(timer);
+        this.connection = undefined;
+        this.setState("ready");
+        connection.resolve();
+      }
+      return;
+    }
+    if (message.type === "error") {
+      const error = new Error(message.message || "Sayna reported a voice processing error.");
+      if (this.connection === connection) {
+        window.clearTimeout(timer);
+        this.connection = undefined;
+        connection.reject(error);
+      }
+      this.fail(error.message);
+      return;
+    }
+    if (message.type === "stt_result") this.handleTranscript(message);
+  }
+
+  private beginMicrophone(stream: MediaStream): void {
+    this.finalTranscriptSegments = [];
+    this.microphoneStream = stream;
+    const context = new AudioContext({ sampleRate: microphoneSampleRate });
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(2048, 1, 1);
+    const sink = context.createGain();
+    sink.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      if (this.state !== "listening" || this.socket?.readyState !== WebSocket.OPEN) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const resampled = resampleAudio(input, context.sampleRate, microphoneSampleRate);
+      this.socket.send(float32ToPcm16(resampled));
+    };
+    source.connect(processor);
+    processor.connect(sink);
+    sink.connect(context.destination);
+    this.microphoneContext = context;
+    this.microphoneSource = source;
+    this.microphoneProcessor = processor;
+    this.microphoneSink = sink;
+    this.setState("listening");
+  }
+
+  private handleTranscript(message: SaynaServerMessage): void {
+    const transcript = message.transcript?.trim();
+    if (!transcript) return;
+    if (message.is_final && this.finalTranscriptSegments.at(-1) !== transcript) {
+      this.finalTranscriptSegments.push(transcript);
+    }
+    const segments = message.is_final ? this.finalTranscriptSegments : [...this.finalTranscriptSegments, transcript];
+    const text = segments.join(" ").trim();
+    this.callbacks.onTranscript({
+      text,
+      final: message.is_final === true,
+      speechFinal: message.is_speech_final === true,
+    });
+    if (message.is_speech_final) {
+      this.stopListening();
+      this.finalTranscriptSegments = [];
+    }
+  }
+
+  private async playPcm(value: ArrayBuffer): Promise<void> {
+    if (value.byteLength < 2) return;
+    const context = await this.resumePlayback();
+    const samples = new Int16Array(value, 0, Math.floor(value.byteLength / 2));
+    const buffer = context.createBuffer(1, samples.length, this.configuration.ttsSampleRate ?? 24_000);
+    const channel = buffer.getChannelData(0);
+    for (let index = 0; index < samples.length; index += 1) channel[index] = samples[index] / 32_768;
+
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    const startAt = Math.max(context.currentTime + 0.01, this.nextPlaybackTime);
+    this.nextPlaybackTime = startAt + buffer.duration;
+    this.playbackSources.add(source);
+    source.onended = () => {
+      this.playbackSources.delete(source);
+      if (this.playbackSources.size === 0 && !this.closed && this.state === "speaking") this.setState("ready");
+    };
+    source.start(startAt);
+    this.setState("speaking");
+  }
+
+  private async resumePlayback(): Promise<AudioContext> {
+    this.playbackContext ??= new AudioContext();
+    if (this.playbackContext.state === "suspended") await this.playbackContext.resume();
+    return this.playbackContext;
+  }
+
+  private stopPlayback(): void {
+    for (const source of this.playbackSources) {
+      try {
+        source.stop();
+      } catch {
+        // A source may already have completed between iteration and stop().
+      }
+    }
+    this.playbackSources.clear();
+    this.nextPlaybackTime = 0;
+  }
+
+  private setState(state: SaynaVoiceState): void {
+    this.state = state;
+    this.callbacks.onStateChange(state);
+  }
+
+  private fail(message: string): void {
+    this.setState("error");
+    this.callbacks.onError(message);
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.close(1011, "Voice session failed");
+  }
+}
+
+export function parseSaynaMessage(value: string): SaynaServerMessage | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) && typeof parsed.type === "string" ? (parsed as unknown as SaynaServerMessage) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Converts browser float samples into Sayna's required signed 16-bit PCM frames. */
+export function float32ToPcm16(samples: Float32Array): ArrayBuffer {
+  const pcm = new Int16Array(samples.length);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    pcm[index] = sample < 0 ? sample * 32_768 : sample * 32_767;
+  }
+  return pcm.buffer;
+}
+
+/** Resamples one microphone frame when the browser cannot create a 16 kHz context. */
+export function resampleAudio(samples: Float32Array, sourceRate: number, targetRate: number): Float32Array {
+  if (samples.length === 0) return samples;
+  if (sourceRate === targetRate) return samples;
+  const outputLength = Math.max(1, Math.round((samples.length * targetRate) / sourceRate));
+  const output = new Float32Array(outputLength);
+  const ratio = sourceRate / targetRate;
+  for (let index = 0; index < outputLength; index += 1) {
+    const position = index * ratio;
+    const left = Math.min(samples.length - 1, Math.floor(position));
+    const right = Math.min(samples.length - 1, left + 1);
+    const fraction = position - left;
+    output[index] = samples[left] + (samples[right] - samples[left]) * fraction;
+  }
+  return output;
+}
+
+/** Removes common Markdown controls before passing an agent response to speech synthesis. */
+export function plainTextForSpeech(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/^```[^\n]*\n?|```$/g, ""))
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
+    .replace(/[*_~`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 20_000);
+}
+
+function webSocketUrl(path: string): string {
+  const url = new URL(path, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function stopMediaStream(stream: MediaStream): void {
+  for (const track of stream.getTracks()) track.stop();
+}
+
+function describeVoiceError(error: unknown, fallback: string): string {
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return "Microphone permission was denied. Allow microphone access to use Sayna voice chat.";
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
