@@ -57,6 +57,12 @@ Sayna uses ElevenLabs Scribe v2 Realtime for microphone transcription and Eleven
 spoken replies. Its model and audio cache lives under the existing `/app/data` volume, so no second
 service or volume is required.
 
+Starting the microphone opens a continuous conversation. Sayna keeps streaming audio while Claude
+and connector actions run, uses voice activity and turn detection to decide when an utterance is
+complete, supports barge-in during spoken replies, and returns to listening after playback. Chat
+queues additional finalized voice turns while an earlier turn or approval is pending and provides a
+short spoken acknowledgement when connected-app work takes longer than an immediate response.
+
 Set `OOMOL_CONNECT_SAYNA_URL` directly when Sayna is already deployed. HTTP and HTTPS origins are
 accepted and normalized to WebSocket URLs; a root origin automatically receives the `/ws` path.
 Public Sayna endpoints work with the default egress policy. Private endpoints require

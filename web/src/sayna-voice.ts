@@ -13,12 +13,14 @@ export interface SaynaTranscript {
 
 export interface SaynaVoiceCallbacks {
   onStateChange(state: SaynaVoiceState): void;
+  onListeningChange(listening: boolean): void;
   onTranscript(transcript: SaynaTranscript): void;
   onError(message: string): void;
 }
 
 interface SaynaServerMessage {
   type: string;
+  scope?: string;
   message?: string;
   transcript?: string;
   is_final?: boolean;
@@ -45,6 +47,9 @@ export class SaynaVoiceClient {
   private playbackSources = new Set<AudioBufferSourceNode>();
   private nextPlaybackTime = 0;
   private finalTranscriptSegments: string[] = [];
+  private incomingMessages = Promise.resolve();
+  private playbackComplete = false;
+  private recovery?: Promise<void>;
   private closed = false;
 
   constructor(
@@ -53,7 +58,7 @@ export class SaynaVoiceClient {
   ) {}
 
   async startListening(): Promise<void> {
-    if (this.state === "listening") {
+    if (this.microphoneStream) {
       this.stopListening();
       return;
     }
@@ -96,9 +101,12 @@ export class SaynaVoiceClient {
     this.microphoneSink = undefined;
     if (this.microphoneStream) stopMediaStream(this.microphoneStream);
     this.microphoneStream = undefined;
+    this.callbacks.onListeningChange(false);
     if (this.microphoneContext) void this.microphoneContext.close();
     this.microphoneContext = undefined;
-    if (!this.closed && this.state === "listening") this.setState("ready");
+    if (!this.closed && this.state === "listening") {
+      this.setState(this.socket?.readyState === WebSocket.OPEN ? "ready" : "offline");
+    }
   }
 
   async speak(markdown: string): Promise<void> {
@@ -107,6 +115,7 @@ export class SaynaVoiceClient {
     try {
       await this.ensureConnected();
       await this.resumePlayback();
+      this.interruptPlayback();
       this.socket?.send(JSON.stringify({ type: "speak", text }));
     } catch (error) {
       this.fail(describeVoiceError(error, "Could not speak the agent reply."));
@@ -125,7 +134,11 @@ export class SaynaVoiceClient {
     const connected = this.socket?.readyState === WebSocket.OPEN;
     if (connected) this.socket?.send(JSON.stringify({ type: "clear" }));
     this.stopPlayback();
-    if (!this.closed) this.setState(this.microphoneStream ? "listening" : connected ? "ready" : "offline");
+    if (!this.closed) {
+      if (this.microphoneStream) this.setState("listening");
+      else if (connected) this.setState("ready");
+      else this.setState("offline");
+    }
   }
 
   close(): void {
@@ -147,6 +160,7 @@ export class SaynaVoiceClient {
     if (this.connection) return await this.connection.promise;
 
     this.closed = false;
+    this.playbackComplete = false;
     this.setState("connecting");
     const socket = new WebSocket(webSocketUrl(this.configuration.websocketPath));
     socket.binaryType = "arraybuffer";
@@ -172,7 +186,11 @@ export class SaynaVoiceClient {
       connection.reject(new Error("Sayna voice did not become ready within 30 seconds."));
     }, voiceConnectionTimeoutMs);
 
-    socket.onmessage = (event) => void this.handleMessage(event.data, connection, timer);
+    socket.onmessage = (event) => {
+      this.incomingMessages = this.incomingMessages
+        .then(() => this.handleMessage(event.data, connection, timer))
+        .catch((error: unknown) => this.fail(describeVoiceError(error, "Could not process Sayna voice data.")));
+    };
     socket.onerror = () => {
       if (this.connection !== connection) return;
       window.clearTimeout(timer);
@@ -222,19 +240,56 @@ export class SaynaVoiceClient {
       this.fail(error.message);
       return;
     }
+    if (message.type === "recoverable_error" && message.scope === "stt") {
+      this.recoverSpeechRecognition();
+      return;
+    }
+    if (message.type === "tts_playback_complete") {
+      this.playbackComplete = true;
+      if (this.playbackSources.size === 0) this.finishPlayback();
+      return;
+    }
     if (message.type === "stt_result") this.handleTranscript(message);
+  }
+
+  private recoverSpeechRecognition(): void {
+    if (this.closed || this.recovery) return;
+    const resumeListening = Boolean(this.microphoneStream);
+    const socket = this.socket;
+    this.socket = undefined;
+    socket?.close(1000, "Refreshing speech recognition");
+
+    if (!resumeListening) {
+      this.setState("offline");
+      return;
+    }
+
+    this.setState("connecting");
+    this.recovery = this.ensureConnected()
+      .then(() => {
+        if (!this.closed) {
+          this.setState(this.playbackSources.size > 0 ? "speaking" : this.microphoneStream ? "listening" : "ready");
+        }
+      })
+      .catch((error: unknown) => {
+        this.fail(describeVoiceError(error, "Could not reconnect speech recognition."));
+      })
+      .finally(() => {
+        this.recovery = undefined;
+      });
   }
 
   private beginMicrophone(stream: MediaStream): void {
     this.finalTranscriptSegments = [];
     this.microphoneStream = stream;
+    this.callbacks.onListeningChange(true);
     const context = new AudioContext({ sampleRate: microphoneSampleRate });
     const source = context.createMediaStreamSource(stream);
     const processor = context.createScriptProcessor(2048, 1, 1);
     const sink = context.createGain();
     sink.gain.value = 0;
     processor.onaudioprocess = (event) => {
-      if (this.state !== "listening" || this.socket?.readyState !== WebSocket.OPEN) return;
+      if (!this.microphoneStream || this.socket?.readyState !== WebSocket.OPEN) return;
       const input = event.inputBuffer.getChannelData(0);
       const resampled = resampleAudio(input, context.sampleRate, microphoneSampleRate);
       this.socket.send(float32ToPcm16(resampled));
@@ -252,6 +307,7 @@ export class SaynaVoiceClient {
   private handleTranscript(message: SaynaServerMessage): void {
     const transcript = message.transcript?.trim();
     if (!transcript) return;
+    if (this.state === "speaking") this.interruptPlayback();
     if (message.is_final && this.finalTranscriptSegments.at(-1) !== transcript) {
       this.finalTranscriptSegments.push(transcript);
     }
@@ -263,7 +319,6 @@ export class SaynaVoiceClient {
       speechFinal: message.is_speech_final === true,
     });
     if (message.is_speech_final) {
-      this.stopListening();
       this.finalTranscriptSegments = [];
     }
   }
@@ -284,7 +339,9 @@ export class SaynaVoiceClient {
     this.playbackSources.add(source);
     source.onended = () => {
       this.playbackSources.delete(source);
-      if (this.playbackSources.size === 0 && !this.closed && this.state === "speaking") this.setState("ready");
+      if (this.playbackSources.size !== 0 || this.closed) return;
+      if (this.playbackComplete) this.finishPlayback();
+      else if (this.state === "speaking") this.setState(this.microphoneStream ? "listening" : "ready");
     };
     source.start(startAt);
     this.setState("speaking");
@@ -306,6 +363,18 @@ export class SaynaVoiceClient {
     }
     this.playbackSources.clear();
     this.nextPlaybackTime = 0;
+    this.playbackComplete = false;
+  }
+
+  private interruptPlayback(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ type: "clear" }));
+    this.stopPlayback();
+    if (!this.closed && this.microphoneStream) this.setState("listening");
+  }
+
+  private finishPlayback(): void {
+    this.playbackComplete = false;
+    if (!this.closed) this.setState(this.microphoneStream ? "listening" : "ready");
   }
 
   private setState(state: SaynaVoiceState): void {

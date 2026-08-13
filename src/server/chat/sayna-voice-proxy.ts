@@ -15,6 +15,7 @@ import { SaynaVoiceSettingsError } from "./sayna-voice-settings-service.ts";
 
 const maximumAudioFrameBytes = 1024 * 1024;
 const maximumSpeechCharacters = 20_000;
+const recoverableSttErrorPrefix = "STT streaming error: Network error:";
 
 export interface SaynaVoiceProxyOptions {
   runtime?: SaynaVoiceRuntimeConfiguration;
@@ -160,6 +161,15 @@ class SaynaVoiceProxySession {
   private async forwardUpstreamMessage(value: unknown): Promise<void> {
     if (this.closed) return;
     if (typeof value === "string") {
+      if (isRecoverableSaynaSttError(value)) {
+        sendJson(this.client, {
+          type: "recoverable_error",
+          scope: "stt",
+          message: "Speech recognition disconnected and will reconnect automatically.",
+        });
+        this.retire();
+        return;
+      }
       this.client.send(value);
       return;
     }
@@ -178,6 +188,14 @@ class SaynaVoiceProxySession {
     this.abortController.abort();
     this.upstream?.close(1011, "Voice proxy failed");
     this.client.close(1011, "Voice proxy failed");
+  }
+
+  private retire(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.abortController.abort();
+    this.upstream?.close(1000, "Refreshing speech recognition");
+    this.client.close(1012, "Refreshing speech recognition");
   }
 }
 
@@ -240,6 +258,21 @@ export interface InvalidSaynaVoiceClientCommand {
 }
 
 export type SaynaVoiceClientCommandResult = ValidSaynaVoiceClientCommand | InvalidSaynaVoiceClientCommand;
+
+/** Identifies the transient ElevenLabs STT disconnect that requires a fresh Sayna session. */
+export function isRecoverableSaynaSttError(value: string): boolean {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return (
+      isRecord(parsed) &&
+      parsed.type === "error" &&
+      typeof parsed.message === "string" &&
+      parsed.message.startsWith(recoverableSttErrorPrefix)
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Restricts browser text messages to bounded Chat speech controls. */
 export function readSaynaVoiceClientCommand(value: string): SaynaVoiceClientCommandResult {

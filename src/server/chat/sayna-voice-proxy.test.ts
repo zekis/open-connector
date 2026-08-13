@@ -4,7 +4,11 @@ import type { ResolvedCredential } from "../../core/types.ts";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { embeddedSaynaWebSocketUrl } from "./sayna-voice-config.ts";
-import { readSaynaVoiceClientCommand, registerSaynaVoiceRoutes } from "./sayna-voice-proxy.ts";
+import {
+  isRecoverableSaynaSttError,
+  readSaynaVoiceClientCommand,
+  registerSaynaVoiceRoutes,
+} from "./sayna-voice-proxy.ts";
 import { SaynaVoiceSettingsService } from "./sayna-voice-settings-service.ts";
 
 describe("Sayna voice browser commands", () => {
@@ -37,6 +41,24 @@ describe("Sayna voice browser commands", () => {
     expect(readSaynaVoiceClientCommand(JSON.stringify({ type: "speak", text: "x".repeat(20_001) }))).toMatchObject({
       ok: false,
     });
+  });
+
+  it("recognizes transient STT network failures without hiding provider or authentication errors", () => {
+    expect(
+      isRecoverableSaynaSttError(
+        JSON.stringify({
+          type: "error",
+          message:
+            "STT streaming error: Network error: WebSocket error: IO error: peer closed connection without sending TLS close_notify",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isRecoverableSaynaSttError(
+        JSON.stringify({ type: "error", message: "STT streaming error: Authentication failed: invalid key" }),
+      ),
+    ).toBe(false);
+    expect(isRecoverableSaynaSttError("not-json")).toBe(false);
   });
 
   it("configures voice through the authenticated console API without returning the key", async () => {

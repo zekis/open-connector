@@ -65,6 +65,9 @@ interface ChatSession {
 }
 
 const chatSessionStorageKey = "open-connector.agent-chat-session.v1";
+const voiceWorkingCueDelayMs = 1_200;
+const voiceWorkingCue = "I'm working on that with your connected apps.";
+const voiceApprovalCue = "I need your approval before I can continue. You can approve the request here in Chat.";
 
 const suggestions = [
   "Summarize today's important emails.",
@@ -82,10 +85,18 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const [voiceConfiguration, setVoiceConfiguration] = useState<SaynaVoiceConfiguration>();
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<SaynaVoiceState>("offline");
+  const [voiceListening, setVoiceListening] = useState(false);
   const [voiceReplies, setVoiceReplies] = useState(false);
+  const [queuedVoiceTurnCount, setQueuedVoiceTurnCount] = useState(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
   const sendVoiceMessageRef = useRef<(value: string) => Promise<void>>(async () => {});
+  const sessionRef = useRef(session);
+  const sendingRef = useRef(false);
+  const voiceRepliesRef = useRef(false);
+  const queuedVoiceTurnsRef = useRef<string[]>([]);
+  const workingCueTimerRef = useRef<number | undefined>(undefined);
+  const workingCueActiveRef = useRef(false);
   const spokenMessageIds = useRef(new Set(session.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
@@ -123,8 +134,20 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }, [messages, sending]);
 
   useEffect(() => {
+    sessionRef.current = session;
     storeChatSession(session);
   }, [session]);
+
+  useEffect(() => {
+    voiceRepliesRef.current = voiceReplies;
+  }, [voiceReplies]);
+
+  useEffect(
+    () => () => {
+      if (workingCueTimerRef.current !== undefined) window.clearTimeout(workingCueTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +167,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     if (!voiceConfiguration?.enabled || !voiceConfiguration.websocketPath) return;
     const client = new SaynaVoiceClient(voiceConfiguration, {
       onStateChange: setVoiceState,
+      onListeningChange: setVoiceListening,
       onTranscript: (transcript) => {
         setDraft(transcript.text);
         if (transcript.speechFinal && transcript.text) {
@@ -164,8 +188,14 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     const lastMessage = messages.at(-1);
     if (!lastMessage || lastMessage.role !== "assistant" || spokenMessageIds.current.has(lastMessage.id)) return;
     spokenMessageIds.current.add(lastMessage.id);
-    if (voiceReplies && !pendingApproval) void voiceClientRef.current?.speak(lastMessage.content);
+    if (voiceReplies) void voiceClientRef.current?.speak(pendingApproval ? voiceApprovalCue : lastMessage.content);
   }, [messages, pendingApproval, voiceReplies]);
+
+  useEffect(() => {
+    if (sending || pendingApproval || queuedVoiceTurnCount === 0) return;
+    const timer = window.setTimeout(drainQueuedVoiceTurn, 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingApproval, queuedVoiceTurnCount, sending]);
 
   useEffect(() => {
     if (!pendingApproval) return;
@@ -178,7 +208,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         const result = await apiGet<AgentChatApprovalResult>(`/api/agent-chat/approvals/${pendingApproval.approvalId}`);
         if (!cancelled) {
           setError(null);
-          setSession((current) => applyApprovalResult(current, result));
+          replaceSession((current) => applyApprovalResult(current, result));
           if (result.response?.status === "waiting_for_approval") props.onRefresh();
         }
       } catch (caught) {
@@ -202,9 +232,13 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     await sendMessage(draft);
   }
 
-  async function sendMessage(value: string): Promise<void> {
+  async function sendMessage(value: string, source: "text" | "voice" = "text"): Promise<void> {
     const content = value.trim();
-    if (!content || sending || pendingApproval || !agentConnection) return;
+    if (!content || !agentConnection) return;
+    if (sendingRef.current || sessionRef.current.pendingApproval) {
+      if (source === "voice") enqueueVoiceTurn(content);
+      return;
+    }
 
     const userMessage: DisplayMessage = {
       id: crypto.randomUUID(),
@@ -212,11 +246,13 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       content,
       createdAt: new Date().toISOString(),
     };
-    const nextMessages = [...messages, userMessage];
-    setSession({ messages: nextMessages });
+    const nextMessages = [...sessionRef.current.messages, userMessage];
+    replaceSession({ messages: nextMessages });
     setDraft("");
+    sendingRef.current = true;
     setSending(true);
     setError(null);
+    if (source === "voice") startWorkingCue();
     try {
       const response = await apiPost<AgentChatResponse>("/api/agent-chat/messages", {
         messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
@@ -225,7 +261,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         ...response.message,
         toolActivity: response.toolActivity,
       };
-      setSession({
+      replaceSession({
         messages: [...nextMessages, assistantMessage],
         pendingApproval:
           response.status === "waiting_for_approval" && response.approvalId
@@ -236,11 +272,13 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
     } finally {
+      stopWorkingCue();
+      sendingRef.current = false;
       setSending(false);
     }
   }
 
-  sendVoiceMessageRef.current = sendMessage;
+  sendVoiceMessageRef.current = (value) => sendMessage(value, "voice");
 
   async function decideApproval(decision: "approve" | "deny"): Promise<void> {
     if (!pendingApproval || approvalDecision) return;
@@ -250,7 +288,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     try {
       await apiPost(`/api/action-approvals/${pendingApproval.approvalId}/${decision}`, {});
       const result = await apiGet<AgentChatApprovalResult>(`/api/agent-chat/approvals/${pendingApproval.approvalId}`);
-      setSession((current) => applyApprovalResult(current, result));
+      replaceSession((current) => applyApprovalResult(current, result));
       props.onRefresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The approval decision could not be recorded.");
@@ -269,7 +307,9 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
 
   function resetChat(): void {
     voiceClientRef.current?.stopSpeaking();
-    setSession({ messages: [] });
+    queuedVoiceTurnsRef.current = [];
+    setQueuedVoiceTurnCount(0);
+    replaceSession({ messages: [] });
     setDraft("");
     setError(null);
     setVoiceError(null);
@@ -280,7 +320,8 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     if (!client) return;
     setVoiceError(null);
     setVoiceReplies(true);
-    if (voiceState === "listening") {
+    voiceRepliesRef.current = true;
+    if (voiceListening) {
       client.stopListening();
       return;
     }
@@ -290,9 +331,50 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   function toggleVoiceReplies(): void {
     const enabled = !voiceReplies;
     setVoiceReplies(enabled);
+    voiceRepliesRef.current = enabled;
     setVoiceError(null);
     if (enabled) void voiceClientRef.current?.preparePlayback();
     else voiceClientRef.current?.stopSpeaking();
+  }
+
+  function replaceSession(next: ChatSession | ((current: ChatSession) => ChatSession)): void {
+    setSession((current) => {
+      const updated = typeof next === "function" ? next(current) : next;
+      sessionRef.current = updated;
+      return updated;
+    });
+  }
+
+  function enqueueVoiceTurn(value: string): void {
+    const queued = queuedVoiceTurnsRef.current;
+    if (queued.at(-1) === value) return;
+    queued.push(value);
+    setQueuedVoiceTurnCount(queued.length);
+  }
+
+  function drainQueuedVoiceTurn(): void {
+    if (sendingRef.current || sessionRef.current.pendingApproval) return;
+    const next = queuedVoiceTurnsRef.current.shift();
+    setQueuedVoiceTurnCount(queuedVoiceTurnsRef.current.length);
+    if (next) void sendVoiceMessageRef.current(next);
+  }
+
+  function startWorkingCue(): void {
+    stopWorkingCue();
+    workingCueTimerRef.current = window.setTimeout(() => {
+      workingCueTimerRef.current = undefined;
+      if (!sendingRef.current || !voiceRepliesRef.current) return;
+      workingCueActiveRef.current = true;
+      void voiceClientRef.current?.speak(voiceWorkingCue);
+    }, voiceWorkingCueDelayMs);
+  }
+
+  function stopWorkingCue(): void {
+    if (workingCueTimerRef.current !== undefined) window.clearTimeout(workingCueTimerRef.current);
+    workingCueTimerRef.current = undefined;
+    if (!workingCueActiveRef.current) return;
+    workingCueActiveRef.current = false;
+    voiceClientRef.current?.stopSpeaking();
   }
 
   const connectionSummary = `${connectedServices.size} connected application${connectedServices.size === 1 ? "" : "s"}`;
@@ -327,7 +409,8 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             <>
               <span className={`chat-voice-state ${voiceState}`} title="Voice input and output provided by Sayna">
                 <AudioWaveform size={14} aria-hidden="true" />
-                {voiceStateLabel(voiceState)}
+                {voiceStateLabel(voiceState, voiceListening)}
+                {queuedVoiceTurnCount > 0 ? ` · ${queuedVoiceTurnCount} queued` : ""}
               </span>
               <Button
                 variant="outline"
@@ -404,7 +487,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             placeholder={
               pendingApproval
                 ? "Waiting for the pending approval…"
-                : voiceState === "listening"
+                : voiceListening
                   ? "Listening with Sayna…"
                   : agentConnection
                     ? "Ask Claude to find, explain, or do something…"
@@ -419,16 +502,16 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
               <Button
                 type="button"
                 size="icon"
-                variant={voiceState === "listening" ? "destructive" : "outline"}
+                variant={voiceListening ? "destructive" : "outline"}
                 onClick={toggleVoiceInput}
-                disabled={!agentConnection || sending || Boolean(pendingApproval) || voiceState === "connecting"}
-                aria-label={voiceState === "listening" ? "Stop listening" : "Talk with Sayna"}
-                aria-pressed={voiceState === "listening"}
-                title={voiceState === "listening" ? "Stop listening" : "Talk with Sayna"}
+                disabled={!agentConnection || (voiceState === "connecting" && !voiceListening)}
+                aria-label={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
+                aria-pressed={voiceListening}
+                title={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
               >
-                {voiceState === "connecting" ? (
+                {voiceState === "connecting" && !voiceListening ? (
                   <Loader2 className="spin" size={17} />
-                ) : voiceState === "listening" ? (
+                ) : voiceListening ? (
                   <MicOff size={17} />
                 ) : (
                   <Mic size={17} />
@@ -446,8 +529,8 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
           </div>
         </div>
         <p>
-          {voiceConfiguration?.enabled ? "Sayna voice · " : ""}Enter to send · Shift+Enter for a new line · Connector
-          actions follow your runtime policy.
+          {voiceConfiguration?.enabled ? "Sayna continuous voice · " : ""}Enter to send · Shift+Enter for a new line ·
+          Connector actions follow your runtime policy.
         </p>
       </form>
       {voiceConfiguration?.available ? (
@@ -796,10 +879,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function voiceStateLabel(state: SaynaVoiceState): string {
+function voiceStateLabel(state: SaynaVoiceState, listening: boolean): string {
   if (state === "connecting") return "Sayna connecting";
-  if (state === "listening") return "Listening";
-  if (state === "speaking") return "Speaking";
+  if (state === "speaking") return listening ? "Speaking · listening" : "Speaking";
+  if (listening) return "Listening continuously";
   if (state === "error") return "Voice error";
   return "Sayna voice";
 }
