@@ -2,6 +2,7 @@ import type { CredentialValidationResult } from "../../core/types.ts";
 import type { ProviderRuntimeHandler } from "../provider-runtime.ts";
 
 import {
+  optionalBoolean,
   optionalInteger,
   optionalRecord,
   optionalString,
@@ -15,6 +16,7 @@ import {
   providerUserAgent,
   ProviderRequestError,
   readProviderJsonBody,
+  setSearchParams,
 } from "../provider-runtime.ts";
 
 type VaultGardenerMemoryRequestPhase = "validate" | "execute";
@@ -22,6 +24,7 @@ type VaultGardenerMemoryRequestPhase = "validate" | "execute";
 interface VaultGardenerMemoryRequest {
   method: "GET" | "POST" | "DELETE";
   path: string;
+  query?: Record<string, string | undefined>;
   body?: Record<string, unknown>;
 }
 
@@ -37,6 +40,32 @@ const maxResponseBytes = 16 * 1024 * 1024;
 const maxErrorMessageCharacters = 8 * 1024;
 
 export const vaultGardenerMemoryActionHandlers: Record<string, ProviderRuntimeHandler<VaultGardenerMemoryContext>> = {
+  memory_map(input, context) {
+    const limit = readOptionalRange(input.limit, "limit", 4, 50);
+    return requestVaultGardenerMemoryJson(
+      {
+        method: "GET",
+        path: "/v1/memory/map",
+        query: {
+          query: optionalString(input.query),
+          limit: limit === undefined ? undefined : String(limit),
+        },
+      },
+      context,
+    );
+  },
+  memory_session_state(input, context) {
+    const sessionId = requiredString(input.session_id, "session_id", inputError);
+    const limit = readOptionalRange(input.limit, "limit", 1, 50);
+    return requestVaultGardenerMemoryJson(
+      {
+        method: "GET",
+        path: `/v1/sessions/${encodePathSegment(sessionId)}/state`,
+        query: { limit: limit === undefined ? undefined : String(limit) },
+      },
+      context,
+    );
+  },
   memory_search(input, context) {
     return requestVaultGardenerMemoryJson(
       {
@@ -82,13 +111,14 @@ export const vaultGardenerMemoryActionHandlers: Record<string, ProviderRuntimeHa
           participants: optionalStringArray(input.participants),
           project: optionalString(input.project),
           status: optionalString(input.status),
+          metadata: optionalRecord(input.metadata),
         }),
       },
       context,
     );
   },
   memory_feedback(input, context) {
-    const memoryId = optionalString(input.memory_id);
+    const memoryId = readOptionalPositiveInteger(input.memory_id, "memory_id");
     const sourceFile = optionalString(input.source_file);
     if (!memoryId && !sourceFile) throw inputError("memory_feedback requires memory_id or source_file");
     return requestVaultGardenerMemoryJson(
@@ -116,6 +146,72 @@ export const vaultGardenerMemoryActionHandlers: Record<string, ProviderRuntimeHa
       context,
     );
     return { session_id: sessionId, reset: true, response };
+  },
+  curation_status(_input, context) {
+    return requestVaultGardenerMemoryJson({ method: "GET", path: "/v1/curation/status" }, context);
+  },
+  curation_scan(input, context) {
+    return requestVaultGardenerMemoryJson(
+      {
+        method: "POST",
+        path: "/v1/curation/scan",
+        body: compactBody({
+          paths: optionalStringArray(input.paths),
+          force: optionalBoolean(input.force),
+        }),
+      },
+      context,
+    );
+  },
+  curation_review(input, context) {
+    const enqueueIfMissing = optionalBoolean(input.enqueue_if_missing);
+    return requestVaultGardenerMemoryJson(
+      {
+        method: "GET",
+        path: "/v1/curation/review",
+        query: {
+          path: requiredString(input.path, "path", inputError),
+          enqueue_if_missing: enqueueIfMissing === undefined ? undefined : String(enqueueIfMissing),
+        },
+      },
+      context,
+    );
+  },
+  curation_list(input, context) {
+    const limit = readOptionalRange(input.limit, "limit", 1, 200);
+    const offset = readOptionalNonNegativeInteger(input.offset, "offset");
+    return requestVaultGardenerMemoryJson(
+      {
+        method: "GET",
+        path: "/v1/curation/proposals",
+        query: {
+          status: optionalString(input.status),
+          action: optionalString(input.action),
+          limit: limit === undefined ? undefined : String(limit),
+          offset: offset === undefined ? undefined : String(offset),
+        },
+      },
+      context,
+    );
+  },
+  curation_approve(input, context) {
+    return requestVaultGardenerCurationDecision("approve", input, context, {
+      reviewed_by: requiredString(input.reviewed_by, "reviewed_by", inputError),
+      notes: optionalString(input.notes),
+      apply: optionalBoolean(input.apply),
+    });
+  },
+  curation_reject(input, context) {
+    return requestVaultGardenerCurationDecision("reject", input, context, {
+      reviewed_by: requiredString(input.reviewed_by, "reviewed_by", inputError),
+      notes: optionalString(input.notes),
+    });
+  },
+  curation_undo(input, context) {
+    return requestVaultGardenerCurationDecision("undo", input, context, {
+      requested_by: requiredString(input.requested_by, "requested_by", inputError),
+      notes: optionalString(input.notes),
+    });
   },
 };
 
@@ -190,7 +286,9 @@ async function requestVaultGardenerMemoryJson(
       "user-agent": providerUserAgent,
     };
     if (request.body) headers["content-type"] = "application/json";
-    const response = await context.fetcher(`${context.apiBaseUrl}${request.path}`, {
+    const url = new URL(`${context.apiBaseUrl}${request.path}`);
+    setSearchParams(url, request.query ?? {});
+    const response = await context.fetcher(url.toString(), {
       method: request.method,
       headers,
       body: request.body ? JSON.stringify(request.body) : undefined,
@@ -247,6 +345,43 @@ function readOptionalRange(value: unknown, fieldName: string, minimum: number, m
     throw inputError(`${fieldName} must be between ${minimum} and ${maximum}`);
   }
   return number;
+}
+
+function readOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  const number = optionalInteger(value);
+  if (number === undefined) return undefined;
+  if (number < 1) throw inputError(`${fieldName} must be a positive integer`);
+  return number;
+}
+
+function readRequiredPositiveInteger(value: unknown, fieldName: string): number {
+  const number = readOptionalPositiveInteger(value, fieldName);
+  if (number === undefined) throw inputError(`${fieldName} must be a positive integer`);
+  return number;
+}
+
+function readOptionalNonNegativeInteger(value: unknown, fieldName: string): number | undefined {
+  const number = optionalInteger(value);
+  if (number === undefined) return undefined;
+  if (number < 0) throw inputError(`${fieldName} must be a non-negative integer`);
+  return number;
+}
+
+function requestVaultGardenerCurationDecision(
+  decision: "approve" | "reject" | "undo",
+  input: Record<string, unknown>,
+  context: VaultGardenerMemoryContext,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const proposalId = readRequiredPositiveInteger(input.proposal_id, "proposal_id");
+  return requestVaultGardenerMemoryJson(
+    {
+      method: "POST",
+      path: `/v1/curation/proposals/${proposalId}/${decision}`,
+      body: compactBody(body),
+    },
+    context,
+  );
 }
 
 function readVerdict(value: unknown): string {

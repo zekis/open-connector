@@ -13,6 +13,7 @@ export interface ClaudeCodeTurnInput {
   systemPrompt: string;
   prompt: string;
   outputSchema: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 export interface ClaudeCodeTurnResult {
@@ -31,6 +32,7 @@ export interface ClaudeCodeCommandInput {
   oauthToken: string;
   timeoutMs: number;
   stdin?: string;
+  signal?: AbortSignal;
 }
 
 export interface ClaudeCodeCommandRunner {
@@ -96,6 +98,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
       oauthToken: input.oauthToken,
       timeoutMs: 120_000,
       stdin: input.prompt,
+      signal: input.signal,
     });
     if (result.exitCode !== 0) {
       throw commandError("claude_agent_failed", "Claude Code could not complete the agent turn.", result);
@@ -152,6 +155,10 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
     environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
     environment.DISABLE_AUTOUPDATER = "1";
 
+    if (input.signal?.aborted) {
+      throw new ClaudeCodeError("claude_agent_cancelled", "Claude Code was cancelled before it started.");
+    }
+
     return await new Promise<ClaudeCodeCommandResult>((resolve, reject) => {
       const child = spawn(executable, input.args, {
         env: environment,
@@ -161,6 +168,11 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
       let stdout = "";
       let stderr = "";
       let settled = false;
+      const abort = (): void => {
+        child.kill();
+        finishReject(new ClaudeCodeError("claude_agent_cancelled", "Claude Code was cancelled."));
+      };
+      input.signal?.addEventListener("abort", abort, { once: true });
       const timeout = setTimeout(() => {
         child.kill();
         finishReject(new ClaudeCodeError("claude_agent_timeout", "Claude Code exceeded the agent turn timeout."));
@@ -191,7 +203,7 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
           return;
         }
         settled = true;
-        clearTimeout(timeout);
+        cleanup();
         resolve({
           exitCode: exitCode ?? 1,
           stdout: redact(stdout, input.oauthToken),
@@ -218,8 +230,13 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
           return;
         }
         settled = true;
-        clearTimeout(timeout);
+        cleanup();
         reject(error);
+      }
+
+      function cleanup(): void {
+        clearTimeout(timeout);
+        input.signal?.removeEventListener("abort", abort);
       }
     });
   }

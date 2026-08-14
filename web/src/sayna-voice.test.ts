@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { float32ToPcm16, parseSaynaMessage, plainTextForSpeech, resampleAudio, SaynaVoiceClient } from "./sayna-voice";
+import {
+  float32ToPcm16,
+  isLikelyPlaybackEcho,
+  parseSaynaMessage,
+  plainTextForSpeech,
+  resampleAudio,
+  SaynaVoiceClient,
+  splitSpeechForPlayback,
+} from "./sayna-voice";
 
 describe("Sayna voice helpers", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -34,6 +42,22 @@ describe("Sayna voice helpers", () => {
     expect(plainTextForSpeech("## Result\n\n- **Sent** [the email](https://example.com).")).toBe(
       "Result Sent the email.",
     );
+  });
+
+  it("splits long replies at natural pauses without losing their content", () => {
+    const text =
+      "First, here is the most important result from the connected application. Second, here is another useful result with supporting detail. Finally, ask whether the user wants the remaining results.";
+    const chunks = splitSpeechForPlayback(text, 90);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 90)).toBe(true);
+    expect(chunks.join(" ")).toBe(text);
+  });
+
+  it("recognizes likely speaker echo without treating an explicit interruption as echo", () => {
+    const spoken = "Here are today's important emails from Outlook.";
+    expect(isLikelyPlaybackEcho("today's important emails", spoken)).toBe(true);
+    expect(isLikelyPlaybackEcho("stop that", spoken)).toBe(false);
   });
 
   it("keeps the microphone and Sayna session open after a finalized conversational turn", async () => {
@@ -85,6 +109,62 @@ describe("Sayna voice helpers", () => {
         "Here are today's important emails.",
       ]),
     );
+    client.close();
+  });
+
+  it("speaks every chunk of a long response in sequence", async () => {
+    const runtime = installVoiceRuntime();
+    const client = createClient();
+    const starting = client.startListening();
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await starting;
+    const response = `${"A useful opening sentence with detail. ".repeat(20)}${"A second sentence follows. ".repeat(20)}`;
+    const expected = splitSpeechForPlayback(plainTextForSpeech(response));
+
+    await client.speak(response);
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual([expected[0]]);
+    for (let index = 1; index < expected.length; index += 1) {
+      runtime.sockets[0]!.receive('{"type":"tts_playback_complete"}');
+      await vi.waitFor(() => expect(sentSpeech(runtime.sockets[0]!)).toHaveLength(index + 1));
+    }
+
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual(expected);
+    client.close();
+  });
+
+  it("ignores playback echo but lets finalized user speech interrupt the response", async () => {
+    const runtime = installVoiceRuntime();
+    const transcripts: string[] = [];
+    const client = new SaynaVoiceClient(createConfiguration(), {
+      onStateChange: () => {},
+      onListeningChange: () => {},
+      onTranscript: (transcript) => transcripts.push(transcript.text),
+      onError: (message) => {
+        throw new Error(message);
+      },
+    });
+    const starting = client.startListening();
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await starting;
+    await client.speak("Here are today's important emails from Outlook.");
+
+    runtime.sockets[0]!.receive(
+      `{"type":"stt_result","transcript":"Here are today's","is_final":false,"is_speech_final":false}`,
+    );
+    runtime.sockets[0]!.receive(
+      `{"type":"stt_result","transcript":"today's important emails","is_final":true,"is_speech_final":true}`,
+    );
+    await Promise.resolve();
+    expect(transcripts).toEqual([]);
+    expect(sentMessagesOfType(runtime.sockets[0]!, "clear")).toHaveLength(0);
+
+    runtime.sockets[0]!.receive(
+      '{"type":"stt_result","transcript":"stop that","is_final":true,"is_speech_final":true}',
+    );
+    await vi.waitFor(() => expect(transcripts).toEqual(["stop that"]));
+    expect(sentMessagesOfType(runtime.sockets[0]!, "clear")).toHaveLength(1);
     client.close();
   });
 
@@ -230,6 +310,14 @@ function sentSpeech(socket: FakeWebSocket): string[] {
     if (typeof value !== "string") return [];
     const parsed = JSON.parse(value) as { type?: unknown; text?: unknown };
     return parsed.type === "speak" && typeof parsed.text === "string" ? [parsed.text] : [];
+  });
+}
+
+function sentMessagesOfType(socket: FakeWebSocket, type: string): unknown[] {
+  return socket.sent.filter((value) => {
+    if (typeof value !== "string") return false;
+    const parsed = JSON.parse(value) as { type?: unknown };
+    return parsed.type === type;
   });
 }
 

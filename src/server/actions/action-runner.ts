@@ -34,6 +34,7 @@ export interface RunActionInput {
   flowRunId?: string;
   flowStepId?: string;
   approvalPolicy?: "enforce" | "bypass";
+  signal?: AbortSignal;
 }
 
 export interface ActionRunResult {
@@ -130,12 +131,13 @@ export class ActionRunner implements IActionRunner {
             action,
             executor,
             input.input,
-            this.createExecutionContext(connection.getCredential),
+            this.createExecutionContext(connection.getCredential, input.signal),
           );
         }
       } catch (error) {
-        result =
-          error instanceof ConnectionError
+        result = input.signal?.aborted
+          ? { ok: false, error: { code: "cancelled", message: "Action execution was cancelled." } }
+          : error instanceof ConnectionError
             ? { ok: false, error: { code: error.code, message: error.message } }
             : {
                 ok: false,
@@ -203,9 +205,13 @@ export class ActionRunner implements IActionRunner {
     return this.options.runs.get(id);
   }
 
-  private createExecutionContext(getCredential: ExecutionConnection["getCredential"]): ExecutionContext {
+  private createExecutionContext(
+    getCredential: ExecutionConnection["getCredential"],
+    signal?: AbortSignal,
+  ): ExecutionContext {
     const context: ExecutionContext = {
       getCredential,
+      signal,
     };
     if (this.options.transitFiles) {
       context.transitFiles = this.options.transitFiles;

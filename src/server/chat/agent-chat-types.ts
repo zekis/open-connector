@@ -38,7 +38,13 @@ export interface AgentChatResponse {
 export interface AgentChatApprovalContinuation {
   messages: AgentChatMessage[];
   toolActivity: AgentChatToolActivity[];
+  voiceMode?: boolean;
   response?: AgentChatResponse;
+}
+
+export interface AgentChatInterruptionDecision {
+  cancelCurrentTask: boolean;
+  reason: string;
 }
 
 export interface AgentChatApprovalResult {

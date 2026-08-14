@@ -139,6 +139,7 @@ export class ConnectionApprovalService {
     id: string,
     messages: AgentChatApprovalContinuation["messages"],
     toolActivity: AgentChatToolActivity[],
+    voiceMode = false,
   ): Promise<ActionApproval> {
     const approval = await this.getPendingApproval(id);
     if (approval.caller !== "chat") {
@@ -149,6 +150,7 @@ export class ConnectionApprovalService {
       chat: {
         messages: structuredClone(messages),
         toolActivity: structuredClone(toolActivity),
+        voiceMode,
       },
     };
     if (!(await this.options.store.updateActionApproval(updated, "pending"))) {

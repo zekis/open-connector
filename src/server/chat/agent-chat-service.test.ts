@@ -123,12 +123,24 @@ describe("AgentChatService", () => {
       "tool_started",
       "tool_completed",
     ]);
-    expect(progress.map((update) => update.speech)).toEqual([
+    expect([
       "Hmm, I'm finding the right connection and action.",
+      "Okay, I'm checking which connection can handle that.",
+      "One moment, I'm finding the right connected action.",
+    ]).toContain(progress[0]?.speech);
+    expect([
       "Okay, I found the connection and action I need.",
+      "Good, I found the connected action I need.",
+      "Yes, I found the right connection for that.",
+    ]).toContain(progress[1]?.speech);
+    expect([
       "Okay, I'm checking Example now.",
-      "Okay, Example completed that step.",
-    ]);
+      "Hmm, I'm working with Example now.",
+      "I've connected to Example. Let me check that.",
+    ]).toContain(progress[2]?.speech);
+    expect(["Okay, Example completed that step.", "Good, that Example step is complete."]).toContain(
+      progress[3]?.speech,
+    );
   });
 
   it("pauses on approval and resumes the exact action with saved agent context", async () => {
@@ -194,6 +206,33 @@ describe("AgentChatService", () => {
     await expect(
       service.respond({ messages: [{ role: "assistant", content: "How can I help?" }] }),
     ).rejects.toMatchObject({ code: "invalid_chat", status: 400 });
+  });
+
+  it("asks Claude for concise, expandable answers when voice mode is enabled", async () => {
+    const claude = new FakeClaudeCodeClient([{ kind: "final", text: "Three useful results. Would you like more?" }]);
+    const service = createService(claude, new FakeActionRunner());
+
+    await service.respond({ messages: [{ role: "user", content: "Read every result" }], voiceMode: true });
+
+    expect(claude.inputs[0]?.systemPrompt).toContain("keep any spoken list to at most three short items");
+    expect(claude.inputs[0]?.systemPrompt).toContain("ask whether the user wants more detail");
+  });
+
+  it("uses Claude to decide whether a live voice interruption cancels the running task", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { cancelCurrentTask: true, reason: "The user explicitly replaced the request." },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+
+    const decision = await service.classifyInterruption({
+      messages: [{ role: "user", content: "Summarize today's email" }],
+      interruption: "Stop, check tomorrow instead",
+      progress: "Checking Outlook",
+    });
+
+    expect(decision).toEqual({ cancelCurrentTask: true, reason: "The user explicitly replaced the request." });
+    expect(claude.inputs[0]?.systemPrompt).toContain("should cancel the Chat task");
+    expect(claude.inputs[0]?.effort).toBe("low");
   });
 
   it("requires a configured Claude subscription", async () => {
@@ -309,9 +348,10 @@ class FakeChatApprovals {
     id: string,
     messages: NonNullable<ActionApproval["chat"]>["messages"],
     toolActivity: NonNullable<ActionApproval["chat"]>["toolActivity"],
+    voiceMode = false,
   ): Promise<ActionApproval> {
     if (id !== this.approval.id) throw new Error("Unexpected approval id");
-    this.approval = { ...this.approval, chat: { messages, toolActivity } };
+    this.approval = { ...this.approval, chat: { messages, toolActivity, voiceMode } };
     return structuredClone(this.approval);
   }
 

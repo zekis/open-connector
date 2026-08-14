@@ -1,5 +1,6 @@
 import type {
   AgentChatApprovalResult,
+  AgentChatInterruptionDecision,
   AgentChatMessage,
   AgentChatProgress,
   AgentChatResponse,
@@ -68,7 +69,11 @@ interface ChatSession {
 
 const chatSessionStorageKey = "open-connector.agent-chat-session.v1";
 const voiceWorkingCueDelayMs = 1_200;
-const voiceWorkingCue = "Hmm, let me check that.";
+const voiceWorkingCues = [
+  "Hmm, let me check that.",
+  "Okay, I'm looking into that.",
+  "One moment, I'm checking your connections.",
+] as const;
 const voiceApprovalCue = "I need your approval before I can continue. You can approve the request here in Chat.";
 
 const suggestions = [
@@ -97,8 +102,11 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const sessionRef = useRef(session);
   const sendingRef = useRef(false);
   const voiceRepliesRef = useRef(false);
+  const agentProgressRef = useRef<AgentChatProgress | undefined>(undefined);
+  const activeChatAbortRef = useRef<AbortController | undefined>(undefined);
   const queuedVoiceTurnsRef = useRef<string[]>([]);
   const workingCueTimerRef = useRef<number | undefined>(undefined);
+  const workingCueIndexRef = useRef(0);
   const spokenMessageIds = useRef(new Set(session.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
@@ -147,6 +155,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   useEffect(
     () => () => {
       if (workingCueTimerRef.current !== undefined) window.clearTimeout(workingCueTimerRef.current);
+      activeChatAbortRef.current?.abort();
     },
     [],
   );
@@ -255,13 +264,17 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     setSending(true);
     setError(null);
     setAgentProgress(undefined);
+    agentProgressRef.current = undefined;
     if (voiceRepliesRef.current) startWorkingCue();
+    const abortController = new AbortController();
+    activeChatAbortRef.current = abortController;
     try {
       let response: AgentChatResponse | undefined;
       await apiPostNdjson<AgentChatStreamEvent>(
         "/api/agent-chat/messages/stream",
         {
           messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+          voiceMode: voiceRepliesRef.current || source === "voice",
         },
         (event) => {
           if (event.type === "error") throw new Error(event.error.message);
@@ -271,8 +284,10 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
           }
           stopWorkingCue();
           setAgentProgress(event.progress);
+          agentProgressRef.current = event.progress;
           if (voiceRepliesRef.current) void voiceClientRef.current?.speakProgress(event.progress.speech);
         },
+        { signal: abortController.signal },
       );
       if (!response) throw new Error("Chat ended before Claude returned a response.");
       const assistantMessage: DisplayMessage = {
@@ -288,16 +303,41 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       });
       if (response.status === "waiting_for_approval") props.onRefresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
+      if (!isAbortError(caught)) {
+        setError(caught instanceof Error ? caught.message : "The agent could not answer this message.");
+      }
     } finally {
       stopWorkingCue();
       setAgentProgress(undefined);
+      agentProgressRef.current = undefined;
+      if (activeChatAbortRef.current === abortController) activeChatAbortRef.current = undefined;
       sendingRef.current = false;
       setSending(false);
     }
   }
 
-  sendVoiceMessageRef.current = (value) => sendMessage(value, "voice");
+  sendVoiceMessageRef.current = (value) =>
+    sendingRef.current ? handleVoiceInterruption(value) : sendMessage(value, "voice");
+
+  async function handleVoiceInterruption(value: string): Promise<void> {
+    const interruption = value.trim();
+    const activeRequest = activeChatAbortRef.current;
+    if (!interruption || !activeRequest) {
+      await sendMessage(interruption, "voice");
+      return;
+    }
+    enqueueVoiceTurn(interruption);
+    try {
+      const decision = await apiPost<AgentChatInterruptionDecision>("/api/agent-chat/interruptions", {
+        messages: sessionRef.current.messages.map(({ role, content }) => ({ role, content })),
+        interruption,
+        progress: agentProgressRef.current?.message,
+      });
+      if (decision.cancelCurrentTask && activeChatAbortRef.current === activeRequest) activeRequest.abort();
+    } catch {
+      // Preserve the queued voice turn and let the active request finish when classification is unavailable.
+    }
+  }
 
   async function decideApproval(decision: "approve" | "deny"): Promise<void> {
     if (!pendingApproval || approvalDecision) return;
@@ -325,6 +365,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }
 
   function resetChat(): void {
+    activeChatAbortRef.current?.abort();
     voiceClientRef.current?.stopSpeaking();
     queuedVoiceTurnsRef.current = [];
     setQueuedVoiceTurnCount(0);
@@ -333,6 +374,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     setError(null);
     setVoiceError(null);
     setAgentProgress(undefined);
+    agentProgressRef.current = undefined;
   }
 
   function toggleVoiceInput(): void {
@@ -384,7 +426,9 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     workingCueTimerRef.current = window.setTimeout(() => {
       workingCueTimerRef.current = undefined;
       if (!sendingRef.current || !voiceRepliesRef.current) return;
-      void voiceClientRef.current?.speakProgress(voiceWorkingCue);
+      const cue = voiceWorkingCues[workingCueIndexRef.current % voiceWorkingCues.length]!;
+      workingCueIndexRef.current += 1;
+      void voiceClientRef.current?.speakProgress(cue);
     }, voiceWorkingCueDelayMs);
   }
 
@@ -893,6 +937,10 @@ function isPendingChatApproval(value: unknown): value is PendingChatApproval {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAbortError(value: unknown): boolean {
+  return value instanceof DOMException && value.name === "AbortError";
 }
 
 function voiceStateLabel(state: SaynaVoiceState, listening: boolean): string {

@@ -243,6 +243,7 @@ export class ConnectServer {
     if (this.options.agentChat) {
       app.post("/api/agent-chat/messages", (context) => this.sendAgentChatMessage(context));
       app.post("/api/agent-chat/messages/stream", (context) => this.streamAgentChatMessage(context));
+      app.post("/api/agent-chat/interruptions", (context) => this.classifyAgentChatInterruption(context));
       app.get("/api/agent-chat/approvals/:id", (context) =>
         this.getAgentChatApproval(context, context.req.param("id")),
       );
@@ -877,6 +878,11 @@ export class ConnectServer {
   private async streamAgentChatMessage(context: Context): Promise<Response> {
     const body = await readJsonBody(context);
     const encoder = new TextEncoder();
+    const abortController = new AbortController();
+    const requestSignal = context.req.raw.signal;
+    const abort = (): void => abortController.abort();
+    if (requestSignal.aborted) abort();
+    else requestSignal.addEventListener("abort", abort, { once: true });
     let cancelled = false;
     const responseBody = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -889,15 +895,17 @@ export class ConnectServer {
           }
         };
         void this.options
-          .agentChat!.respond(body, (progress) => write({ type: "progress", progress }))
+          .agentChat!.respond(body, (progress) => write({ type: "progress", progress }), abortController.signal)
           .then((response) => write({ type: "response", response }))
           .catch((error: unknown) => write(agentChatStreamError(error)))
           .finally(() => {
+            requestSignal.removeEventListener("abort", abort);
             if (!cancelled) controller.close();
           });
       },
       cancel: () => {
         cancelled = true;
+        abort();
       },
     });
     return new Response(responseBody, {
@@ -907,6 +915,18 @@ export class ConnectServer {
         "X-Accel-Buffering": "no",
       },
     });
+  }
+
+  private async classifyAgentChatInterruption(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    try {
+      return context.json(await this.options.agentChat!.classifyInterruption(body, context.req.raw.signal));
+    } catch (error) {
+      if (error instanceof AgentChatError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
   }
 
   private async getAgentChatApproval(context: Context, approvalId: string): Promise<Response> {

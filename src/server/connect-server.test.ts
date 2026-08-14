@@ -218,6 +218,7 @@ describe("ConnectServer", () => {
         });
         return response;
       }),
+      classifyInterruption: vi.fn(async () => ({ cancelCurrentTask: true, reason: "The user said to stop." })),
       resume: vi.fn(async () => response),
       getApprovalResult: vi.fn(async (approvalId: string) => ({ approvalId, status: "pending" as const })),
     };
@@ -243,6 +244,17 @@ describe("ConnectServer", () => {
     expect(authorized.status).toBe(200);
     await expect(authorized.json()).resolves.toEqual(response);
     expect(agentChat.respond).toHaveBeenCalledWith(body);
+
+    const interruption = await app.request("/api/agent-chat/interruptions", {
+      method: "POST",
+      headers: { authorization: "Bearer local-token", "content-type": "application/json" },
+      body: JSON.stringify({ ...body, interruption: "Stop that" }),
+    });
+    expect(interruption.status).toBe(200);
+    await expect(interruption.json()).resolves.toEqual({
+      cancelCurrentTask: true,
+      reason: "The user said to stop.",
+    });
 
     const streamed = await app.request("/api/agent-chat/messages/stream", {
       method: "POST",
@@ -307,6 +319,7 @@ describe("ConnectServer", () => {
     };
     const agentChat: IAgentChatService = {
       respond: vi.fn(async () => response),
+      classifyInterruption: vi.fn(async () => ({ cancelCurrentTask: false, reason: "Continue." })),
       resume: vi.fn(async (approvalId) => {
         const approved = await approvalStore.getActionApproval(approvalId);
         if (!approved) throw new Error("Approval not found");

@@ -4,6 +4,8 @@ const microphoneSampleRate = 16_000;
 const voiceConnectionTimeoutMs = 30_000;
 const playbackBufferLeadSeconds = 0.16;
 const playbackSafetyMarginSeconds = 0.04;
+const playbackCompletionGraceMs = 140;
+const maxSpeechChunkCharacters = 900;
 
 export type SaynaVoiceState = "offline" | "connecting" | "ready" | "listening" | "speaking" | "error";
 
@@ -58,6 +60,7 @@ export class SaynaVoiceClient {
   private finalTranscriptSegments: string[] = [];
   private incomingMessages = Promise.resolve();
   private playbackComplete = false;
+  private playbackCompletionTimer?: number;
   private recovery?: Promise<void>;
   private closed = false;
 
@@ -121,7 +124,7 @@ export class SaynaVoiceClient {
   async speak(markdown: string): Promise<void> {
     const text = plainTextForSpeech(markdown);
     if (!text) return;
-    await this.queueSpeech({ text, kind: "response" });
+    await this.queueResponseSpeech(splitSpeechForPlayback(text));
   }
 
   async speakProgress(text: string): Promise<void> {
@@ -142,6 +145,19 @@ export class SaynaVoiceClient {
         this.speechQueue = this.speechQueue.filter((item) => item.kind !== "progress");
       }
       if (this.speechQueue.at(-1)?.text !== speech.text) this.speechQueue.push(speech);
+      this.startNextSpeech();
+    } catch (error) {
+      this.fail(describeVoiceError(error, "Could not speak the agent reply."));
+    }
+  }
+
+  private async queueResponseSpeech(chunks: string[]): Promise<void> {
+    if (chunks.length === 0) return;
+    try {
+      await this.ensureConnected();
+      await this.resumePlayback();
+      if (this.closed) return;
+      this.speechQueue = chunks.map((text) => ({ text, kind: "response" }));
       this.startNextSpeech();
     } catch (error) {
       this.fail(describeVoiceError(error, "Could not speak the agent reply."));
@@ -273,7 +289,7 @@ export class SaynaVoiceClient {
     if (message.type === "tts_playback_complete") {
       if (!this.speechInFlight) return;
       this.playbackComplete = true;
-      if (this.playbackSources.size === 0) this.finishPlayback();
+      if (this.playbackSources.size === 0) this.schedulePlaybackCompletion();
       return;
     }
     if (message.type === "stt_result") this.handleTranscript(message);
@@ -334,7 +350,14 @@ export class SaynaVoiceClient {
   private handleTranscript(message: SaynaServerMessage): void {
     const transcript = message.transcript?.trim();
     if (!transcript) return;
-    if (this.state === "speaking") this.interruptPlayback();
+    if (this.state === "speaking") {
+      if (!message.is_final) return;
+      if (isLikelyPlaybackEcho(transcript, this.speechInFlight?.text)) {
+        if (message.is_speech_final) this.finalTranscriptSegments = [];
+        return;
+      }
+      this.interruptPlayback();
+    }
     if (message.is_final && this.finalTranscriptSegments.at(-1) !== transcript) {
       this.finalTranscriptSegments.push(transcript);
     }
@@ -352,6 +375,7 @@ export class SaynaVoiceClient {
 
   private async playPcm(value: ArrayBuffer): Promise<void> {
     if (value.byteLength < 2 || !this.speechInFlight) return;
+    this.clearPlaybackCompletionTimer();
     const context = await this.resumePlayback();
     const samples = new Int16Array(value, 0, Math.floor(value.byteLength / 2));
     const buffer = context.createBuffer(1, samples.length, this.configuration.ttsSampleRate ?? 24_000);
@@ -368,7 +392,7 @@ export class SaynaVoiceClient {
     source.onended = () => {
       this.playbackSources.delete(source);
       if (this.playbackSources.size !== 0 || this.closed) return;
-      if (this.playbackComplete) this.finishPlayback();
+      if (this.playbackComplete) this.schedulePlaybackCompletion();
     };
     source.start(startAt);
     this.setState("speaking");
@@ -381,6 +405,7 @@ export class SaynaVoiceClient {
   }
 
   private stopPlayback(): void {
+    this.clearPlaybackCompletionTimer();
     for (const source of this.playbackSources) {
       try {
         source.stop();
@@ -402,6 +427,7 @@ export class SaynaVoiceClient {
   }
 
   private finishPlayback(): void {
+    this.clearPlaybackCompletionTimer();
     this.playbackComplete = false;
     this.speechInFlight = undefined;
     this.nextPlaybackTime = 0;
@@ -422,6 +448,19 @@ export class SaynaVoiceClient {
     this.nextPlaybackTime = 0;
     this.socket.send(JSON.stringify({ type: "speak", text: speech.text }));
     this.setState("speaking");
+  }
+
+  private schedulePlaybackCompletion(): void {
+    this.clearPlaybackCompletionTimer();
+    this.playbackCompletionTimer = window.setTimeout(() => {
+      this.playbackCompletionTimer = undefined;
+      if (this.playbackComplete && this.playbackSources.size === 0) this.finishPlayback();
+    }, playbackCompletionGraceMs);
+  }
+
+  private clearPlaybackCompletionTimer(): void {
+    if (this.playbackCompletionTimer !== undefined) window.clearTimeout(this.playbackCompletionTimer);
+    this.playbackCompletionTimer = undefined;
   }
 
   private setState(state: SaynaVoiceState): void {
@@ -486,6 +525,63 @@ export function plainTextForSpeech(markdown: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 20_000);
+}
+
+/** Splits a long reply at natural pauses while preserving every spoken word. */
+export function splitSpeechForPlayback(text: string, maximumCharacters = maxSpeechChunkCharacters): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const limit = Math.max(80, maximumCharacters);
+  const sentences = normalized.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) ?? [normalized];
+  const chunks: string[] = [];
+  let current = "";
+
+  const append = (part: string): void => {
+    const candidate = current ? `${current} ${part}` : part;
+    if (candidate.length <= limit) {
+      current = candidate;
+      return;
+    }
+    if (current) chunks.push(current);
+    current = part;
+  };
+
+  for (const sentence of sentences) {
+    const trimmed = sentence.trim();
+    if (trimmed.length <= limit) {
+      append(trimmed);
+      continue;
+    }
+    for (const word of trimmed.split(" ")) {
+      if (word.length <= limit) append(word);
+      else {
+        if (current) chunks.push(current);
+        current = "";
+        for (let offset = 0; offset < word.length; offset += limit) chunks.push(word.slice(offset, offset + limit));
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+/** Identifies microphone transcripts that are probably the currently playing speaker audio. */
+export function isLikelyPlaybackEcho(transcript: string, spokenText: string | undefined): boolean {
+  if (!spokenText) return false;
+  const heard = normalizedSpeechWords(transcript);
+  const spoken = normalizedSpeechWords(spokenText);
+  if (heard.length === 0 || spoken.length === 0) return false;
+  if (heard.length === 1) return heard[0]!.length >= 4 && spoken.slice(0, 3).includes(heard[0]!);
+  return spoken.join(" ").includes(heard.join(" "));
+}
+
+function normalizedSpeechWords(value: string): string[] {
+  return value
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}']+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 function webSocketUrl(path: string): string {

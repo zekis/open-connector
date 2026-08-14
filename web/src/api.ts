@@ -9,6 +9,7 @@ export class ApiError extends Error {
 
 export interface RequestOptions {
   bearerToken?: string;
+  signal?: AbortSignal;
 }
 
 export async function apiGet<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -16,6 +17,7 @@ export async function apiGet<T>(path: string, options: RequestOptions = {}): Pro
     await fetch(path, {
       headers: headersFor(options),
       credentials: "same-origin",
+      signal: options.signal,
     }),
   );
 }
@@ -27,6 +29,7 @@ export async function apiPost<T = unknown>(path: string, body: unknown, options:
       headers: headersFor(options, true),
       credentials: "same-origin",
       body: JSON.stringify(body),
+      signal: options.signal,
     }),
   );
 }
@@ -42,6 +45,7 @@ export async function apiPostNdjson<T>(
     headers: headersFor(options, true),
     credentials: "same-origin",
     body: JSON.stringify(body),
+    signal: options.signal,
   });
   if (!response.ok) {
     const payload = parseJson(await response.text());
@@ -72,6 +76,7 @@ export async function apiPut<T = unknown>(path: string, body: unknown, options: 
       headers: headersFor(options, true),
       credentials: "same-origin",
       body: JSON.stringify(body),
+      signal: options.signal,
     }),
   );
 }
@@ -82,6 +87,7 @@ export async function apiDelete<T = unknown>(path: string, options: RequestOptio
       method: "DELETE",
       headers: headersFor(options),
       credentials: "same-origin",
+      signal: options.signal,
     }),
   );
 }

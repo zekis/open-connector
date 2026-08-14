@@ -401,6 +401,11 @@ export interface AgentChatApprovalResult {
   response?: AgentChatResponse;
 }
 
+export interface AgentChatInterruptionDecision {
+  cancelCurrentTask: boolean;
+  reason: string;
+}
+
 export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }
   | { type: "response"; response: AgentChatResponse }

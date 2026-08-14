@@ -8,7 +8,7 @@ export const provider: ProviderDefinition = {
   service,
   displayName: "VaultGardener Memory",
   description:
-    "Search, read, capture, and reinforce personal knowledge through a VaultGardener memory service while preserving reflex context beside source evidence.",
+    "Orient from the learned map, work with personal knowledge and reflex context, and review guarded curation proposals through a durable approval workflow.",
   categories: ["AI", "Productivity", "Storage"],
   authTypes: ["api_key"],
   auth: [
