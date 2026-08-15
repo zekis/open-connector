@@ -84,6 +84,8 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("sales brief");
     expect(html).toContain("https://outlook.office.com/mail/message-1");
     expect(html).toContain("link-target");
+    expect(html).toContain('class="synapse-node-kind"');
+    expect(html).toContain('class="synapse-node-title" title="New mining opportunity"');
     expect(html).toContain("width:420px;height:280px");
     expect(html).toContain("Resize New mining opportunity");
   });

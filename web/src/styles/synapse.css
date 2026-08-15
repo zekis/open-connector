@@ -402,35 +402,61 @@
 .synapse-node.artifact header {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
   gap: 7px;
   margin-bottom: 10px;
 }
 
+.synapse-node-kind {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .synapse-node.artifact header a {
   display: inline-flex;
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--muted-foreground);
 }
 
 .synapse-node.artifact > strong {
-  display: block;
+  display: -webkit-box;
+  flex: 0 0 auto;
+  min-height: 1.35em;
+  max-height: 2.7em;
   margin-bottom: 7px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .synapse-node-markdown {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
   user-select: text;
   touch-action: pan-y;
 }
 
 .synapse-node.artifact .synapse-node-markdown {
-  flex: 1 1 auto;
-  padding-right: 4px;
+  flex: 1 1 0;
+  padding: 0 8px 18px 0;
+}
+
+.synapse-node-markdown::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .synapse-node-markdown.provider-markdown {
@@ -473,6 +499,19 @@
 
 .synapse-node-markdown .chat-markdown a {
   color: var(--info);
+}
+
+.synapse-node-markdown .chat-markdown h1,
+.synapse-node-markdown .chat-markdown h2,
+.synapse-node-markdown .chat-markdown h3,
+.synapse-node-markdown .chat-markdown h4,
+.synapse-node-markdown .chat-markdown h5,
+.synapse-node-markdown .chat-markdown h6 {
+  margin-block: 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .synapse-port {

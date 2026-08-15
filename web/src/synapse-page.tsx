@@ -735,14 +735,16 @@ export function SynapseNodeCard(props: {
         <span className="synapse-node-icon artifact">
           <Icon size={18} />
         </span>
-        <span>{artifactLabel(props.node.artifactKind)}</span>
+        <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
         {props.node.externalUrl ? (
           <a href={props.node.externalUrl} target="_blank" rel="noreferrer" aria-label="Open source">
             <ArrowUpRight size={14} />
           </a>
         ) : null}
       </header>
-      <strong>{props.node.title}</strong>
+      <strong className="synapse-node-title" title={props.node.title}>
+        {props.node.title}
+      </strong>
       <div className="synapse-node-markdown">
         <ChatMarkdown>{markdown}</ChatMarkdown>
       </div>
