@@ -44,7 +44,7 @@ export const provider: ProviderDefinition = {
           secret: false,
           placeholder: xeroDefaultCustomConnectionScopes.join(" "),
           description:
-            "Space-separated scopes selected on the Custom Connection in Xero My Apps. Reconciliation views need accounting.payments.read, accounting.banktransactions.read, and accounting.reports.banksummary.read. Xero-approved Finance API apps can also use finance.cashvalidation.read and finance.bankstatementsplus.read. Defaults to accounting settings, contacts, and invoices; keep accounting.settings.read so the connection can identify its organisation.",
+            "Space-separated scopes Open Connector requests for every access token. They must also be selected on the Custom Connection in Xero My Apps; changing the Xero app does not update this field automatically. Defaults cover the standard Accounting actions, including payments, bank transactions, and Bank Summary. Xero-approved Finance API apps can additionally use finance.cashvalidation.read and finance.bankstatementsplus.read. Keep accounting.settings.read so the connection can identify its organisation.",
         },
       ],
       testAction: {

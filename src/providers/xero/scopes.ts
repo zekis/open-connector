@@ -15,4 +15,7 @@ export const xeroDefaultCustomConnectionScopes: readonly string[] = [
   xeroScopes.settingsRead,
   xeroScopes.contactsWrite,
   xeroScopes.invoicesWrite,
+  xeroScopes.paymentsRead,
+  xeroScopes.bankTransactionsRead,
+  xeroScopes.bankSummaryRead,
 ];

@@ -679,7 +679,8 @@ export const xeroActions: readonly ActionDefinition[] = [
   }),
   defineProviderAction(service, {
     name: "list_invoices",
-    description: "List or search sales invoices and purchase bills in Xero.",
+    description:
+      "List or search sales invoices and purchase bills in Xero. Do not combine summaryOnly=true with ordering by DueDate because Xero rejects that parameter combination.",
     inputSchema: s.object(
       "Invoice filters and pagination.",
       {

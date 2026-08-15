@@ -3,9 +3,20 @@ import type { XeroContext } from "./runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
-import { validateXeroCredential, xeroActionHandlers } from "./runtime.ts";
+import { createXeroCredential, validateXeroCredential, xeroActionHandlers } from "./runtime.ts";
 
 describe("Xero Custom Connection runtime", () => {
+  it("defaults new connections to every standard Accounting scope used by dedicated actions", () => {
+    expect(createXeroCredential({ clientId: "default-client", clientSecret: "secret" }).scopes).toEqual([
+      "accounting.settings.read",
+      "accounting.contacts",
+      "accounting.invoices",
+      "accounting.payments.read",
+      "accounting.banktransactions.read",
+      "accounting.reports.banksummary.read",
+    ]);
+  });
+
   it("exchanges app credentials once and identifies the connected organisation", async () => {
     const fetcher = createXeroFetch();
     const values = {
