@@ -184,29 +184,31 @@ export class FlowTriggerEngine {
     if (newItems.length === 0) {
       return;
     }
-    this.launch(
-      flow,
-      createEvent(trigger.type, now, {
-        connectionId: trigger.connectionId,
-        service: connection.service,
-        eventId: trigger.type === "event" ? trigger.eventId : undefined,
-        detectorActionId: plan.actionId,
-        items: newItems.map((item) => item.payload),
-      }),
-    );
+    for (const item of newItems) {
+      this.launch(
+        flow,
+        createEvent(trigger.type, now, {
+          connectionId: trigger.connectionId,
+          service: connection.service,
+          eventId: trigger.type === "event" ? trigger.eventId : undefined,
+          detectorActionId: plan.actionId,
+          items: [item.payload],
+        }),
+      );
+    }
   }
 
   private launch(flow: FlowDefinition, event: FlowTriggerEvent): void {
-    const running = this.options.runner
-      .start(flow.id, { trigger: event.type, event })
-      .catch((error: unknown) => {
+    const previous = this.inFlight.get(flow.id);
+    const start = (): Promise<unknown> =>
+      this.options.runner.start(flow.id, { trigger: event.type, event }).catch((error: unknown) => {
         this.options.logger?.warn({ flowId: flow.id, trigger: event.type, error }, "triggered flow failed");
-      })
-      .finally(() => {
-        if (this.inFlight.get(flow.id) === running) {
-          this.inFlight.delete(flow.id);
-        }
       });
+    const running = (previous ? previous.then(start, start) : start()).finally(() => {
+      if (this.inFlight.get(flow.id) === running) {
+        this.inFlight.delete(flow.id);
+      }
+    });
     this.inFlight.set(flow.id, running);
   }
 

@@ -39,6 +39,7 @@
   },
   "nav": {
     "overview": "Overview",
+    "feed": "Feed",
     "providers": "Providers",
     "actions": "Actions",
     "agents": "Agents",
@@ -67,6 +68,10 @@
       "overview": {
         "title": "Overview",
         "subtitle": "Runtime status and health."
+      },
+      "feed": {
+        "title": "Feed",
+        "subtitle": "Triggered activity, agent updates, and approvals in one timeline."
       },
       "providers": {
         "title": "Providers",

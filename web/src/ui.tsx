@@ -32,6 +32,7 @@ import {
   MessageCircle,
   Monitor,
   Moon,
+  Newspaper,
   RefreshCw,
   Sun,
   TerminalSquare,
@@ -47,6 +48,7 @@ import { ApiError, apiGet, apiPost } from "./api";
 import { ApprovalsPage } from "./approvals-page";
 import oomolConnectLogoUrl from "./assets/oomol-connect-logo.png";
 import { ChatPage } from "./chat-page";
+import { FeedPageView } from "./feed-page";
 import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
@@ -65,6 +67,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const navItems = [
   { path: "/overview", labelKey: "nav.overview", icon: Home },
+  { path: "/feed", labelKey: "nav.feed", icon: Newspaper },
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
@@ -372,7 +375,7 @@ function AppShell(props: {
   const heading = headingForPath(location.pathname);
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
-  const isBrowserPage = section === "actions" || section === "runs" || section === "chat";
+  const isBrowserPage = section === "actions" || section === "runs" || section === "chat" || section === "feed";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
   const pendingApprovalCount =
@@ -453,6 +456,7 @@ function AppShell(props: {
           <Routes>
             <Route index element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/feed" element={<FeedPageView data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/providers" element={<ProvidersPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/providers/:service"
@@ -625,6 +629,9 @@ function headingForPath(pathname: string): string {
   const section = pathname.split("/").filter(Boolean)[0];
   if (section === "providers") {
     return "providers";
+  }
+  if (section === "feed") {
+    return "feed";
   }
   if (section === "actions") {
     return "actions";

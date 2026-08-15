@@ -19,6 +19,7 @@ import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import { AgentChatService } from "./chat/agent-chat-service.ts";
 import { ConnectServer } from "./connect-server.ts";
+import { FeedService } from "./feed/feed-service.ts";
 import { ClaudeCodeFlowAgent } from "./flows/claude-code-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
@@ -115,6 +116,12 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     approvals: connectionApprovals,
     getPolicySnapshot,
   });
+  const feed = new FeedService({
+    flows: flowRunner,
+    approvals: connectionApprovals,
+    agentChat,
+    store: options.runtimeDatabase.feedStore,
+  });
   const flowTriggers = new FlowTriggerEngine({
     catalog: options.catalog,
     flows,
@@ -134,6 +141,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       agentCredentials,
       agentSettings,
       agentChat,
+      feed,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,

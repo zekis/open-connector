@@ -39,6 +39,7 @@
   },
   "nav": {
     "overview": "概览",
+    "feed": "动态",
     "providers": "提供商",
     "actions": "操作",
     "agents": "智能体",
@@ -67,6 +68,10 @@
       "overview": {
         "title": "概览",
         "subtitle": "查看运行时状态和健康情况。"
+      },
+      "feed": {
+        "title": "动态",
+        "subtitle": "在一个时间线中查看触发活动、代理更新和审批。"
       },
       "providers": {
         "title": "提供商",

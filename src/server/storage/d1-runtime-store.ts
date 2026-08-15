@@ -10,6 +10,7 @@ import type {
   IConnectionApprovalStore,
 } from "../approvals/connection-approval-types.ts";
 import type { D1DatabaseBinding } from "../cloudflare/cloudflare-bindings.ts";
+import type { FeedThread, IFeedStore } from "../feed/feed-types.ts";
 import type {
   FlowApproval,
   FlowApprovalStatus,
@@ -53,6 +54,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly runLogStore: D1RunLogStore;
   readonly idempotencyStore: D1IdempotencyStore;
   readonly flowStore: D1FlowStore;
+  readonly feedStore: D1FeedStore;
   readonly connectionApprovalStore: D1ConnectionApprovalStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
@@ -65,6 +67,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.runLogStore = new D1RunLogStore(database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new D1IdempotencyStore(database, secretCodec);
     this.flowStore = new D1FlowStore(database, secretCodec);
+    this.feedStore = new D1FeedStore(database, secretCodec);
     this.connectionApprovalStore = new D1ConnectionApprovalStore(database, secretCodec);
   }
 }
@@ -758,6 +761,48 @@ export class D1FlowStore implements IFlowStore {
 
   private encode(value: unknown): Promise<string> {
     return this.secretCodec.encode(JSON.stringify(value));
+  }
+}
+
+export class D1FeedStore implements IFeedStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setThread(thread: FeedThread): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into feed_threads (id, flow_run_id, updated_at, value)
+        values (?, ?, ?, ?)
+        on conflict(id) do update set
+          flow_run_id = excluded.flow_run_id,
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .bind(thread.id, thread.flowRunId, thread.updatedAt, await this.secretCodec.encode(JSON.stringify(thread)))
+      .run();
+  }
+
+  async getThread(id: string): Promise<FeedThread | undefined> {
+    const row = await this.database.prepare("select value from feed_threads where id = ?").bind(id).first<RuntimeRow>();
+    return row ? parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listThreads(limit = 500): Promise<FeedThread[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 1_000));
+    const { results } = await this.database
+      .prepare("select value from feed_threads order by updated_at desc, id desc limit ?")
+      .bind(boundedLimit)
+      .all<RuntimeRow>();
+    return await Promise.all(
+      results.map(async (row) => parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value")))),
+    );
   }
 }
 

@@ -39,6 +39,7 @@
   },
   "nav": {
     "overview": "總覽",
+    "feed": "動態",
     "providers": "服務提供者",
     "actions": "動作",
     "agents": "代理",
@@ -67,6 +68,10 @@
       "overview": {
         "title": "總覽",
         "subtitle": "執行階段狀態與健康情形。"
+      },
+      "feed": {
+        "title": "動態",
+        "subtitle": "在單一時間軸中查看觸發活動、代理更新與核准。"
       },
       "providers": {
         "title": "服務提供者",

@@ -15,6 +15,30 @@ const githubProfile = {
 };
 
 describe("D1RuntimeDatabase", () => {
+  it("persists encrypted Feed conversation threads", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("feed-key"),
+    });
+    const thread = {
+      id: "flow:run-1",
+      flowRunId: "run-1",
+      comments: [
+        {
+          id: "comment-1",
+          role: "user" as const,
+          content: "What happened here?",
+          createdAt: "2026-08-05T01:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-08-05T01:00:00.000Z",
+      updatedAt: "2026-08-05T01:00:00.000Z",
+    };
+
+    await database.feedStore.setThread(thread);
+    await expect(database.feedStore.getThread(thread.id)).resolves.toEqual(thread);
+    await expect(database.feedStore.listThreads()).resolves.toEqual([thread]);
+  });
+
   it("persists Flow trigger detector state", async () => {
     const database = new D1RuntimeDatabase(new SqliteD1Database(), {
       secretCodec: new AesGcmSecretCodec("trigger-state-key"),
@@ -557,6 +581,7 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(
       readFileSync(new URL("../../../migrations/0013_connection_approvals.sql", import.meta.url), "utf8"),
     );
+    this.database.exec(readFileSync(new URL("../../../migrations/0014_feed.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

@@ -11,6 +11,7 @@ import type { ConnectionApprovalService } from "./approvals/connection-approval-
 import type { ActionApproval, ActionApprovalExecution } from "./approvals/connection-approval-types.ts";
 import type { IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { AgentChatStreamEvent } from "./chat/agent-chat-types.ts";
+import type { FeedService } from "./feed/feed-service.ts";
 import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
@@ -64,6 +65,7 @@ import {
 } from "./api/runtime-api.ts";
 import { ConnectionApprovalError } from "./approvals/connection-approval-service.ts";
 import { AgentChatError } from "./chat/agent-chat-service.ts";
+import { FeedError } from "./feed/feed-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
@@ -79,6 +81,7 @@ export interface IConnectServerOptions {
   agentCredentials?: AgentCredentialService;
   agentSettings?: AgentSettingsService;
   agentChat?: IAgentChatService;
+  feed?: FeedService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
@@ -247,6 +250,10 @@ export class ConnectServer {
       app.get("/api/agent-chat/approvals/:id", (context) =>
         this.getAgentChatApproval(context, context.req.param("id")),
       );
+    }
+    if (this.options.feed) {
+      app.get("/api/feed", (context) => this.listFeed(context));
+      app.post("/api/feed/:id/comments", (context) => this.replyToFeedItem(context, context.req.param("id")));
     }
 
     app.get("/api/runs", (context) => this.listRuns(context));
@@ -940,6 +947,21 @@ export class ConnectServer {
     }
   }
 
+  private async listFeed(context: Context): Promise<Response> {
+    return context.json(await this.options.feed!.list());
+  }
+
+  private async replyToFeedItem(context: Context, itemId: string): Promise<Response> {
+    try {
+      return context.json(await this.options.feed!.reply(itemId, await readJsonBody(context)));
+    } catch (error) {
+      if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof AgentChatError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof FlowError) return jsonError(context, error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
   private async listFlows(context: Context): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowService().list());
   }
@@ -979,7 +1001,8 @@ export class ConnectServer {
     try {
       const approval = await this.options.connectionApprovals!.approve(id);
       if (approval.caller === "chat" && approval.chat && this.options.agentChat) {
-        await this.options.agentChat.resume(id);
+        const response = await this.options.agentChat.resume(id);
+        await this.recordFeedApprovalResponse(id, response);
         const resumed = await this.options.connectionApprovals!.getActionApproval(id);
         return context.json(serializeActionApproval(resumed ?? approval));
       }
@@ -996,10 +1019,35 @@ export class ConnectServer {
   }
 
   private async denyActionRequest(context: Context, id: string): Promise<Response> {
-    return await this.writeConnectionApprovalResult(
-      context,
-      this.options.connectionApprovals!.deny(id).then(serializeActionApproval),
-    );
+    try {
+      const denied = await this.options.connectionApprovals!.deny(id);
+      await this.recordFeedApprovalDenied(id);
+      return context.json(serializeActionApproval(denied));
+    } catch (error) {
+      if (error instanceof ConnectionApprovalError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async recordFeedApprovalResponse(
+    approvalId: string,
+    response: Awaited<ReturnType<IAgentChatService["resume"]>>,
+  ): Promise<void> {
+    try {
+      await this.options.feed?.recordApprovalResponse(approvalId, response);
+    } catch (error) {
+      this.options.logger?.warn({ approvalId, error }, "feed approval response could not be recorded");
+    }
+  }
+
+  private async recordFeedApprovalDenied(approvalId: string): Promise<void> {
+    try {
+      await this.options.feed?.recordApprovalDenied(approvalId);
+    } catch (error) {
+      this.options.logger?.warn({ approvalId, error }, "feed approval denial could not be recorded");
+    }
   }
 
   private async writeConnectionApprovalResult(context: Context, operation: Promise<unknown>): Promise<Response> {

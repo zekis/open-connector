@@ -406,6 +406,69 @@ export interface AgentChatInterruptionDecision {
   reason: string;
 }
 
+export interface FeedCommentToolActivity {
+  id: string;
+  type: "search" | "action";
+  label: string;
+  ok: boolean;
+  actionId?: string;
+  connectionDisplayName?: string;
+  approvalId?: string;
+}
+
+export interface FeedComment {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  toolActivity?: FeedCommentToolActivity[];
+  approvalId?: string;
+}
+
+export interface FeedApprovalSummary {
+  id: string;
+  kind: "flow" | "action";
+  status: FlowApproval["status"] | ActionApproval["status"];
+  actionId: string;
+  connectionId: string;
+  input: unknown;
+  requestedAt: string;
+}
+
+export interface FeedActionSummary {
+  id: string;
+  actionId: string;
+  connectionId?: string;
+  status: "pending" | "completed" | "failed" | "denied";
+}
+
+export interface FeedItem {
+  id: string;
+  kind: "trigger" | "approval";
+  createdAt: string;
+  updatedAt: string;
+  title: string;
+  summary?: string;
+  author?: string;
+  providerService?: string;
+  flow?: {
+    id: string;
+    name: string;
+    runId: string;
+    status: FlowRun["status"];
+    trigger: FlowRun["trigger"];
+  };
+  agentSummary?: string;
+  actions: FeedActionSummary[];
+  comments: FeedComment[];
+  approvals: FeedApprovalSummary[];
+  canReply: boolean;
+}
+
+export interface FeedPage {
+  items: FeedItem[];
+}
+
 export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }
   | { type: "response"; response: AgentChatResponse }

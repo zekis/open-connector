@@ -10,6 +10,7 @@
 @import "./styles/actions.css";
 @import "./styles/agents.css";
 @import "./styles/chat.css";
+@import "./styles/feed.css";
 @import "./styles/runs.css";
 @import "./styles/flows.css";
 @import "./styles/triggers.css";

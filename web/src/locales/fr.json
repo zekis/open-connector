@@ -39,6 +39,7 @@
   },
   "nav": {
     "overview": "Vue d’ensemble",
+    "feed": "Fil",
     "providers": "Fournisseurs",
     "actions": "Actions",
     "agents": "Agents",
@@ -67,6 +68,10 @@
       "overview": {
         "title": "Vue d’ensemble",
         "subtitle": "État et santé du runtime."
+      },
+      "feed": {
+        "title": "Fil",
+        "subtitle": "Activité déclenchée, mises à jour de l’agent et approbations."
       },
       "providers": {
         "title": "Fournisseurs",

@@ -13,7 +13,7 @@ import type {
   IFlowStore,
 } from "./flow-types.ts";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
 import { provider as outlookProvider } from "../../providers/outlook/definition.ts";
 import { FlowTriggerEngine } from "./flow-trigger-engine.ts";
@@ -87,6 +87,33 @@ describe("FlowTriggerEngine", () => {
         items: [{ id: "sent-2", subject: "New sent message" }],
       },
     });
+  });
+
+  it("queues one independent Flow run for each new connector item", async () => {
+    const harness = createHarness({
+      type: "new_email",
+      connectionId: "source-1",
+      pollIntervalSeconds: 60,
+    });
+    harness.actions.outputs.push(
+      { messages: [{ id: "existing", subject: "Existing" }] },
+      {
+        messages: [
+          { id: "message-2", subject: "Second new email" },
+          { id: "message-1", subject: "First new email" },
+          { id: "existing", subject: "Existing" },
+        ],
+      },
+    );
+
+    await harness.engine.tick(new Date("2026-08-05T01:00:00.000Z"));
+    await harness.engine.tick(new Date("2026-08-05T01:01:00.000Z"));
+    await vi.waitFor(() => expect(harness.starts).toHaveLength(2));
+
+    expect(harness.starts.map((start) => start.event?.payload)).toEqual([
+      expect.objectContaining({ items: [{ id: "message-2", subject: "Second new email" }] }),
+      expect.objectContaining({ items: [{ id: "message-1", subject: "First new email" }] }),
+    ]);
   });
 
   it("accepts API payloads only for API-triggered flows", async () => {

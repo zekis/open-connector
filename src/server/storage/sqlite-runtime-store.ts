@@ -9,6 +9,7 @@ import type {
   ConnectionActionPermission,
   IConnectionApprovalStore,
 } from "../approvals/connection-approval-types.ts";
+import type { FeedThread, IFeedStore } from "../feed/feed-types.ts";
 import type {
   FlowApproval,
   FlowApprovalStatus,
@@ -85,6 +86,7 @@ type IdSecretTable =
   | "flow_steps"
   | "flow_approvals"
   | "flow_trigger_states"
+  | "feed_threads"
   | "connection_action_permissions"
   | "action_approvals";
 
@@ -100,6 +102,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly runLogStore: SqliteRunLogStore;
   readonly idempotencyStore: SqliteIdempotencyStore;
   readonly flowStore: SqliteFlowStore;
+  readonly feedStore: SqliteFeedStore;
   readonly connectionApprovalStore: SqliteConnectionApprovalStore;
 
   private readonly database: DatabaseSync;
@@ -117,6 +120,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.runLogStore = new SqliteRunLogStore(this.database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new SqliteIdempotencyStore(this.database, this.secretCodec);
     this.flowStore = new SqliteFlowStore(this.database, this.secretCodec);
+    this.feedStore = new SqliteFeedStore(this.database, this.secretCodec);
     this.connectionApprovalStore = new SqliteConnectionApprovalStore(this.database, this.secretCodec);
   }
 
@@ -141,6 +145,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "flow_steps",
           "flow_approvals",
           "flow_trigger_states",
+          "feed_threads",
           "connection_action_permissions",
           "action_approvals",
         ] as IdSecretTable[]
@@ -157,6 +162,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "flow_steps",
           "flow_approvals",
           "flow_trigger_states",
+          "feed_threads",
           "connection_action_permissions",
           "action_approvals",
         ] as IdSecretTable[]
@@ -177,6 +183,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from idempotency_records;
       delete from action_approvals;
       delete from connection_action_permissions;
+      delete from feed_threads;
       delete from flow_trigger_states;
       delete from flow_approvals;
       delete from flow_steps;
@@ -829,6 +836,46 @@ export class SqliteFlowStore implements IFlowStore {
 
   private encode(value: unknown): Promise<string> {
     return this.secretCodec.encode(JSON.stringify(value));
+  }
+}
+
+export class SqliteFeedStore implements IFeedStore {
+  private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setThread(thread: FeedThread): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into feed_threads (id, flow_run_id, updated_at, value)
+        values (?, ?, ?, ?)
+        on conflict(id) do update set
+          flow_run_id = excluded.flow_run_id,
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .run(thread.id, thread.flowRunId, thread.updatedAt, await this.secretCodec.encode(JSON.stringify(thread)));
+  }
+
+  async getThread(id: string): Promise<FeedThread | undefined> {
+    const row = this.database.prepare("select value from feed_threads where id = ?").get(id);
+    return row ? parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listThreads(limit = 500): Promise<FeedThread[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 1_000));
+    const rows = this.database
+      .prepare("select value from feed_threads order by updated_at desc, id desc limit ?")
+      .all(boundedLimit);
+    return await Promise.all(
+      rows.map(async (row) => parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value")))),
+    );
   }
 }
 

@@ -53,6 +53,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0011_flows.sql",
       "0012_flow_triggers.sql",
       "0013_connection_approvals.sql",
+      "0014_feed.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -206,6 +207,21 @@ describe("SqliteRuntimeDatabase", () => {
       lastCheckedAt: "2026-07-30T00:00:03.000Z",
       updatedAt: "2026-07-30T00:00:03.000Z",
     });
+    const feedThread = {
+      id: `flow:${run.id}`,
+      flowRunId: run.id,
+      comments: [
+        {
+          id: "feed-comment-1",
+          role: "user" as const,
+          content: "Explain what changed.",
+          createdAt: "2026-07-30T00:00:04.000Z",
+        },
+      ],
+      createdAt: "2026-07-30T00:00:04.000Z",
+      updatedAt: "2026-07-30T00:00:04.000Z",
+    };
+    await first.feedStore.setThread(feedThread);
     first.close();
 
     const second = new SqliteRuntimeDatabase(databasePath, {
@@ -219,6 +235,7 @@ describe("SqliteRuntimeDatabase", () => {
       flowId: flow.id,
       seenIds: ["message-1"],
     });
+    await expect(second.feedStore.getThread(feedThread.id)).resolves.toEqual(feedThread);
     const approved: FlowApproval = {
       ...approval,
       status: "approved",
@@ -871,6 +888,13 @@ describe("SqliteRuntimeDatabase", () => {
       expiresAt: "2026-07-01T00:00:00.000Z",
     });
     await database.flowStore.setFlow(createFlow());
+    await database.feedStore.setThread({
+      id: "flow:run-reset",
+      flowRunId: "run-reset",
+      comments: [],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
     await database.connectionApprovalStore.replacePermissions("connection-1", [
       {
         connectionId: "connection-1",
@@ -886,6 +910,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(database.runLogStore.list()).resolves.toEqual({ items: [] });
     await expect(database.runtimePolicyStore.get()).resolves.toBeUndefined();
     await expect(database.flowStore.listFlows()).resolves.toEqual([]);
+    await expect(database.feedStore.listThreads()).resolves.toEqual([]);
     await expect(database.connectionApprovalStore.listPermissions()).resolves.toEqual([]);
     await expect(
       database.idempotencyStore.claim({
@@ -938,6 +963,21 @@ describe("SqliteRuntimeDatabase", () => {
     await database.runLogStore.add(createRun("run-1", "2026-06-30T00:00:00.000Z"));
     const flow = createFlow();
     await database.flowStore.setFlow(flow);
+    const feedThread = {
+      id: "flow:rotation-run",
+      flowRunId: "rotation-run",
+      comments: [
+        {
+          id: "feed-rotation-comment",
+          role: "user" as const,
+          content: "rotated feed secret",
+          createdAt: "2026-08-05T00:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-08-05T00:00:00.000Z",
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    };
+    await database.feedStore.setThread(feedThread);
     await database.connectionApprovalStore.addActionApproval({
       id: "action-approval-rotation",
       status: "pending",
@@ -957,6 +997,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withOldKey.connectionStore.get("github", "default")).rejects.toThrow();
     await expect(withOldKey.idempotencyStore.claim({ ...claim, claimId: "claim-2" })).rejects.toThrow();
     await expect(withOldKey.flowStore.getFlow(flow.id)).rejects.toThrow();
+    await expect(withOldKey.feedStore.getThread(feedThread.id)).rejects.toThrow();
     await expect(withOldKey.connectionApprovalStore.getActionApproval("action-approval-rotation")).rejects.toThrow();
     withOldKey.close();
 
@@ -975,6 +1016,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withNewKey.runtimeTokenStore.list()).resolves.toMatchObject([{ id: token.record.id }]);
     await expect(withNewKey.runLogStore.list()).resolves.toMatchObject({ items: [{ id: "run-1" }] });
     await expect(withNewKey.flowStore.getFlow(flow.id)).resolves.toEqual(flow);
+    await expect(withNewKey.feedStore.getThread(feedThread.id)).resolves.toEqual(feedThread);
     await expect(
       withNewKey.connectionApprovalStore.getActionApproval("action-approval-rotation"),
     ).resolves.toMatchObject({ input: { title: "rotated approval secret" } });
