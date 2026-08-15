@@ -5,10 +5,11 @@ import type {
   ProviderDefinition,
   SynapseArtifactKind,
   SynapseNode,
+  SynapseSize,
   SynapseWorkspace,
   SynapseWorkspaceSummary,
 } from "./model";
-import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
   ArrowUpRight,
@@ -62,11 +63,28 @@ const approvalNodeHeight = 142;
 const nodeHorizontalGap = 48;
 const nodeVerticalGap = 32;
 const approvalPollIntervalMs = 2_000;
+const canvasGridSize = 22;
+const minimumCanvasScale = 0.3;
+const maximumCanvasScale = 2.5;
+const wheelZoomSensitivity = 0.0015;
+const minimumNodeWidth = 220;
+const maximumNodeWidth = 1_200;
+const minimumNodeHeight = 100;
+const maximumNodeHeight = 1_200;
 
 interface DragState {
   nodeId: string;
   offsetX: number;
   offsetY: number;
+}
+
+interface ResizeState {
+  nodeId: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
 }
 
 interface PanState {
@@ -77,13 +95,15 @@ interface PanState {
   offsetY: number;
 }
 
-interface CanvasOffset {
+export interface CanvasView {
   x: number;
   y: number;
+  scale: number;
 }
 
 interface CanvasOccupant {
   position: { x: number; y: number };
+  width: number;
   height: number;
 }
 
@@ -404,9 +424,25 @@ function SynapseCanvas(props: {
 }): ReactNode {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | undefined>(undefined);
+  const resizeRef = useRef<ResizeState | undefined>(undefined);
   const panRef = useRef<PanState | undefined>(undefined);
   const [panning, setPanning] = useState(false);
-  const [canvasOffset, setCanvasOffset] = useState<CanvasOffset>({ x: 0, y: 0 });
+  const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
+
+  useEffect(() => {
+    const canvas = scrollRef.current;
+    if (!canvas) return;
+    const zoom = (event: WheelEvent): void => {
+      event.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const deltaY = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1);
+      setCanvasView((current) =>
+        zoomCanvasView(current, { x: event.clientX - rect.left, y: event.clientY - rect.top }, deltaY),
+      );
+    };
+    canvas.addEventListener("wheel", zoom, { passive: false });
+    return () => canvas.removeEventListener("wheel", zoom);
+  }, []);
 
   function beginPan(event: ReactPointerEvent<HTMLDivElement>): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest(".synapse-node")) return;
@@ -414,8 +450,8 @@ function SynapseCanvas(props: {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      offsetX: canvasOffset.x,
-      offsetY: canvasOffset.y,
+      offsetX: canvasView.x,
+      offsetY: canvasView.y,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     setPanning(true);
@@ -425,16 +461,11 @@ function SynapseCanvas(props: {
   function movePan(event: ReactPointerEvent<HTMLDivElement>): void {
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    setCanvasOffset({
+    setCanvasView((current) => ({
+      ...current,
       x: pan.offsetX + event.clientX - pan.startX,
       y: pan.offsetY + event.clientY - pan.startY,
-    });
-  }
-
-  function panWithWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    if ((event.target as HTMLElement).closest(".synapse-node-markdown")) return;
-    setCanvasOffset((current) => ({ x: current.x - event.deltaX, y: current.y - event.deltaY }));
-    event.preventDefault();
+    }));
   }
 
   function finishPan(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -448,7 +479,7 @@ function SynapseCanvas(props: {
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
-    if ((event.target as HTMLElement).closest("button,a,.synapse-node-markdown")) return;
+    if ((event.target as HTMLElement).closest("button,a,.synapse-node-markdown,.synapse-node-resize")) return;
     if (props.linkingFrom) {
       props.onNodeSelect(node.id);
       return;
@@ -458,8 +489,8 @@ function SynapseCanvas(props: {
     const rect = scroll.getBoundingClientRect();
     dragRef.current = {
       nodeId: node.id,
-      offsetX: event.clientX - rect.left - canvasOffset.x - node.position.x,
-      offsetY: event.clientY - rect.top - canvasOffset.y - node.position.y,
+      offsetX: (event.clientX - rect.left - canvasView.x) / canvasView.scale - node.position.x,
+      offsetY: (event.clientY - rect.top - canvasView.y) / canvasView.scale - node.position.y,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     props.onNodeSelect(node.id);
@@ -471,8 +502,8 @@ function SynapseCanvas(props: {
     if (!drag || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
-      x: event.clientX - rect.left - canvasOffset.x - drag.offsetX,
-      y: event.clientY - rect.top - canvasOffset.y - drag.offsetY,
+      x: (event.clientX - rect.left - canvasView.x) / canvasView.scale - drag.offsetX,
+      y: (event.clientY - rect.top - canvasView.y) / canvasView.scale - drag.offsetY,
     };
     props.onWorkspaceChange(moveNode(props.workspace, drag.nodeId, position));
   }
@@ -484,8 +515,8 @@ function SynapseCanvas(props: {
     if (!drag || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
-      x: Math.round(event.clientX - rect.left - canvasOffset.x - drag.offsetX),
-      y: Math.round(event.clientY - rect.top - canvasOffset.y - drag.offsetY),
+      x: Math.round((event.clientX - rect.left - canvasView.x) / canvasView.scale - drag.offsetX),
+      y: Math.round((event.clientY - rect.top - canvasView.y) / canvasView.scale - drag.offsetY),
     };
     props.onWorkspaceChange(moveNode(props.workspace, drag.nodeId, position));
     void apiPut<SynapseWorkspace>(
@@ -494,18 +525,62 @@ function SynapseCanvas(props: {
     ).then(props.onWorkspaceSaved);
   }
 
+  function beginResize(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
+    if (event.button !== 0) return;
+    const size = sizeForCanvasNode(node);
+    resizeRef.current = {
+      nodeId: node.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: size.width,
+      startHeight: size.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.stopPropagation();
+    event.preventDefault();
+    props.onNodeSelect(node.id);
+  }
+
+  function moveResize(event: ReactPointerEvent<HTMLElement>): void {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    const size = sizeFromPointer(resize, event.clientX, event.clientY, canvasView.scale);
+    props.onWorkspaceChange(resizeNode(props.workspace, resize.nodeId, size));
+  }
+
+  function finishResize(event: ReactPointerEvent<HTMLElement>): void {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    resizeRef.current = undefined;
+    const size = sizeFromPointer(resize, event.clientX, event.clientY, canvasView.scale);
+    props.onWorkspaceChange(resizeNode(props.workspace, resize.nodeId, size));
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    void apiPut<SynapseWorkspace>(
+      `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(resize.nodeId)}`,
+      { size },
+    ).then(props.onWorkspaceSaved);
+  }
+
   return (
     <div
       className={panning ? "synapse-canvas-scroll panning" : "synapse-canvas-scroll"}
       ref={scrollRef}
-      style={{ backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }}
+      style={{
+        backgroundPosition: `${canvasView.x}px ${canvasView.y}px`,
+        backgroundSize: `${canvasGridSize * canvasView.scale}px ${canvasGridSize * canvasView.scale}px`,
+      }}
       onPointerDown={beginPan}
       onPointerMove={movePan}
       onPointerUp={finishPan}
       onPointerCancel={finishPan}
-      onWheel={panWithWheel}
     >
-      <div className="synapse-canvas" style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px)` }}>
+      <div
+        className="synapse-canvas"
+        style={{ transform: `translate(${canvasView.x}px, ${canvasView.y}px) scale(${canvasView.scale})` }}
+      >
         <svg className="synapse-edges" width="1" height="1" aria-hidden="true">
           <defs>
             <marker id="synapse-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
@@ -516,13 +591,13 @@ function SynapseCanvas(props: {
             const source = props.workspace.nodes.find((node) => node.id === edge.sourceNodeId);
             const target = props.workspace.nodes.find((node) => node.id === edge.targetNodeId);
             if (!source || !target) return null;
-            const sourceHeight = source.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
-            const targetHeight = target.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
+            const sourceSize = sizeForCanvasNode(source);
+            const targetSize = sizeForCanvasNode(target);
             const direction = target.position.x >= source.position.x ? 1 : -1;
-            const startX = direction > 0 ? source.position.x + nodeWidth : source.position.x;
-            const startY = source.position.y + sourceHeight / 2;
-            const endX = direction > 0 ? target.position.x : target.position.x + nodeWidth;
-            const endY = target.position.y + targetHeight / 2;
+            const startX = direction > 0 ? source.position.x + sourceSize.width : source.position.x;
+            const startY = source.position.y + sourceSize.height / 2;
+            const endX = direction > 0 ? target.position.x : target.position.x + targetSize.width;
+            const endY = target.position.y + targetSize.height / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
             return (
               <path
@@ -536,10 +611,10 @@ function SynapseCanvas(props: {
           {props.approvalItems.map((item) => {
             const source = props.workspace.nodes.find((node) => node.id === item.nodeId);
             if (!source) return null;
-            const sourceHeight = source.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
+            const sourceSize = sizeForCanvasNode(source);
             const direction = item.position.x >= source.position.x ? 1 : -1;
-            const startX = direction > 0 ? source.position.x + nodeWidth : source.position.x;
-            const startY = source.position.y + sourceHeight / 2;
+            const startX = direction > 0 ? source.position.x + sourceSize.width : source.position.x;
+            const startY = source.position.y + sourceSize.height / 2;
             const endX = direction > 0 ? item.position.x : item.position.x + nodeWidth;
             const endY = item.position.y + approvalNodeHeight / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
@@ -563,6 +638,9 @@ function SynapseCanvas(props: {
             onPointerDown={(event) => beginDrag(event, node)}
             onPointerMove={moveDrag}
             onPointerUp={finishDrag}
+            onResizePointerDown={(event) => beginResize(event, node)}
+            onResizePointerMove={moveResize}
+            onResizePointerUp={finishResize}
             onSelect={() => props.onNodeSelect(node.id)}
           />
         ))}
@@ -582,6 +660,7 @@ function SynapseCanvas(props: {
           </div>
         ) : null}
       </div>
+      <span className="synapse-zoom-level">{Math.round(canvasView.scale * 100)}%</span>
     </div>
   );
 }
@@ -594,9 +673,17 @@ export function SynapseNodeCard(props: {
   onPointerDown(event: ReactPointerEvent<HTMLElement>): void;
   onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
+  onResizePointerDown(event: ReactPointerEvent<HTMLElement>): void;
+  onResizePointerMove(event: ReactPointerEvent<HTMLElement>): void;
+  onResizePointerUp(event: ReactPointerEvent<HTMLElement>): void;
   onSelect(): void;
 }): ReactNode {
-  const style = { transform: `translate(${props.node.position.x}px, ${props.node.position.y}px)` };
+  const size = sizeForCanvasNode(props.node);
+  const style = {
+    transform: `translate(${props.node.position.x}px, ${props.node.position.y}px)`,
+    width: size.width,
+    height: size.height,
+  };
   if (props.node.kind === "provider") {
     return (
       <article
@@ -621,6 +708,15 @@ export function SynapseNodeCard(props: {
         </div>
         <span className="synapse-port input" />
         <span className="synapse-port output" />
+        <span
+          className="synapse-node-resize"
+          role="separator"
+          aria-label={`Resize ${props.node.title}`}
+          onPointerDown={props.onResizePointerDown}
+          onPointerMove={props.onResizePointerMove}
+          onPointerUp={props.onResizePointerUp}
+          onPointerCancel={props.onResizePointerUp}
+        />
       </article>
     );
   }
@@ -652,6 +748,15 @@ export function SynapseNodeCard(props: {
       </div>
       <span className="synapse-port input" />
       <span className="synapse-port output" />
+      <span
+        className="synapse-node-resize"
+        role="separator"
+        aria-label={`Resize ${props.node.title}`}
+        onPointerDown={props.onResizePointerDown}
+        onPointerMove={props.onResizePointerMove}
+        onPointerUp={props.onResizePointerUp}
+        onPointerCancel={props.onResizePointerUp}
+      />
     </article>
   );
 }
@@ -1188,11 +1293,12 @@ export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprov
     if (!owner) continue;
     const pendingMessage = thread.messages.find((message) => message.id === thread.pendingMessageId);
     const activity = pendingApprovalActivity(pendingMessage?.toolActivity, thread.pendingApprovalId);
+    const ownerSize = sizeForCanvasNode(owner);
     const position = findOpenCanvasPosition(
       workspace,
-      items.map((item) => ({ position: item.position, height: approvalNodeHeight })),
-      { x: owner.position.x + nodeWidth + nodeHorizontalGap, y: owner.position.y },
-      approvalNodeHeight,
+      items.map((item) => ({ position: item.position, width: nodeWidth, height: approvalNodeHeight })),
+      { x: owner.position.x + ownerSize.width + nodeHorizontalGap, y: owner.position.y },
+      { width: nodeWidth, height: approvalNodeHeight },
     );
     items.push({
       id: `approval:${thread.pendingApprovalId}`,
@@ -1221,31 +1327,77 @@ function moveNode(workspace: SynapseWorkspace, nodeId: string, position: { x: nu
   };
 }
 
+function resizeNode(workspace: SynapseWorkspace, nodeId: string, size: SynapseSize): SynapseWorkspace {
+  return {
+    ...workspace,
+    nodes: workspace.nodes.map((node) => (node.id === nodeId ? { ...node, size } : node)),
+  };
+}
+
+function sizeFromPointer(resize: ResizeState, clientX: number, clientY: number, scale: number): SynapseSize {
+  return {
+    width: Math.round(
+      Math.min(maximumNodeWidth, Math.max(minimumNodeWidth, resize.startWidth + (clientX - resize.startX) / scale)),
+    ),
+    height: Math.round(
+      Math.min(maximumNodeHeight, Math.max(minimumNodeHeight, resize.startHeight + (clientY - resize.startY) / scale)),
+    ),
+  };
+}
+
+function sizeForCanvasNode(node: SynapseNode): SynapseSize {
+  return (
+    node.size ?? {
+      width: nodeWidth,
+      height: node.kind === "provider" ? providerNodeHeight : artifactNodeHeight,
+    }
+  );
+}
+
+export function zoomCanvasView(current: CanvasView, pointer: { x: number; y: number }, deltaY: number): CanvasView {
+  if (deltaY === 0) return current;
+  const scale = Math.min(
+    maximumCanvasScale,
+    Math.max(minimumCanvasScale, current.scale * Math.exp(-deltaY * wheelZoomSensitivity)),
+  );
+  if (scale === current.scale) return current;
+  const worldX = (pointer.x - current.x) / current.scale;
+  const worldY = (pointer.y - current.y) / current.scale;
+  return {
+    x: pointer.x - worldX * scale,
+    y: pointer.y - worldY * scale,
+    scale,
+  };
+}
+
 function initialNodePosition(workspace: SynapseWorkspace, nodeKind: SynapseNode["kind"]): { x: number; y: number } {
-  const height = nodeKind === "provider" ? providerNodeHeight : artifactNodeHeight;
-  return findOpenCanvasPosition(workspace, [], { x: 100, y: 120 }, height);
+  const size = {
+    width: nodeWidth,
+    height: nodeKind === "provider" ? providerNodeHeight : artifactNodeHeight,
+  };
+  return findOpenCanvasPosition(workspace, [], { x: 100, y: 120 }, size);
 }
 
 function findOpenCanvasPosition(
   workspace: SynapseWorkspace,
   additionalOccupants: CanvasOccupant[],
   preferred: { x: number; y: number },
-  height: number,
+  size: SynapseSize,
 ): { x: number; y: number } {
   const occupants: CanvasOccupant[] = [
     ...workspace.nodes.map((node) => ({
       position: node.position,
-      height: node.kind === "provider" ? providerNodeHeight : artifactNodeHeight,
+      ...sizeForCanvasNode(node),
     })),
     ...additionalOccupants,
   ];
-  if (canvasPositionIsOpen(occupants, preferred, height)) return preferred;
-  const stepX = nodeWidth + nodeHorizontalGap;
-  const stepY = artifactNodeHeight + nodeVerticalGap;
+  if (canvasPositionIsOpen(occupants, preferred, size)) return preferred;
+  const stepX = size.width + nodeHorizontalGap;
+  const stepY = size.height + nodeVerticalGap;
   for (let radius = 1; radius <= occupants.length + 2; radius += 1) {
     for (const offset of canvasPlacementOffsets(radius)) {
       const candidate = { x: preferred.x + offset.x * stepX, y: preferred.y + offset.y * stepY };
-      if (canvasPositionIsOpen(occupants, candidate, height)) return candidate;
+      if (canvasPositionIsOpen(occupants, candidate, size)) return candidate;
     }
   }
   return { x: preferred.x + (occupants.length + 3) * stepX, y: preferred.y };
@@ -1276,13 +1428,13 @@ function canvasPlacementOffsets(radius: number): Array<{ x: number; y: number }>
 function canvasPositionIsOpen(
   occupants: CanvasOccupant[],
   position: { x: number; y: number },
-  height: number,
+  size: SynapseSize,
 ): boolean {
   return occupants.every(
     (occupant) =>
-      position.x + nodeWidth + nodeHorizontalGap <= occupant.position.x ||
-      occupant.position.x + nodeWidth + nodeHorizontalGap <= position.x ||
-      position.y + height + nodeVerticalGap <= occupant.position.y ||
+      position.x + size.width + nodeHorizontalGap <= occupant.position.x ||
+      occupant.position.x + occupant.width + nodeHorizontalGap <= position.x ||
+      position.y + size.height + nodeVerticalGap <= occupant.position.y ||
       occupant.position.y + occupant.height + nodeVerticalGap <= position.y,
   );
 }

@@ -118,6 +118,87 @@ describe("Xero Custom Connection runtime", () => {
     });
   });
 
+  it("retrieves JSON from any configured Xero API family with endpoint-specific parameters", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "projects-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.toString()).toBe(
+        "https://api.xero.com/projects.xro/2.0/Projects?page=2&pageSize=100&states=INPROGRESS",
+      );
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer projects-token");
+      expect(headers.get("accept")).toBe("application/json");
+      expect(headers.get("xero-tenant-id")).toBe("95b6ff88-508e-407f-b76a-f7d4db9345bb");
+      expect(init?.method).toBe("GET");
+      return jsonResponse({ items: [{ projectId: "project-1", name: "Roy Hill" }] });
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "projects-client", clientSecret: "secret", scopes: "projects.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.retrieve_endpoint!(
+      {
+        api: "projects",
+        endpoint: "/Projects",
+        query: { page: 2, pageSize: 100, states: "INPROGRESS" },
+        tenantId: "95b6ff88-508e-407f-b76a-f7d4db9345bb",
+      },
+      context,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      data: { items: [{ projectId: "project-1", name: "Roy Hill" }] },
+    });
+  });
+
+  it("returns binary endpoint content as base64", async () => {
+    const bytes = Uint8Array.from([37, 80, 68, 70]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "files-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.pathname).toBe("/files.xro/1.0/Files/file-1/Content");
+      return new Response(bytes, { headers: { "content-type": "application/pdf" } });
+    }) as ProviderFetch;
+    const context = createContext({ clientId: "files-client", clientSecret: "secret", scopes: "files.read" }, fetcher);
+
+    const result = await xeroActionHandlers.retrieve_endpoint!(
+      {
+        api: "files",
+        endpoint: "/Files/file-1/Content",
+        accept: "application/pdf",
+      },
+      context,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      bodyEncoding: "base64",
+      data: Buffer.from(bytes).toString("base64"),
+    });
+  });
+
+  it("rejects absolute endpoint URLs before requesting a token", async () => {
+    const fetcher = vi.fn() as ProviderFetch;
+    const context = createContext(
+      { clientId: "guard-client", clientSecret: "secret", scopes: "accounting.settings.read" },
+      fetcher,
+    );
+
+    await expect(
+      xeroActionHandlers.retrieve_endpoint!(
+        { api: "accounting", endpoint: "https://example.com/private-data" },
+        context,
+      ),
+    ).rejects.toThrow("endpoint must be a relative path starting with /");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("automatically replaces a rejected access token without user interaction", async () => {
     let tokenNumber = 0;
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

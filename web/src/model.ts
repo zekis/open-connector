@@ -490,10 +490,16 @@ export interface SynapsePosition {
   y: number;
 }
 
+export interface SynapseSize {
+  width: number;
+  height: number;
+}
+
 interface SynapseNodeBase {
   id: string;
   title: string;
   position: SynapsePosition;
+  size?: SynapseSize;
   createdAt: string;
   updatedAt: string;
 }

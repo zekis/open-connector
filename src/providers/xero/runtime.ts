@@ -9,6 +9,7 @@ import {
   optionalIntegerLike,
   optionalNumber,
   optionalRecord,
+  optionalScalarString,
   optionalString,
   optionalStringArray,
   requiredNumber,
@@ -17,19 +18,28 @@ import {
 } from "../../core/cast.ts";
 import { jsonObject } from "../../core/request.ts";
 import {
+  createProviderProxyUrl,
   createProviderTimeout,
   isAbortSignalError,
   ProviderRequestError,
   providerUserAgent,
   readProviderJsonBody,
+  readProviderProxyResponse,
 } from "../provider-runtime.ts";
+import { xeroApiFamilies } from "./api-families.ts";
 import { xeroDefaultCustomConnectionScopes } from "./scopes.ts";
 
-export const xeroAccountingApiBaseUrl = "https://api.xero.com/api.xro/2.0";
 export const xeroTokenUrl = "https://identity.xero.com/connect/token";
 
 const requestTimeoutMs = 30_000;
 const tokenExpiryLeewayMs = 60_000;
+const allowedRetrievalAcceptHeaders = new Set([
+  "application/json",
+  "application/xml",
+  "application/pdf",
+  "application/octet-stream",
+  "*/*",
+]);
 
 export interface XeroCustomConnectionCredential {
   clientId: string;
@@ -53,6 +63,7 @@ interface XeroToken {
 interface XeroRequestInput {
   path: string;
   context: XeroContext;
+  baseUrl?: string;
   query?: Record<string, unknown>;
   method?: "GET" | "POST" | "PUT";
   body?: Record<string, unknown>;
@@ -66,6 +77,36 @@ const pendingTokens = new Map<string, Promise<XeroToken>>();
 export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroContext>> = {
   async get_organisation(_input, context) {
     return { organisation: await getOrganisation(context) };
+  },
+  async retrieve_endpoint(input, context) {
+    const api = requiredString(input.api, "api", providerInputError);
+    const family = xeroApiFamilies[api];
+    if (!family) {
+      throw providerInputError(`api must be one of ${Object.keys(xeroApiFamilies).join(", ")}`);
+    }
+
+    const accept = optionalString(input.accept) ?? "application/json";
+    if (!allowedRetrievalAcceptHeaders.has(accept)) {
+      throw providerInputError(
+        "accept must be application/json, application/xml, application/pdf, application/octet-stream, or */*",
+      );
+    }
+
+    const headers: Record<string, string> = { accept };
+    const ifModifiedSince = optionalString(input.ifModifiedSince);
+    if (ifModifiedSince) headers["if-modified-since"] = ifModifiedSince;
+    const tenantId = optionalString(input.tenantId);
+    if (tenantId) headers["xero-tenant-id"] = tenantId;
+
+    const response = await requestXeroResponse({
+      baseUrl: family.baseUrl,
+      path: requiredString(input.endpoint, "endpoint", providerInputError),
+      context,
+      query: normalizeXeroRetrievalQuery(input.query),
+      headers,
+    });
+    if (!response.ok) await throwXeroResponseError(response, false);
+    return readProviderProxyResponse(response);
   },
   async list_contacts(input, context) {
     return listXeroCollection(context, "/Contacts", "Contacts", "contacts", {
@@ -228,12 +269,7 @@ async function listXeroCollection(
 }
 
 async function requestXeroJson(input: XeroRequestInput): Promise<unknown> {
-  let response = await xeroApiFetch(input, false);
-  if (response.status === 401) {
-    await response.body?.cancel().catch(() => undefined);
-    response = await xeroApiFetch(input, true);
-  }
-
+  const response = await requestXeroResponse(input);
   const payload = await readProviderJsonBody(response, {
     emptyBody: null,
     invalidJsonMessage: "Xero returned invalid JSON",
@@ -242,12 +278,18 @@ async function requestXeroJson(input: XeroRequestInput): Promise<unknown> {
   return payload;
 }
 
-async function xeroApiFetch(input: XeroRequestInput, forceTokenRefresh: boolean): Promise<Response> {
-  const token = await getXeroToken(input.context, forceTokenRefresh);
-  const url = new URL(`${xeroAccountingApiBaseUrl}${input.path}`);
-  for (const [key, value] of Object.entries(input.query ?? {})) {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+async function requestXeroResponse(input: XeroRequestInput): Promise<Response> {
+  let response = await xeroApiFetch(input, false);
+  if (response.status === 401) {
+    await response.body?.cancel().catch(() => undefined);
+    response = await xeroApiFetch(input, true);
   }
+  return response;
+}
+
+async function xeroApiFetch(input: XeroRequestInput, forceTokenRefresh: boolean): Promise<Response> {
+  const url = createProviderProxyUrl(input.baseUrl ?? xeroApiFamilies.accounting!.baseUrl, input.path, input.query);
+  const token = await getXeroToken(input.context, forceTokenRefresh);
 
   const headers: Record<string, string> = {
     accept: "application/json",
@@ -268,6 +310,15 @@ async function xeroApiFetch(input: XeroRequestInput, forceTokenRefresh: boolean)
     input.context.signal,
     "Xero API",
   );
+}
+
+async function throwXeroResponseError(response: Response, validation: boolean): Promise<never> {
+  const payload = await readProviderJsonBody(response, {
+    emptyBody: null,
+    invalidJsonMessage: "Xero returned an unreadable error response",
+    invalidJsonFallback: (text) => text,
+  });
+  throw createXeroApiError(response.status, payload, validation);
 }
 
 async function getXeroToken(context: XeroContext, forceRefresh = false): Promise<XeroToken> {
@@ -397,6 +448,22 @@ function idempotencyHeaders(value: unknown): Record<string, string> | undefined 
   if (!key) return undefined;
   if (key.length > 128) throw providerInputError("idempotencyKey must be at most 128 characters");
   return { "idempotency-key": key };
+}
+
+function normalizeXeroRetrievalQuery(value: unknown): Record<string, string> | undefined {
+  const input = optionalRecord(value);
+  if (!input) return undefined;
+
+  const query: Record<string, string> = {};
+  for (const [key, rawValue] of Object.entries(input)) {
+    if (!key || key.length > 128) throw providerInputError("query parameter names must be 1 to 128 characters");
+    const scalar = optionalScalarString(rawValue);
+    if (scalar === undefined) {
+      throw providerInputError(`query.${key} must be a string, number, or boolean`);
+    }
+    query[key] = scalar;
+  }
+  return query;
 }
 
 function providerInputError(message: string): ProviderRequestError {

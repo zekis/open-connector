@@ -2,6 +2,7 @@ import type { ActionDefinition, JsonSchema } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
 import { defineProviderAction } from "../../core/provider-definition.ts";
+import { xeroApiFamilies, xeroApiFamilyNames } from "./api-families.ts";
 import { xeroScopes } from "./scopes.ts";
 
 const service = "xero";
@@ -9,6 +10,22 @@ const service = "xero";
 const noInputSchema = s.object("No input is required.", {});
 const pageSchema = s.positiveInteger("Page number to return.");
 const pageSizeSchema = s.positiveInteger("Number of records to return per page.");
+const xeroApiFamilyDescription = xeroApiFamilyNames
+  .map((name) => `${name}: ${xeroApiFamilies[name]!.description}`)
+  .join(" ");
+
+const retrievalResponseSchema = s.object(
+  "Raw response from a Xero retrieval endpoint.",
+  {
+    status: s.integer("HTTP status returned by Xero."),
+    headers: s.record(s.string("Response header value."), {
+      description: "Response headers, including Xero request and rate-limit metadata.",
+    }),
+    data: s.unknown("Parsed JSON, text, or base64-encoded binary response data."),
+    bodyEncoding: s.stringEnum("Encoding applied to binary response data.", ["base64"]),
+  },
+  { optional: ["bodyEncoding"] },
+);
 
 const paginationSchema = s.looseObject(
   {
@@ -172,6 +189,46 @@ export const xeroActions: readonly ActionDefinition[] = [
     inputSchema: noInputSchema,
     outputSchema: s.actionOutput({ organisation: organisationSchema }, "Connected Xero organisation."),
     requiredScopes: [xeroScopes.settingsRead],
+  }),
+  defineProviderAction(service, {
+    name: "retrieve_endpoint",
+    description:
+      "Send a read-only GET request to any endpoint in a supported Xero API family. Use the endpoint path and query parameters from Xero's API documentation; Xero enforces the endpoint-specific scopes configured on the Custom Connection.",
+    inputSchema: s.object(
+      "A read-only Xero API request. Partner-only families still require Xero approval, and payroll endpoints require the matching regional organisation and payroll scopes.",
+      {
+        api: s.stringEnum(xeroApiFamilyDescription, xeroApiFamilyNames),
+        endpoint: s.string(
+          "Relative endpoint path beginning with one slash, such as /BankTransactions, /Reports/ProfitAndLoss, /Assets, or /Files/{fileId}/Content.",
+          { minLength: 2, maxLength: 2048, pattern: "^/[^/]" },
+        ),
+        query: s.record(
+          s.anyOf("One query parameter value.", [
+            s.string("String query value."),
+            s.number("Numeric query value."),
+            s.boolean("Boolean query value."),
+          ]),
+          {
+            description:
+              "Endpoint-specific query parameters. Encode multi-value Xero filters as comma-separated strings.",
+          },
+        ),
+        accept: s.stringEnum("Requested response type.", [
+          "application/json",
+          "application/xml",
+          "application/pdf",
+          "application/octet-stream",
+          "*/*",
+        ]),
+        ifModifiedSince: s.dateTime("Only retrieve Accounting API records modified after this timestamp."),
+        tenantId: s.uuid(
+          "Optional Xero tenant ID for partner endpoints that explicitly require the xero-tenant-id header.",
+        ),
+      },
+      { required: ["api", "endpoint"], optional: ["query", "accept", "ifModifiedSince", "tenantId"] },
+    ),
+    outputSchema: retrievalResponseSchema,
+    requiredScopes: [],
   }),
   defineProviderAction(service, {
     name: "list_contacts",

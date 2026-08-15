@@ -1,7 +1,7 @@
 import type { ProviderDefinition } from "../../core/types.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
 import type { AgentChatApprovalResult, AgentChatResponse } from "../chat/agent-chat-types.ts";
-import type { ISynapseStore, SynapseWorkspace } from "./synapse-types.ts";
+import type { ISynapseStore, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
 
 import { describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
@@ -141,6 +141,9 @@ describe("SynapseService", () => {
       content: "First card",
       position: { x: -50_000, y: -40_000 },
     });
+    const resized = await service.updateNode(workspace.id, first.nodes[0]!.id, {
+      size: { width: 520, height: 340 },
+    });
     const second = await service.addNode(workspace.id, {
       kind: "artifact",
       artifactKind: "note",
@@ -150,8 +153,14 @@ describe("SynapseService", () => {
     });
 
     expect(first.nodes[0]?.position).toEqual({ x: -50_000, y: -40_000 });
+    expect(resized.nodes[0]?.size).toEqual({ width: 520, height: 340 });
     expect(second.nodes[1]?.position).not.toEqual(second.nodes[0]?.position);
-    expect(cardsOverlap(second.nodes[0]!.position, second.nodes[1]!.position)).toBe(false);
+    expect(
+      cardsOverlap(second.nodes[0]!.position, second.nodes[0]!.size!, second.nodes[1]!.position, {
+        width: 264,
+        height: 164,
+      }),
+    ).toBe(false);
   });
 
   it("keeps a node conversation paused for approval and applies the resumed result once", async () => {
@@ -201,12 +210,17 @@ describe("SynapseService", () => {
   });
 });
 
-function cardsOverlap(left: { x: number; y: number }, right: { x: number; y: number }): boolean {
+function cardsOverlap(
+  left: { x: number; y: number },
+  leftSize: SynapseSize,
+  right: { x: number; y: number },
+  rightSize: SynapseSize,
+): boolean {
   return !(
-    left.x + 264 + 48 <= right.x ||
-    right.x + 264 + 48 <= left.x ||
-    left.y + 164 + 32 <= right.y ||
-    right.y + 164 + 32 <= left.y
+    left.x + leftSize.width + 48 <= right.x ||
+    right.x + rightSize.width + 48 <= left.x ||
+    left.y + leftSize.height + 32 <= right.y ||
+    right.y + rightSize.height + 32 <= left.y
   );
 }
 

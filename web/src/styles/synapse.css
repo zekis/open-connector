@@ -135,6 +135,22 @@
   user-select: none;
 }
 
+.synapse-zoom-level {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+  color: var(--muted-foreground);
+  box-shadow: var(--console-shadow-sm);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 .synapse-canvas {
   position: absolute;
   top: 0;
@@ -194,6 +210,41 @@
   cursor: grabbing;
 }
 
+.synapse-node-resize {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  z-index: 4;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 48%,
+      color-mix(in oklab, var(--muted-foreground) 68%, transparent) 49% 55%,
+      transparent 56%
+    ),
+    linear-gradient(
+      135deg,
+      transparent 64%,
+      color-mix(in oklab, var(--muted-foreground) 68%, transparent) 65% 71%,
+      transparent 72%
+    );
+  cursor: nwse-resize;
+  opacity: 0.46;
+  touch-action: none;
+}
+
+.synapse-node:hover .synapse-node-resize,
+.synapse-node.selected .synapse-node-resize {
+  opacity: 1;
+}
+
+.synapse-node-resize:hover {
+  background-color: color-mix(in oklab, var(--brand) 12%, transparent);
+}
+
 .synapse-node.selected {
   border-color: color-mix(in oklab, var(--brand) 78%, var(--border));
   box-shadow:
@@ -216,7 +267,7 @@
 .synapse-node.provider {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
+  align-items: stretch;
   height: 118px;
   gap: 12px;
   padding: 16px;
@@ -311,6 +362,7 @@
 }
 
 .synapse-node-icon.provider {
+  align-self: start;
   width: 48px;
   height: 48px;
   border: 1px solid var(--border);
@@ -325,7 +377,9 @@
 
 .synapse-node-copy {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
   gap: 3px;
 }
 
@@ -380,7 +434,7 @@
 }
 
 .synapse-node-markdown.provider-markdown {
-  max-height: 58px;
+  max-height: none;
 }
 
 .synapse-node-markdown .chat-markdown {

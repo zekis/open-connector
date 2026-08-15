@@ -2,7 +2,7 @@ import type { ProviderDefinition, SynapseArtifactNode, SynapseProviderNode, Syna
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SynapseApprovalNodeCard, SynapseNodeCard, synapseApprovalItems } from "./synapse-page";
+import { SynapseApprovalNodeCard, SynapseNodeCard, synapseApprovalItems, zoomCanvasView } from "./synapse-page";
 
 const provider: ProviderDefinition = {
   service: "outlook",
@@ -34,6 +34,7 @@ const artifactNode: SynapseArtifactNode = {
   content: "**Priority:** review the [sales brief](https://example.com/brief).",
   externalUrl: "https://outlook.office.com/mail/message-1",
   position: { x: 430, y: 120 },
+  size: { width: 420, height: 280 },
   createdAt: "2026-08-15T01:01:00.000Z",
   updatedAt: "2026-08-15T01:01:00.000Z",
 };
@@ -49,6 +50,9 @@ describe("SynapseNodeCard", () => {
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
+        onResizePointerDown={() => {}}
+        onResizePointerMove={() => {}}
+        onResizePointerUp={() => {}}
         onSelect={() => {}}
       />,
     );
@@ -68,6 +72,9 @@ describe("SynapseNodeCard", () => {
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
+        onResizePointerDown={() => {}}
+        onResizePointerMove={() => {}}
+        onResizePointerUp={() => {}}
         onSelect={() => {}}
       />,
     );
@@ -77,6 +84,8 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("sales brief");
     expect(html).toContain("https://outlook.office.com/mail/message-1");
     expect(html).toContain("link-target");
+    expect(html).toContain("width:420px;height:280px");
+    expect(html).toContain("Resize New mining opportunity");
   });
 
   it("projects a pending connector approval onto the canvas", () => {
@@ -131,5 +140,21 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Approval required");
     expect(html).toContain("approve or deny");
     expect(html).toContain("Sales inbox");
+  });
+});
+
+describe("zoomCanvasView", () => {
+  it("zooms around the pointer without moving its world coordinate", () => {
+    const pointer = { x: 420, y: 260 };
+    const zoomed = zoomCanvasView({ x: 30, y: -20, scale: 1 }, pointer, -120);
+
+    expect(zoomed.scale).toBeGreaterThan(1);
+    expect((pointer.x - zoomed.x) / zoomed.scale).toBeCloseTo(390);
+    expect((pointer.y - zoomed.y) / zoomed.scale).toBeCloseTo(280);
+  });
+
+  it("clamps zoom to the supported viewing range", () => {
+    expect(zoomCanvasView({ x: 0, y: 0, scale: 1 }, { x: 0, y: 0 }, 100_000).scale).toBe(0.3);
+    expect(zoomCanvasView({ x: 0, y: 0, scale: 1 }, { x: 0, y: 0 }, -100_000).scale).toBe(2.5);
   });
 });

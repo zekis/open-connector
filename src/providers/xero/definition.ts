@@ -5,14 +5,12 @@ import { xeroDefaultCustomConnectionScopes } from "./scopes.ts";
 
 const service = "xero";
 
-/**
- * Xero Accounting provider authenticated through a single-organisation Custom Connection.
- */
+/** Xero provider authenticated through a single-organisation Custom Connection. */
 export const provider: ProviderDefinition = {
   service,
   displayName: "Xero",
   description:
-    "Connect one Xero organisation through a Custom Connection and work with contacts, accounts, tax settings, items, and invoices.",
+    "Connect one Xero organisation through a Custom Connection and retrieve data across Xero's Accounting, Assets, Files, Projects, Payroll, and approved partner APIs.",
   categories: ["Finance", "Productivity"],
   authTypes: ["custom_credential"],
   auth: [
@@ -46,7 +44,7 @@ export const provider: ProviderDefinition = {
           secret: false,
           placeholder: xeroDefaultCustomConnectionScopes.join(" "),
           description:
-            "Optional space-separated scopes selected on the Custom Connection. Defaults to accounting settings, contacts, and invoices. Keep accounting.settings.read so the connection can identify its organisation.",
+            "Space-separated scopes selected on the Custom Connection in Xero My Apps. Enter the matching granular read scopes for every API family and endpoint you want to retrieve. Defaults to accounting settings, contacts, and invoices; keep accounting.settings.read so the connection can identify its organisation.",
         },
       ],
       testAction: {

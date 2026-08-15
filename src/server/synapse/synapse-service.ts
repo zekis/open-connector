@@ -11,6 +11,7 @@ import type {
   SynapseNode,
   SynapsePosition,
   SynapseProviderNode,
+  SynapseSize,
   SynapseThread,
   SynapseWorkspace,
   SynapseWorkspaceSummary,
@@ -29,6 +30,10 @@ const providerNodeHeight = 118;
 const artifactNodeHeight = 164;
 const nodeHorizontalGap = 48;
 const nodeVerticalGap = 32;
+const minimumNodeWidth = 220;
+const maximumNodeWidth = 1_200;
+const minimumNodeHeight = 100;
+const maximumNodeHeight = 1_200;
 
 export interface SynapseServiceOptions {
   catalog: CatalogStore;
@@ -92,15 +97,17 @@ export class SynapseService {
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse node");
     const requestedPosition = readPosition(body.position);
+    const requestedSize = body.size === undefined ? undefined : readSize(body.size);
     if (body.kind === "provider") {
-      const position = findOpenPosition(workspace, requestedPosition, "provider");
+      const position = findOpenPosition(workspace, requestedPosition, "provider", requestedSize);
       await this.addProviderNode(workspace, readText(body.connectionId, "connectionId", 200), position, {
         title: optionalText(body.title, "title", maximumNodeTitleCharacters),
         instructions: optionalText(body.instructions, "instructions", maximumNodeTextCharacters),
+        size: requestedSize,
       });
     } else if (body.kind === "artifact") {
-      const position = findOpenPosition(workspace, requestedPosition, "artifact");
-      this.addArtifactNode(workspace, position, readArtifactInput(body));
+      const position = findOpenPosition(workspace, requestedPosition, "artifact", requestedSize);
+      this.addArtifactNode(workspace, position, readArtifactInput(body), requestedSize);
     } else {
       throw new SynapseError("invalid_synapse_node", "kind must be provider or artifact.");
     }
@@ -112,6 +119,7 @@ export class SynapseService {
     const node = requiredNode(workspace, nodeId);
     const body = readObject(input, "Synapse node update");
     if (body.position !== undefined) node.position = readPosition(body.position);
+    if (body.size !== undefined) node.size = readSize(body.size);
     if (body.title !== undefined) node.title = readText(body.title, "title", maximumNodeTitleCharacters);
     if (node.kind === "provider" && body.instructions !== undefined) {
       node.instructions = optionalText(body.instructions, "instructions", maximumNodeTextCharacters);
@@ -318,13 +326,14 @@ export class SynapseService {
     workspace: SynapseWorkspace,
     connectionId: string,
     position: SynapsePosition,
-    overrides: { title?: string; instructions?: string },
+    overrides: { title?: string; instructions?: string; size?: SynapseSize },
   ): Promise<SynapseProviderNode> {
     const existing = workspace.nodes.find(
       (node): node is SynapseProviderNode => node.kind === "provider" && node.connectionId === connectionId,
     );
     if (existing) {
       if (overrides.instructions) existing.instructions = overrides.instructions;
+      if (overrides.size) existing.size = overrides.size;
       return existing;
     }
     const connection = (await this.options.connections.listConnections()).find(
@@ -345,6 +354,7 @@ export class SynapseService {
       title: overrides.title ?? providerName,
       instructions: overrides.instructions,
       position,
+      size: overrides.size,
       createdAt: now,
       updatedAt: now,
     };
@@ -356,6 +366,7 @@ export class SynapseService {
     workspace: SynapseWorkspace,
     position: SynapsePosition,
     input: ArtifactInput,
+    size?: SynapseSize,
   ): SynapseArtifactNode {
     const now = new Date().toISOString();
     const node: SynapseArtifactNode = {
@@ -371,6 +382,7 @@ export class SynapseService {
       sourceActivityId: input.sourceActivityId,
       data: input.data,
       position,
+      size,
       createdAt: now,
       updatedAt: now,
     };
@@ -717,25 +729,29 @@ function nextFanPosition(
   const lane = siblings.length % 5;
   const column = Math.floor(siblings.length / 5);
   const verticalOffset = lane === 0 ? 0 : Math.ceil(lane / 2) * (lane % 2 === 1 ? 1 : -1);
+  const parentSize = sizeForNode(parent);
+  const newSize = defaultSizeForKind(nodeKind);
   const preferred = {
-    x: parent.position.x + (column + 1) * (canvasNodeWidth + nodeHorizontalGap),
-    y: parent.position.y + verticalOffset * (artifactNodeHeight + nodeVerticalGap),
+    x: parent.position.x + parentSize.width + nodeHorizontalGap + column * (newSize.width + nodeHorizontalGap),
+    y: parent.position.y + verticalOffset * (newSize.height + nodeVerticalGap),
   };
-  return findOpenPosition(workspace, preferred, nodeKind);
+  return findOpenPosition(workspace, preferred, nodeKind, newSize);
 }
 
 function findOpenPosition(
   workspace: SynapseWorkspace,
   preferred: SynapsePosition,
   nodeKind: SynapseNode["kind"],
+  requestedSize?: SynapseSize,
 ): SynapsePosition {
-  if (positionIsOpen(workspace, preferred, nodeKind)) return preferred;
-  const stepX = canvasNodeWidth + nodeHorizontalGap;
-  const stepY = artifactNodeHeight + nodeVerticalGap;
+  const size = requestedSize ?? defaultSizeForKind(nodeKind);
+  if (positionIsOpen(workspace, preferred, size)) return preferred;
+  const stepX = size.width + nodeHorizontalGap;
+  const stepY = size.height + nodeVerticalGap;
   for (let radius = 1; radius <= workspace.nodes.length + 2; radius += 1) {
     for (const offset of placementOffsets(radius)) {
       const candidate = { x: preferred.x + offset.x * stepX, y: preferred.y + offset.y * stepY };
-      if (positionIsOpen(workspace, candidate, nodeKind)) return candidate;
+      if (positionIsOpen(workspace, candidate, size)) return candidate;
     }
   }
   return { x: preferred.x + (workspace.nodes.length + 3) * stepX, y: preferred.y };
@@ -763,21 +779,27 @@ function placementOffsets(radius: number): SynapsePosition[] {
   return offsets;
 }
 
-function positionIsOpen(
-  workspace: SynapseWorkspace,
-  position: SynapsePosition,
-  nodeKind: SynapseNode["kind"],
-): boolean {
-  const height = nodeKind === "provider" ? providerNodeHeight : artifactNodeHeight;
+function positionIsOpen(workspace: SynapseWorkspace, position: SynapsePosition, size: SynapseSize): boolean {
   return workspace.nodes.every((node) => {
-    const nodeHeight = node.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
+    const nodeSize = sizeForNode(node);
     return (
-      position.x + canvasNodeWidth + nodeHorizontalGap <= node.position.x ||
-      node.position.x + canvasNodeWidth + nodeHorizontalGap <= position.x ||
-      position.y + height + nodeVerticalGap <= node.position.y ||
-      node.position.y + nodeHeight + nodeVerticalGap <= position.y
+      position.x + size.width + nodeHorizontalGap <= node.position.x ||
+      node.position.x + nodeSize.width + nodeHorizontalGap <= position.x ||
+      position.y + size.height + nodeVerticalGap <= node.position.y ||
+      node.position.y + nodeSize.height + nodeVerticalGap <= position.y
     );
   });
+}
+
+function sizeForNode(node: SynapseNode): SynapseSize {
+  return node.size ?? defaultSizeForKind(node.kind);
+}
+
+function defaultSizeForKind(kind: SynapseNode["kind"]): SynapseSize {
+  return {
+    width: canvasNodeWidth,
+    height: kind === "provider" ? providerNodeHeight : artifactNodeHeight,
+  };
 }
 
 function threadFor(workspace: SynapseWorkspace, nodeId: string): SynapseThread {
@@ -840,6 +862,25 @@ function readPosition(value: unknown): SynapsePosition {
   const x = finiteNumber(position.x, "position.x");
   const y = finiteNumber(position.y, "position.y");
   return { x, y };
+}
+
+function readSize(value: unknown): SynapseSize {
+  const size = readObject(value, "size");
+  const width = finiteNumber(size.width, "size.width");
+  const height = finiteNumber(size.height, "size.height");
+  if (width < minimumNodeWidth || width > maximumNodeWidth) {
+    throw new SynapseError(
+      "invalid_synapse_size",
+      `size.width must be between ${minimumNodeWidth} and ${maximumNodeWidth}.`,
+    );
+  }
+  if (height < minimumNodeHeight || height > maximumNodeHeight) {
+    throw new SynapseError(
+      "invalid_synapse_size",
+      `size.height must be between ${minimumNodeHeight} and ${maximumNodeHeight}.`,
+    );
+  }
+  return { width, height };
 }
 
 function finiteNumber(value: unknown, field: string): number {
