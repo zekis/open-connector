@@ -418,6 +418,92 @@ describe("Xero Custom Connection runtime", () => {
     });
     expect(tokenNumber).toBe(2);
   });
+
+  it("preserves a non-JSON Xero API error instead of reporting invalid JSON", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({
+          access_token: "plain-error-token",
+          expires_in: 1800,
+          token_type: "Bearer",
+          scope: "accounting.invoices.read",
+        });
+      }
+      return new Response("The Xero API is temporarily unavailable", {
+        status: 503,
+        headers: { "xero-correlation-id": "correlation-503" },
+      });
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "plain-error-client", clientSecret: "secret", scopes: "accounting.invoices.read" },
+      fetcher,
+    );
+
+    await expect(xeroActionHandlers.list_invoices!({ page: 1 }, context)).rejects.toMatchObject({
+      status: 503,
+      message: "The Xero API is temporarily unavailable",
+      details: {
+        xeroResponse: "The Xero API is temporarily unavailable",
+        requestedScopes: ["accounting.invoices.read"],
+        tokenScopes: ["accounting.invoices.read"],
+        accessTokenRefreshAttempted: false,
+        correlationId: "correlation-503",
+      },
+    });
+  });
+
+  it("reports token scopes after Xero rejects an automatically refreshed token", async () => {
+    let tokenNumber = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        tokenNumber += 1;
+        return jsonResponse({
+          access_token: `rejected-token-${tokenNumber}`,
+          expires_in: 1800,
+          token_type: "Bearer",
+          scope: "accounting.banktransactions.read",
+        });
+      }
+      return jsonResponse(
+        {
+          Title: "Unauthorized",
+          Status: 401,
+          Detail: "AuthorizationUnsuccessful",
+          Instance: "xero-instance-401",
+        },
+        401,
+        { "xero-correlation-id": "correlation-401" },
+      );
+    }) as ProviderFetch;
+    const context = createContext(
+      {
+        clientId: "rejected-token-client",
+        clientSecret: "secret",
+        scopes: "accounting.banktransactions.read",
+      },
+      fetcher,
+    );
+
+    await expect(xeroActionHandlers.list_bank_transactions!({ page: 1 }, context)).rejects.toMatchObject({
+      status: 401,
+      message: "Xero rejected the access token after an automatic refresh: AuthorizationUnsuccessful",
+      details: {
+        xeroResponse: {
+          Title: "Unauthorized",
+          Status: 401,
+          Detail: "AuthorizationUnsuccessful",
+          Instance: "xero-instance-401",
+        },
+        requestedScopes: ["accounting.banktransactions.read"],
+        tokenScopes: ["accounting.banktransactions.read"],
+        accessTokenRefreshAttempted: true,
+        correlationId: "correlation-401",
+      },
+    });
+    expect(tokenNumber).toBe(2);
+  });
 });
 
 function createContext(values: Record<string, string>, fetcher: ProviderFetch): XeroContext {
@@ -467,6 +553,9 @@ function requestUrl(input: RequestInfo | URL): URL {
   return new URL(input instanceof Request ? input.url : input.toString());
 }
 
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+function jsonResponse(payload: unknown, status = 200, headers?: HeadersInit): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json", ...Object.fromEntries(new Headers(headers)) },
+  });
 }

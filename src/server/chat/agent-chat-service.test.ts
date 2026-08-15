@@ -24,7 +24,7 @@ const provider: ProviderDefinition = {
       service: "example",
       name: "lookup",
       description: "Look up one record by query.",
-      requiredScopes: [],
+      requiredScopes: ["records:read"],
       providerPermissions: [],
       inputSchema: {
         type: "object",
@@ -47,7 +47,7 @@ const connection: ConnectionSummary = {
   profile: {
     accountId: "example-account",
     displayName: "Example account",
-    grantedScopes: [],
+    grantedScopes: ["records:read"],
   },
 };
 
@@ -94,7 +94,8 @@ describe("AgentChatService", () => {
       results: [
         {
           actionId: "example.lookup",
-          compatibleConnections: [{ connectionId: connection.id }],
+          requiredScopes: ["records:read"],
+          compatibleConnections: [{ connectionId: connection.id, grantedScopes: ["records:read"] }],
           inputSchema: provider.actions[0]?.inputSchema,
         },
       ],
@@ -114,6 +115,7 @@ describe("AgentChatService", () => {
       }),
     ]);
     expect(claude.inputs[0]?.prompt).toContain("Example account");
+    expect(claude.inputs[0]?.prompt).toContain('"grantedScopes":["records:read"]');
     expect(claude.inputs[0]?.systemPrompt).toContain("call the action so the host can create the approval request");
     expect(claude.inputs[1]?.prompt).toContain("example.lookup");
     expect(claude.inputs[2]?.prompt).toContain("Record 42 is active");

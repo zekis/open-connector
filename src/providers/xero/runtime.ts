@@ -71,6 +71,14 @@ interface XeroRequestInput {
   validation?: boolean;
 }
 
+interface XeroApiErrorDetails {
+  xeroResponse: unknown;
+  requestedScopes: string[];
+  tokenScopes: string[];
+  accessTokenRefreshAttempted: boolean;
+  correlationId?: string;
+}
+
 const tokenCache = new Map<string, XeroToken>();
 const pendingTokens = new Map<string, Promise<XeroToken>>();
 
@@ -105,7 +113,7 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
       query: normalizeXeroRetrievalQuery(input.query),
       headers,
     });
-    if (!response.ok) await throwXeroResponseError(response, false);
+    if (!response.ok) await throwXeroResponseError(response, false, context);
     return readProviderProxyResponse(response);
   },
   async list_contacts(input, context) {
@@ -380,11 +388,11 @@ async function listXeroCollection(
 
 async function requestXeroJson(input: XeroRequestInput): Promise<unknown> {
   const response = await requestXeroResponse(input);
+  if (!response.ok) await throwXeroResponseError(response, input.validation === true, input.context);
   const payload = await readProviderJsonBody(response, {
     emptyBody: null,
     invalidJsonMessage: "Xero returned invalid JSON",
   });
-  if (!response.ok) throw createXeroApiError(response.status, payload, input.validation === true);
   return payload;
 }
 
@@ -422,17 +430,27 @@ async function xeroApiFetch(input: XeroRequestInput, forceTokenRefresh: boolean)
   );
 }
 
-async function throwXeroResponseError(response: Response, validation: boolean): Promise<never> {
+async function throwXeroResponseError(response: Response, validation: boolean, context: XeroContext): Promise<never> {
   const payload = await readProviderJsonBody(response, {
     emptyBody: null,
     invalidJsonMessage: "Xero returned an unreadable error response",
     invalidJsonFallback: (text) => text,
   });
-  throw createXeroApiError(response.status, payload, validation);
+  const cachedToken = tokenCache.get(xeroTokenCacheKey(context.credential));
+  const correlationId =
+    response.headers.get("xero-correlation-id") ?? response.headers.get("x-correlation-id") ?? undefined;
+  const details: XeroApiErrorDetails = {
+    xeroResponse: payload,
+    requestedScopes: [...context.credential.scopes],
+    tokenScopes: cachedToken ? [...cachedToken.scopes] : [],
+    accessTokenRefreshAttempted: response.status === 401,
+  };
+  if (correlationId) details.correlationId = correlationId;
+  throw createXeroApiError(response.status, payload, validation, details);
 }
 
 async function getXeroToken(context: XeroContext, forceRefresh = false): Promise<XeroToken> {
-  const cacheKey = `${context.credential.clientId}\u0000${context.credential.scopes.join(" ")}`;
+  const cacheKey = xeroTokenCacheKey(context.credential);
   if (!forceRefresh) {
     const cached = tokenCache.get(cacheKey);
     if (cached && cached.expiresAt - tokenExpiryLeewayMs > Date.now()) return cached;
@@ -484,7 +502,7 @@ async function requestXeroToken(context: XeroContext): Promise<XeroToken> {
     scopes: (optionalString(record.scope) ?? context.credential.scopes.join(" ")).split(/\s+/).filter(Boolean),
     expiresAt: Date.now() + expiresIn * 1000,
   };
-  const cacheKey = `${context.credential.clientId}\u0000${context.credential.scopes.join(" ")}`;
+  const cacheKey = xeroTokenCacheKey(context.credential);
   tokenCache.set(cacheKey, token);
   return token;
 }
@@ -522,10 +540,19 @@ function firstCollectionItem(payload: unknown, fieldName: string): Record<string
   return requiredRecord(values[0], fieldName, providerResponseError);
 }
 
-function createXeroApiError(status: number, payload: unknown, validation: boolean): ProviderRequestError {
-  const message = extractXeroError(payload) ?? `Xero request failed with status ${status}`;
-  if (validation && (status === 401 || status === 403)) return new ProviderRequestError(400, message, payload);
-  return new ProviderRequestError(status || 502, message, payload);
+function createXeroApiError(
+  status: number,
+  payload: unknown,
+  validation: boolean,
+  details: unknown = payload,
+): ProviderRequestError {
+  const providerMessage = extractXeroError(payload) ?? `Xero request failed with status ${status}`;
+  const message =
+    status === 401 && optionalRecord(details)?.accessTokenRefreshAttempted === true
+      ? `Xero rejected the access token after an automatic refresh: ${providerMessage}`
+      : providerMessage;
+  if (validation && (status === 401 || status === 403)) return new ProviderRequestError(400, message, details);
+  return new ProviderRequestError(status || 502, message, details);
 }
 
 function extractXeroError(payload: unknown): string | undefined {
@@ -533,7 +560,10 @@ function extractXeroError(payload: unknown): string | undefined {
   if (!record) return typeof payload === "string" ? optionalString(payload) : undefined;
 
   const message =
-    optionalString(record.Message) ?? optionalString(record.error_description) ?? optionalString(record.error);
+    optionalString(record.Message) ??
+    optionalString(record.Detail) ??
+    optionalString(record.error_description) ??
+    optionalString(record.error);
   if (message) return message;
   if (!Array.isArray(record.Elements)) return undefined;
   for (const element of record.Elements) {
@@ -605,4 +635,8 @@ function providerInputError(message: string): ProviderRequestError {
 
 function providerResponseError(message: string): ProviderRequestError {
   return new ProviderRequestError(502, message);
+}
+
+function xeroTokenCacheKey(credential: XeroCustomConnectionCredential): string {
+  return `${credential.clientId}\u0000${credential.scopes.join(" ")}`;
 }
