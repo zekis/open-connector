@@ -147,6 +147,115 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
       order: optionalString(input.orderBy),
     });
   },
+  async list_bank_transactions(input, context) {
+    return listXeroCollection(
+      context,
+      "/BankTransactions",
+      "BankTransactions",
+      "bankTransactions",
+      {
+        page: optionalPositiveInteger(input.page, "page"),
+        where: combineXeroWhere(
+          optionalString(input.where),
+          booleanEqualityClause("IsReconciled", optionalBoolean(input.reconciled)),
+        ),
+        order: optionalString(input.orderBy),
+        includeDeleted: optionalBoolean(input.includeDeleted),
+        unitdp: optionalUnitDecimalPlaces(input.unitDecimalPlaces),
+      },
+      modifiedAfterHeaders(input.ifModifiedSince),
+    );
+  },
+  async list_payments(input, context) {
+    return listXeroCollection(
+      context,
+      "/Payments",
+      "Payments",
+      "payments",
+      {
+        page: optionalPositiveInteger(input.page, "page"),
+        pageSize: optionalPositiveInteger(input.pageSize, "pageSize"),
+        where: combineXeroWhere(
+          optionalString(input.where),
+          booleanEqualityClause("IsReconciled", optionalBoolean(input.reconciled)),
+        ),
+        order: optionalString(input.orderBy),
+      },
+      modifiedAfterHeaders(input.ifModifiedSince),
+    );
+  },
+  async list_batch_payments(input, context) {
+    return listXeroCollection(
+      context,
+      "/BatchPayments",
+      "BatchPayments",
+      "batchPayments",
+      {
+        where: combineXeroWhere(
+          optionalString(input.where),
+          booleanEqualityClause("IsReconciled", optionalBoolean(input.reconciled)),
+        ),
+        order: optionalString(input.orderBy),
+      },
+      modifiedAfterHeaders(input.ifModifiedSince),
+    );
+  },
+  async list_bank_transfers(input, context) {
+    return listXeroCollection(
+      context,
+      "/BankTransfers",
+      "BankTransfers",
+      "bankTransfers",
+      {
+        where: combineXeroWhere(
+          optionalString(input.where),
+          booleanEqualityClause("FromIsReconciled", optionalBoolean(input.sourceReconciled)),
+          booleanEqualityClause("ToIsReconciled", optionalBoolean(input.destinationReconciled)),
+        ),
+        order: optionalString(input.orderBy),
+        includeDeleted: optionalBoolean(input.includeDeleted),
+      },
+      modifiedAfterHeaders(input.ifModifiedSince),
+    );
+  },
+  async get_bank_summary(input, context) {
+    const payload = await requestXeroJson({
+      path: "/Reports/BankSummary",
+      context,
+      query: {
+        fromDate: optionalString(input.fromDate),
+        toDate: optionalString(input.toDate),
+      },
+    });
+    return { report: firstCollectionItem(payload, "Reports") };
+  },
+  async get_cash_validation(input, context) {
+    const payload = await requestXeroJson({
+      baseUrl: xeroApiFamilies.finance!.baseUrl,
+      path: "/1.0/CashValidation",
+      context,
+      query: {
+        balanceDate: optionalString(input.balanceDate),
+        asAtSystemDate: optionalString(input.asAtSystemDate),
+        beginDate: optionalString(input.beginDate),
+      },
+    });
+    return { accounts: objectArray(payload, "Xero cash validation response", providerResponseError) };
+  },
+  async get_bank_statement_reconciliation(input, context) {
+    const payload = await requestXeroJson({
+      baseUrl: xeroApiFamilies.finance!.baseUrl,
+      path: "/1.0/BankStatementsPlus/statements",
+      context,
+      query: {
+        BankAccountID: requiredString(input.bankAccountId, "bankAccountId", providerInputError),
+        FromDate: requiredString(input.fromDate, "fromDate", providerInputError),
+        ToDate: requiredString(input.toDate, "toDate", providerInputError),
+        SummaryOnly: optionalBoolean(input.summaryOnly),
+      },
+    });
+    return { reconciliation: requiredRecord(payload, "Xero bank statement response", providerResponseError) };
+  },
   async list_tax_rates(_input, context) {
     return listXeroCollection(context, "/TaxRates", "TaxRates", "taxRates");
   },
@@ -256,8 +365,9 @@ async function listXeroCollection(
   providerField: string,
   outputField: string,
   query: Record<string, unknown> = {},
+  headers?: Record<string, string>,
 ): Promise<Record<string, unknown>> {
-  const payload = await requestXeroJson({ path, context, query });
+  const payload = await requestXeroJson({ path, context, query, headers });
   const record = requiredRecord(payload, "Xero response", providerResponseError);
   const values = record[providerField];
   if (!Array.isArray(values)) throw providerResponseError(`Xero response missing ${providerField}`);
@@ -441,6 +551,29 @@ function optionalPositiveInteger(value: unknown, fieldName: string): number | un
   const result = optionalIntegerLike(value, fieldName, providerInputError);
   if (result !== undefined && result < 1) throw providerInputError(`${fieldName} must be a positive integer`);
   return result;
+}
+
+function optionalUnitDecimalPlaces(value: unknown): number | undefined {
+  const result = optionalIntegerLike(value, "unitDecimalPlaces", providerInputError);
+  if (result !== undefined && result !== 2 && result !== 4) {
+    throw providerInputError("unitDecimalPlaces must be 2 or 4");
+  }
+  return result;
+}
+
+function booleanEqualityClause(field: string, value: boolean | undefined): string | undefined {
+  return value === undefined ? undefined : `${field}==${value}`;
+}
+
+function combineXeroWhere(...clauses: Array<string | undefined>): string | undefined {
+  const defined = clauses.filter((clause): clause is string => clause !== undefined);
+  if (defined.length === 0) return undefined;
+  return defined.map((clause) => `(${clause})`).join(" AND ");
+}
+
+function modifiedAfterHeaders(value: unknown): Record<string, string> | undefined {
+  const modifiedAfter = optionalString(value);
+  return modifiedAfter ? { "if-modified-since": modifiedAfter } : undefined;
 }
 
 function idempotencyHeaders(value: unknown): Record<string, string> | undefined {

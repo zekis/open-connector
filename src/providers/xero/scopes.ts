@@ -4,6 +4,11 @@ export const xeroScopes: Readonly<Record<string, string>> = {
   contactsWrite: "accounting.contacts",
   invoicesRead: "accounting.invoices.read",
   invoicesWrite: "accounting.invoices",
+  paymentsRead: "accounting.payments.read",
+  bankTransactionsRead: "accounting.banktransactions.read",
+  bankSummaryRead: "accounting.reports.banksummary.read",
+  cashValidationRead: "finance.cashvalidation.read",
+  bankStatementsPlusRead: "finance.bankstatementsplus.read",
 };
 
 export const xeroDefaultCustomConnectionScopes: readonly string[] = [

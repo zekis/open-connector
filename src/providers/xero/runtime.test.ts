@@ -118,6 +118,198 @@ describe("Xero Custom Connection runtime", () => {
     });
   });
 
+  it("retrieves the reconciliation flags Xero exposes across accounting resources", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "reconciliation-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      switch (url.pathname) {
+        case "/api.xro/2.0/BankTransactions":
+          return jsonResponse({ BankTransactions: [{ BankTransactionID: "bank-1", IsReconciled: false }] });
+        case "/api.xro/2.0/Payments":
+          return jsonResponse({ Payments: [{ PaymentID: "payment-1", IsReconciled: true }] });
+        case "/api.xro/2.0/BatchPayments":
+          return jsonResponse({ BatchPayments: [{ BatchPaymentID: "batch-1", IsReconciled: true }] });
+        case "/api.xro/2.0/BankTransfers":
+          return jsonResponse({
+            BankTransfers: [{ BankTransferID: "transfer-1", FromIsReconciled: true, ToIsReconciled: false }],
+          });
+        default:
+          throw new Error(`Unexpected Xero URL: ${url}`);
+      }
+    }) as ProviderFetch;
+    const context = createContext(
+      {
+        clientId: "reconciliation-client",
+        clientSecret: "secret",
+        scopes: "accounting.payments.read accounting.banktransactions.read",
+      },
+      fetcher,
+    );
+
+    const bankTransactions = await xeroActionHandlers.list_bank_transactions!(
+      {
+        page: 2,
+        reconciled: false,
+        includeDeleted: true,
+        unitDecimalPlaces: 4,
+        where: 'Status=="AUTHORISED"',
+        ifModifiedSince: "2026-08-01T00:00:00Z",
+      },
+      context,
+    );
+    const payments = await xeroActionHandlers.list_payments!({ page: 1, pageSize: 250, reconciled: true }, context);
+    const batchPayments = await xeroActionHandlers.list_batch_payments!({ reconciled: true }, context);
+    const bankTransfers = await xeroActionHandlers.list_bank_transfers!(
+      { sourceReconciled: true, destinationReconciled: false, includeDeleted: true },
+      context,
+    );
+
+    expect(bankTransactions).toEqual({
+      bankTransactions: [{ BankTransactionID: "bank-1", IsReconciled: false }],
+      pagination: null,
+    });
+    expect(payments).toEqual({
+      payments: [{ PaymentID: "payment-1", IsReconciled: true }],
+      pagination: null,
+    });
+    expect(batchPayments).toEqual({
+      batchPayments: [{ BatchPaymentID: "batch-1", IsReconciled: true }],
+      pagination: null,
+    });
+    expect(bankTransfers).toEqual({
+      bankTransfers: [{ BankTransferID: "transfer-1", FromIsReconciled: true, ToIsReconciled: false }],
+      pagination: null,
+    });
+
+    const apiCalls = vi.mocked(fetcher).mock.calls.filter(([input]) => requestUrl(input).hostname === "api.xero.com");
+    const bankTransactionCall = apiCalls.find(
+      ([input]) => requestUrl(input).pathname === "/api.xro/2.0/BankTransactions",
+    )!;
+    expect(Object.fromEntries(requestUrl(bankTransactionCall[0]).searchParams)).toEqual({
+      page: "2",
+      where: '(Status=="AUTHORISED") AND (IsReconciled==false)',
+      includeDeleted: "true",
+      unitdp: "4",
+    });
+    expect(new Headers(bankTransactionCall[1]?.headers).get("if-modified-since")).toBe("2026-08-01T00:00:00Z");
+
+    const paymentCall = apiCalls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Payments")!;
+    expect(Object.fromEntries(requestUrl(paymentCall[0]).searchParams)).toEqual({
+      page: "1",
+      pageSize: "250",
+      where: "(IsReconciled==true)",
+    });
+
+    const batchPaymentCall = apiCalls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/BatchPayments")!;
+    expect(Object.fromEntries(requestUrl(batchPaymentCall[0]).searchParams)).toEqual({
+      where: "(IsReconciled==true)",
+    });
+
+    const bankTransferCall = apiCalls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/BankTransfers")!;
+    expect(Object.fromEntries(requestUrl(bankTransferCall[0]).searchParams)).toEqual({
+      where: "(FromIsReconciled==true) AND (ToIsReconciled==false)",
+      includeDeleted: "true",
+    });
+  });
+
+  it("retrieves the Bank Summary report for a requested period", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "report-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.pathname).toBe("/api.xro/2.0/Reports/BankSummary");
+      expect(Object.fromEntries(url.searchParams)).toEqual({ fromDate: "2026-08-01", toDate: "2026-08-15" });
+      return jsonResponse({ Reports: [{ ReportID: "BankSummary", ReportName: "Bank Summary", Rows: [] }] });
+    }) as ProviderFetch;
+    const context = createContext(
+      {
+        clientId: "report-client",
+        clientSecret: "secret",
+        scopes: "accounting.reports.banksummary.read",
+      },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.get_bank_summary!(
+      { fromDate: "2026-08-01", toDate: "2026-08-15" },
+      context,
+    );
+
+    expect(result).toEqual({ report: { ReportID: "BankSummary", ReportName: "Bank Summary", Rows: [] } });
+  });
+
+  it("retrieves partner Finance API reconciliation summaries and statement matches", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "finance-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      if (url.pathname === "/finance.xro/1.0/CashValidation") {
+        return jsonResponse([
+          {
+            accountId: "73151de8-3676-4887-a021-edec960dd537",
+            bankStatement: { statementLines: { unreconciledLines: 8, reconciledLines: 3 } },
+          },
+        ]);
+      }
+      if (url.pathname === "/finance.xro/1.0/BankStatementsPlus/statements") {
+        return jsonResponse({
+          bankAccountId: "73151de8-3676-4887-a021-edec960dd537",
+          statements: [{ statementId: "7c29eee9-47f0-4179-bd46-9adb4f21cc7f", statementLines: [] }],
+        });
+      }
+      throw new Error(`Unexpected Xero URL: ${url}`);
+    }) as ProviderFetch;
+    const context = createContext(
+      {
+        clientId: "finance-client",
+        clientSecret: "secret",
+        scopes: "finance.cashvalidation.read finance.bankstatementsplus.read",
+      },
+      fetcher,
+    );
+
+    const validation = await xeroActionHandlers.get_cash_validation!(
+      { balanceDate: "2026-08-15", asAtSystemDate: "2026-08-14", beginDate: "2026-07-01" },
+      context,
+    );
+    const reconciliation = await xeroActionHandlers.get_bank_statement_reconciliation!(
+      {
+        bankAccountId: "73151de8-3676-4887-a021-edec960dd537",
+        fromDate: "2026-07-01",
+        toDate: "2026-08-15",
+        summaryOnly: false,
+      },
+      context,
+    );
+
+    expect(validation).toEqual({
+      accounts: [
+        {
+          accountId: "73151de8-3676-4887-a021-edec960dd537",
+          bankStatement: { statementLines: { unreconciledLines: 8, reconciledLines: 3 } },
+        },
+      ],
+    });
+    expect(reconciliation).toEqual({
+      reconciliation: {
+        bankAccountId: "73151de8-3676-4887-a021-edec960dd537",
+        statements: [{ statementId: "7c29eee9-47f0-4179-bd46-9adb4f21cc7f", statementLines: [] }],
+      },
+    });
+
+    const apiCalls = vi.mocked(fetcher).mock.calls.filter(([input]) => requestUrl(input).hostname === "api.xero.com");
+    expect(requestUrl(apiCalls[0]![0]).toString()).toBe(
+      "https://api.xero.com/finance.xro/1.0/CashValidation?balanceDate=2026-08-15&asAtSystemDate=2026-08-14&beginDate=2026-07-01",
+    );
+    expect(requestUrl(apiCalls[1]![0]).toString()).toBe(
+      "https://api.xero.com/finance.xro/1.0/BankStatementsPlus/statements?BankAccountID=73151de8-3676-4887-a021-edec960dd537&FromDate=2026-07-01&ToDate=2026-08-15&SummaryOnly=false",
+    );
+  });
+
   it("retrieves JSON from any configured Xero API family with endpoint-specific parameters", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = requestUrl(input);
