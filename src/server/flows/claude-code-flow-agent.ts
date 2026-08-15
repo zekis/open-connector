@@ -12,9 +12,10 @@ import { ClaudeCodeError } from "../agents/claude-code-client.ts";
 import { FlowAgentError } from "./flow-agent.ts";
 
 /**
- * Stateless Claude Code turn adapter. Claude receives no built-in or MCP tools;
- * it returns one structured decision and the host retains execution and
- * approval authority.
+ * Stateless Claude Code turn adapter. Claude receives no connector or mutation
+ * tools; oversized prompts may use read-only access to an isolated temporary
+ * file. Claude returns one structured decision and the host retains execution
+ * and approval authority.
  */
 export class ClaudeCodeFlowAgent implements IFlowAgent {
   private readonly credentials: Pick<AgentCredentialService, "getClaudeOAuthToken">;

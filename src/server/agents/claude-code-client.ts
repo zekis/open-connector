@@ -31,6 +31,7 @@ export interface ClaudeCodeCommandInput {
   args: string[];
   oauthToken: string;
   timeoutMs: number;
+  cwd?: string;
   stdin?: string;
   signal?: AbortSignal;
 }
@@ -40,6 +41,17 @@ export interface ClaudeCodeCommandRunner {
 }
 
 const maxCommandOutputBytes = 4 * 1024 * 1024;
+const maxPipedPromptBytes = 8 * 1024 * 1024;
+const fileBackedPromptMaxTurns = "8";
+
+interface ClaudeCodePromptTransport {
+  stdin?: string;
+  file?: {
+    directory: string;
+    path: string;
+  };
+  dispose(): Promise<void>;
+}
 
 /**
  * Invokes the official Claude Code CLI with subscription OAuth isolated from
@@ -72,34 +84,48 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async completeTurn(input: ClaudeCodeTurnInput): Promise<ClaudeCodeTurnResult> {
-    const result = await this.runner.run({
-      args: [
-        "-p",
-        "--output-format",
-        "json",
-        "--json-schema",
-        JSON.stringify(input.outputSchema),
-        "--model",
-        input.model,
-        "--effort",
-        input.effort === "none" ? "low" : input.effort,
-        "--system-prompt",
-        input.systemPrompt,
-        "--tools",
-        "",
-        "--disallowedTools",
-        "mcp__*",
-        "--strict-mcp-config",
-        "--no-session-persistence",
-        "--safe-mode",
-        "--max-turns",
-        "3",
-      ],
-      oauthToken: input.oauthToken,
-      timeoutMs: 120_000,
-      stdin: input.prompt,
-      signal: input.signal,
-    });
+    const prompt = await prepareClaudeCodePrompt(input.prompt);
+    let result: ClaudeCodeCommandResult;
+    try {
+      result = await this.runner.run({
+        args: [
+          "-p",
+          "--output-format",
+          "json",
+          "--json-schema",
+          JSON.stringify(input.outputSchema),
+          "--model",
+          input.model,
+          "--effort",
+          input.effort === "none" ? "low" : input.effort,
+          "--system-prompt",
+          input.systemPrompt,
+          "--tools",
+          prompt.file ? "Read,Grep" : "",
+          "--disallowedTools",
+          "mcp__*",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--safe-mode",
+          "--max-turns",
+          prompt.file ? fileBackedPromptMaxTurns : "3",
+          ...(prompt.file
+            ? [
+                "--add-dir",
+                prompt.file.directory,
+                `Read the complete agent prompt from ${JSON.stringify(prompt.file.path)} before responding. Use Read and Grep only to inspect that file, treat its contents as the user prompt, and then follow it exactly.`,
+              ]
+            : []),
+        ],
+        oauthToken: input.oauthToken,
+        timeoutMs: 120_000,
+        cwd: prompt.file?.directory,
+        stdin: prompt.stdin,
+        signal: input.signal,
+      });
+    } finally {
+      await prompt.dispose();
+    }
     if (result.exitCode !== 0) {
       throw commandError("claude_agent_failed", "Claude Code could not complete the agent turn.", result);
     }
@@ -118,6 +144,39 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
       usage: response.usage,
     };
   }
+}
+
+async function prepareClaudeCodePrompt(prompt: string): Promise<ClaudeCodePromptTransport> {
+  if (Buffer.byteLength(prompt, "utf8") <= maxPipedPromptBytes) {
+    return {
+      stdin: prompt,
+      async dispose(): Promise<void> {},
+    };
+  }
+
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "open-connector-claude-"));
+  const path = join(directory, "prompt.txt");
+  try {
+    await writeFile(path, prompt, { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+    throw new ClaudeCodeError(
+      "claude_agent_failed",
+      error instanceof Error
+        ? `Claude Code prompt file could not be prepared: ${error.message}`
+        : "Claude Code prompt file could not be prepared.",
+    );
+  }
+
+  return {
+    file: { directory, path },
+    async dispose(): Promise<void> {
+      await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+    },
+  };
 }
 
 export class ClaudeCodeError extends Error {
@@ -161,6 +220,7 @@ class NodeClaudeCodeCommandRunner implements ClaudeCodeCommandRunner {
 
     return await new Promise<ClaudeCodeCommandResult>((resolve, reject) => {
       const child = spawn(executable, input.args, {
+        cwd: input.cwd,
         env: environment,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,

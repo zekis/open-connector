@@ -1,5 +1,7 @@
 import type { ClaudeCodeCommandInput, ClaudeCodeCommandRunner } from "./claude-code-client.ts";
 
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ClaudeCodeClient } from "./claude-code-client.ts";
 
@@ -100,6 +102,30 @@ describe("ClaudeCodeClient", () => {
     expect(runner.calls[0]?.args).not.toContain(prompt);
     expect(runner.calls[0]?.args).not.toContain("secret-subscription-token");
   });
+
+  it("passes oversized prompts through a temporary file and removes it after the turn", async () => {
+    const runner = new FileInspectingCommandRunner();
+    const client = new ClaudeCodeClient(runner);
+    const prompt = "x".repeat(8 * 1024 * 1024 + 1);
+
+    await client.completeTurn({
+      oauthToken: "secret-subscription-token",
+      model: "opus",
+      effort: "medium",
+      systemPrompt: "Inspect the supplied history.",
+      prompt,
+      outputSchema: { type: "object" },
+    });
+
+    expect(runner.promptFileContent).toBe(prompt);
+    expect(runner.input?.cwd).toBe(runner.promptDirectory);
+    expect(runner.input?.stdin).toBeUndefined();
+    expect(argumentValue(runner.input!.args, "--tools")).toBe("Read,Grep");
+    expect(argumentValue(runner.input!.args, "--max-turns")).toBe("8");
+    expect(runner.input?.args.at(-1)).toContain("prompt.txt");
+    expect(runner.input?.args).not.toContain(prompt);
+    await expect(access(runner.promptDirectory!)).rejects.toThrow();
+  });
 });
 
 interface FakeCommandResult {
@@ -120,4 +146,31 @@ class FakeCommandRunner implements ClaudeCodeCommandRunner {
     this.calls.push(input);
     return this.results.shift()!;
   }
+}
+
+class FileInspectingCommandRunner implements ClaudeCodeCommandRunner {
+  input?: ClaudeCodeCommandInput;
+  promptDirectory?: string;
+  promptFileContent?: string;
+
+  async run(input: ClaudeCodeCommandInput): Promise<FakeCommandResult> {
+    this.input = input;
+    this.promptDirectory = argumentValue(input.args, "--add-dir");
+    this.promptFileContent = await readFile(join(this.promptDirectory, "prompt.txt"), "utf8");
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        subtype: "success",
+        structured_output: { kind: "final", text: "Large prompt inspected." },
+      }),
+      stderr: "",
+    };
+  }
+}
+
+function argumentValue(args: string[], name: string): string {
+  const index = args.indexOf(name);
+  const value = index < 0 ? undefined : args[index + 1];
+  if (!value) throw new Error(`${name} argument is missing`);
+  return value;
 }
