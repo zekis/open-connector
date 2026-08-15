@@ -107,6 +107,43 @@ describe("FeedService", () => {
     });
   });
 
+  it("projects manual Flow runs into the Feed and keeps their result available for follow-up", async () => {
+    const manualDetail = structuredClone(detail);
+    manualDetail.run.id = "run-manual";
+    manualDetail.run.trigger = "manual";
+    manualDetail.run.triggerEvent = undefined;
+    manualDetail.run.flowSnapshot.name = "Sync project notes";
+    manualDetail.run.flowSnapshot.instructions = "Compare Azure DevOps work items with the Obsidian project notes.";
+    manualDetail.run.flowSnapshot.sourceConnectionId = "azure-devops-1";
+    manualDetail.run.flowSnapshot.tools = [
+      {
+        actionId: "azure_devops.list_work_items",
+        connectionId: "azure-devops-1",
+        role: "source",
+        approval: "always_allow",
+      },
+    ];
+    manualDetail.run.finalOutput = "Updated the project notes with three changed work items.";
+    const service = createService(new MemoryFeedStore(), [], completedResponse("Done."), undefined, undefined, [
+      manualDetail,
+    ]);
+
+    const page = await service.list();
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: "flow:run-manual",
+      kind: "trigger",
+      title: "Sync project notes",
+      summary: "Compare Azure DevOps work items with the Obsidian project notes.",
+      author: "Manual run",
+      providerService: "azure_devops",
+      agentSummary: "Updated the project notes with three changed work items.",
+      flow: { trigger: "manual", status: "completed" },
+      canReply: true,
+    });
+  });
+
   it("persists follow-up comments and links one-time Chat approvals to their Feed thread", async () => {
     const approval = createActionApproval();
     const store = new MemoryFeedStore();
@@ -191,14 +228,17 @@ function createService(
   response: AgentChatResponse | undefined,
   respond = vi.fn(async () => response!),
   actions?: ConstructorParameters<typeof FeedService>[0]["actions"],
+  runDetails: FlowRunDetail[] = [detail],
 ): FeedService {
   return new FeedService({
     flows: {
       async listRuns() {
-        return [detail.run];
+        return runDetails.map((candidate) => structuredClone(candidate.run));
       },
-      async getRunDetail() {
-        return structuredClone(detail);
+      async getRunDetail(runId) {
+        const match = runDetails.find((candidate) => candidate.run.id === runId);
+        if (!match) throw new Error(`Unknown test run: ${runId}`);
+        return structuredClone(match);
       },
       async listApprovals() {
         return [];

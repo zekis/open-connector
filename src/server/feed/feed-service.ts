@@ -36,7 +36,7 @@ export interface FeedServiceOptions {
   store: IFeedStore;
 }
 
-/** Projects triggered Flow activity into a durable, conversational activity feed. */
+/** Projects Flow activity into a durable, conversational activity feed. */
 export class FeedService {
   private readonly options: FeedServiceOptions;
 
@@ -54,9 +54,9 @@ export class FeedService {
     ]);
     const threadByRunId = new Map(threads.map((thread) => [thread.flowRunId, thread]));
     const linkedActionApprovalIds = new Set(threads.flatMap((thread) => thread.pendingApprovalId ?? []));
-    const triggeredRuns = runs.filter((run) => run.trigger !== "manual").slice(0, boundedLimit);
+    const activityRuns = runs.slice(0, boundedLimit);
     const runItems = await Promise.all(
-      triggeredRuns.map(async (run) =>
+      activityRuns.map(async (run) =>
         this.flowItem(await this.options.flows.getRunDetail(run.id), threadByRunId.get(run.id), actionApprovals),
       ),
     );
@@ -280,6 +280,17 @@ function summarizeTrigger(run: FlowRun): {
   providerService?: string;
   previews: FeedPreviewDescriptor[];
 } {
+  if (run.trigger === "manual") {
+    const instructions = run.flowSnapshot.instructions.trim();
+    return {
+      title: run.flowSnapshot.name,
+      summary: instructions ? truncate(instructions, 1_160) : "Started manually.",
+      author: "Manual run",
+      providerService: inferFlowProviderService(run),
+      previews: [],
+    };
+  }
+
   const payload = record(run.triggerEvent?.payload);
   const items = Array.isArray(payload?.items) ? payload.items : [];
   const first = record(items[0]) ?? payload;
@@ -305,6 +316,11 @@ function summarizeTrigger(run: FlowRun): {
     providerService,
     previews: createPreviewDescriptors(run, payload, first, title, summary),
   };
+}
+
+function inferFlowProviderService(run: FlowRun): string | undefined {
+  const sourceTool = run.flowSnapshot.tools.find((tool) => tool.connectionId === run.flowSnapshot.sourceConnectionId);
+  return sourceTool?.actionId.split(".")[0];
 }
 
 type FeedPreviewOutputKind = "outlook_message" | "downloaded_file" | "one_drive" | "dropbox" | "text";
