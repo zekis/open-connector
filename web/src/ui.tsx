@@ -398,7 +398,7 @@ function AppShell(props: {
   const CurrentNavIcon = currentNavItem.icon;
 
   return (
-    <div className="app-shell" aria-busy={props.loading}>
+    <div className={isSynapsePage ? "app-shell synapse-shell" : "app-shell"} aria-busy={props.loading}>
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
@@ -447,13 +447,23 @@ function AppShell(props: {
         </div>
       </aside>
 
-      <div className={isBrowserPage ? "main-region main-region-browser" : "main-region"}>
-        <header className="shell-header">
-          <div className="shell-header-title">
-            <CurrentNavIcon size={16} />
-            <h1>{t(`shell.headings.${heading}.title`)}</h1>
-          </div>
-        </header>
+      <div
+        className={
+          isSynapsePage
+            ? "main-region main-region-browser main-region-synapse"
+            : isBrowserPage
+              ? "main-region main-region-browser"
+              : "main-region"
+        }
+      >
+        {!isSynapsePage ? (
+          <header className="shell-header">
+            <div className="shell-header-title">
+              <CurrentNavIcon size={16} />
+              <h1>{t(`shell.headings.${heading}.title`)}</h1>
+            </div>
+          </header>
+        ) : null}
 
         <main className={mainClassName}>
           {props.error ? <InlineError message={props.error} /> : null}
