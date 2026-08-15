@@ -31,6 +31,7 @@ const artifactNode: SynapseArtifactNode = {
   artifactKind: "email",
   title: "New mining opportunity",
   summary: "A new opportunity arrived from the sales team.",
+  content: "**Priority:** review the [sales brief](https://example.com/brief).",
   externalUrl: "https://outlook.office.com/mail/message-1",
   position: { x: 430, y: 120 },
   createdAt: "2026-08-15T01:01:00.000Z",
@@ -72,7 +73,8 @@ describe("SynapseNodeCard", () => {
     );
 
     expect(html).toContain("New mining opportunity");
-    expect(html).toContain("A new opportunity arrived from the sales team.");
+    expect(html).toContain("<strong>Priority:</strong>");
+    expect(html).toContain("sales brief");
     expect(html).toContain("https://outlook.office.com/mail/message-1");
     expect(html).toContain("link-target");
   });

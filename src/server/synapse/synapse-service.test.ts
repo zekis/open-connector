@@ -78,6 +78,9 @@ describe("SynapseService", () => {
     );
     expect(result.edges).toHaveLength(3);
     expect(result.threads[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(result.nodes.find((node) => node.kind === "artifact" && node.title === "Deal one")).toMatchObject({
+      content: "Half price\n\n[Open source](https://example.com/deal-one)",
+    });
   });
 
   it("lets the agent create and revise durable artifact cards with Synapse graph tools", async () => {
@@ -123,6 +126,32 @@ describe("SynapseService", () => {
     expect(revised.nodes.find((node) => node.id === draft.id)).toMatchObject({
       content: "Hey Alex, this sale looks ideal for you.",
     });
+  });
+
+  it("accepts coordinates in every direction and moves new cards out of occupied space", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Infinite canvas" });
+    const first = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "North west",
+      content: "First card",
+      position: { x: -50_000, y: -40_000 },
+    });
+    const second = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Another card",
+      content: "Second card",
+      position: { x: -50_000, y: -40_000 },
+    });
+
+    expect(first.nodes[0]?.position).toEqual({ x: -50_000, y: -40_000 });
+    expect(second.nodes[1]?.position).not.toEqual(second.nodes[0]?.position);
+    expect(cardsOverlap(second.nodes[0]!.position, second.nodes[1]!.position)).toBe(false);
   });
 
   it("keeps a node conversation paused for approval and applies the resumed result once", async () => {
@@ -171,6 +200,15 @@ describe("SynapseService", () => {
     );
   });
 });
+
+function cardsOverlap(left: { x: number; y: number }, right: { x: number; y: number }): boolean {
+  return !(
+    left.x + 264 + 48 <= right.x ||
+    right.x + 264 + 48 <= left.x ||
+    left.y + 164 + 32 <= right.y ||
+    right.y + 164 + 32 <= left.y
+  );
+}
 
 function createService(agentChat: {
   respondWithExtension: (input: unknown, extension: AgentChatExtension) => Promise<AgentChatResponse>;

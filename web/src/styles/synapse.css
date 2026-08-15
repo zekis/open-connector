@@ -117,7 +117,7 @@
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   background-color: color-mix(in oklab, var(--background) 95%, var(--muted));
   background-image: radial-gradient(
@@ -136,14 +136,23 @@
 }
 
 .synapse-canvas {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
   isolation: isolate;
+  transform-origin: 0 0;
 }
 
 .synapse-edges {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   z-index: 0;
+  width: 1px;
+  height: 1px;
   overflow: visible;
   pointer-events: none;
 }
@@ -208,14 +217,16 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  min-height: 118px;
+  height: 118px;
   gap: 12px;
   padding: 16px;
   border-left: 4px solid var(--brand);
 }
 
 .synapse-node.artifact {
-  min-height: 164px;
+  display: flex;
+  flex-direction: column;
+  height: 164px;
   padding: 14px 16px 16px;
   border-top: 3px solid var(--success);
 }
@@ -325,17 +336,6 @@
   font-size: 14px;
 }
 
-.synapse-node-copy small,
-.synapse-node.artifact p {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
 .synapse-node-eyebrow,
 .synapse-node.artifact header {
   color: var(--muted-foreground);
@@ -364,9 +364,61 @@
   line-height: 1.35;
 }
 
-.synapse-node.artifact p {
-  margin: 0;
-  -webkit-line-clamp: 4;
+.synapse-node-markdown {
+  min-height: 0;
+  overflow: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
+  user-select: text;
+  touch-action: pan-y;
+}
+
+.synapse-node.artifact .synapse-node-markdown {
+  flex: 1 1 auto;
+  padding-right: 4px;
+}
+
+.synapse-node-markdown.provider-markdown {
+  max-height: 58px;
+}
+
+.synapse-node-markdown .chat-markdown {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.synapse-node-markdown .chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.synapse-node-markdown .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.synapse-node-markdown .chat-markdown p,
+.synapse-node-markdown .chat-markdown ul,
+.synapse-node-markdown .chat-markdown ol,
+.synapse-node-markdown .chat-markdown pre,
+.synapse-node-markdown .chat-markdown blockquote {
+  margin-block: 0 7px;
+}
+
+.synapse-node-markdown .chat-markdown ul,
+.synapse-node-markdown .chat-markdown ol {
+  padding-left: 18px;
+}
+
+.synapse-node-markdown .chat-markdown pre {
+  overflow-x: auto;
+  padding: 7px;
+  border-radius: 7px;
+  background: var(--background);
+  font-size: 10px;
+}
+
+.synapse-node-markdown .chat-markdown a {
+  color: var(--info);
 }
 
 .synapse-port {

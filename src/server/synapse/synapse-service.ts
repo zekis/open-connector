@@ -24,6 +24,11 @@ const maximumThreadMessages = 40;
 const maximumContextNodes = 40;
 const maximumArtifactsPerTool = 12;
 const maximumProjectedArtifacts = 8;
+const canvasNodeWidth = 264;
+const providerNodeHeight = 118;
+const artifactNodeHeight = 164;
+const nodeHorizontalGap = 48;
+const nodeVerticalGap = 32;
 
 export interface SynapseServiceOptions {
   catalog: CatalogStore;
@@ -86,13 +91,15 @@ export class SynapseService {
   async addNode(workspaceId: string, input: unknown): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse node");
-    const position = readPosition(body.position);
+    const requestedPosition = readPosition(body.position);
     if (body.kind === "provider") {
+      const position = findOpenPosition(workspace, requestedPosition, "provider");
       await this.addProviderNode(workspace, readText(body.connectionId, "connectionId", 200), position, {
         title: optionalText(body.title, "title", maximumNodeTitleCharacters),
         instructions: optionalText(body.instructions, "instructions", maximumNodeTextCharacters),
       });
     } else if (body.kind === "artifact") {
+      const position = findOpenPosition(workspace, requestedPosition, "artifact");
       this.addArtifactNode(workspace, position, readArtifactInput(body));
     } else {
       throw new SynapseError("invalid_synapse_node", "kind must be provider or artifact.");
@@ -251,7 +258,7 @@ export class SynapseService {
       }
       const parentNodeId = optionalText(input.parentNodeId, "parentNodeId", 200) ?? selectedNode.id;
       const parent = requiredNode(workspace, parentNodeId);
-      const node = await this.addProviderNode(workspace, connectionId, nextFanPosition(workspace, parent), {
+      const node = await this.addProviderNode(workspace, connectionId, nextFanPosition(workspace, parent, "provider"), {
         title: optionalText(input.title, "title", maximumNodeTitleCharacters),
         instructions: optionalText(input.instructions, "instructions", maximumNodeTextCharacters),
       });
@@ -273,7 +280,7 @@ export class SynapseService {
       const sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
       const nodes = input.artifacts.map((item, index) => {
         const artifact = readArtifactInput(readObject(item, `artifacts[${index}]`));
-        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent), {
+        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), {
           ...artifact,
           sourceActivityId,
         });
@@ -442,7 +449,7 @@ export class SynapseService {
         connection = await this.addProviderNode(
           workspace,
           activity.connectionId,
-          nextFanPosition(workspace, selectedNode),
+          nextFanPosition(workspace, selectedNode, "provider"),
           {},
         );
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
@@ -450,7 +457,7 @@ export class SynapseService {
       const parent = connection;
       const candidates = artifactCandidates(activity.output, activity.actionId).slice(0, maximumProjectedArtifacts);
       for (const candidate of candidates) {
-        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent), {
+        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), {
           ...candidate,
           sourceActionId: activity.actionId,
           sourceConnectionId: activity.connectionId,
@@ -517,7 +524,7 @@ const synapseTools: AgentChatExtensionTool[] = [
   {
     name: "synapse_add_artifacts",
     description:
-      "Create one or more durable artifact cards and fan them out from a parent node. Prefer one focused card per useful email, search result, document, task, or draft.",
+      "Create one or more durable Markdown artifact cards and fan them out from a parent node. Prefer one focused card per useful email, search result, document, task, or draft.",
     inputSchema: {
       type: "object",
       properties: {
@@ -539,10 +546,13 @@ const synapseTools: AgentChatExtensionTool[] = [
               },
               title: { type: "string" },
               summary: { type: "string" },
-              content: { type: "string" },
+              content: {
+                type: "string",
+                description: "The exact Markdown body rendered on the artifact card.",
+              },
               externalUrl: { type: "string" },
             },
-            required: ["artifactKind", "title"],
+            required: ["artifactKind", "title", "content"],
             additionalProperties: false,
           },
         },
@@ -594,6 +604,7 @@ Rules:
 - use connector tools whenever current external data or a side effect is needed
 - add a provider node with synapse_add_provider when you use a connection that is not already represented in the visible context
 - after retrieving useful results, call synapse_add_artifacts and create one concise artifact per useful result; fan-outs are preferred over burying results in chat
+- put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
 - include sourceActivityId from connector tool activity when turning that result into artifacts
 - create draft artifacts for proposed messages or documents before sending when the user is still reviewing them
 - update the selected draft or artifact in place with synapse_update_artifact when the user requests revisions
@@ -663,10 +674,24 @@ function artifactFromValue(value: unknown, actionId: string, index: number): Art
     artifactKind: inferArtifactKind(actionId),
     title: title ?? `${humanize(actionId)} result ${index + 1}`,
     summary: truncate(summary, 4_000),
-    content: truncate(content, maximumNodeTextCharacters),
+    content: artifactMarkdown(value, summary, content, externalUrl),
     externalUrl,
     data: boundedData(value),
   };
+}
+
+function artifactMarkdown(
+  value: unknown,
+  summary: string | undefined,
+  content: string | undefined,
+  externalUrl: string | undefined,
+): string {
+  const markdownContent = content && !/<[a-z][\s\S]*>/i.test(content) ? content : undefined;
+  const body = truncate(markdownContent ?? summary, maximumNodeTextCharacters);
+  const sourceLink = externalUrl ? `[Open source](${externalUrl})` : undefined;
+  if (body || sourceLink) return [body, sourceLink].filter(Boolean).join("\n\n");
+  const serialized = JSON.stringify(boundedData(value), null, 2);
+  return `\`\`\`json\n${serialized ?? "{}"}\n\`\`\``;
 }
 
 function inferArtifactKind(actionId: string): SynapseArtifactKind {
@@ -680,17 +705,79 @@ function inferArtifactKind(actionId: string): SynapseArtifactKind {
   return "generic";
 }
 
-function nextFanPosition(workspace: SynapseWorkspace, parent: SynapseNode): SynapsePosition {
+function nextFanPosition(
+  workspace: SynapseWorkspace,
+  parent: SynapseNode,
+  nodeKind: SynapseNode["kind"],
+): SynapsePosition {
   const siblings = workspace.edges
     .filter((edge) => edge.sourceNodeId === parent.id)
     .map((edge) => workspace.nodes.find((node) => node.id === edge.targetNodeId))
     .filter((node): node is SynapseNode => Boolean(node));
-  const column = siblings.length % 4;
-  const row = Math.floor(siblings.length / 4);
-  return {
-    x: Math.max(40, parent.position.x + 330 + row * 40),
-    y: Math.max(40, parent.position.y + (column - 1.5) * 190),
+  const lane = siblings.length % 5;
+  const column = Math.floor(siblings.length / 5);
+  const verticalOffset = lane === 0 ? 0 : Math.ceil(lane / 2) * (lane % 2 === 1 ? 1 : -1);
+  const preferred = {
+    x: parent.position.x + (column + 1) * (canvasNodeWidth + nodeHorizontalGap),
+    y: parent.position.y + verticalOffset * (artifactNodeHeight + nodeVerticalGap),
   };
+  return findOpenPosition(workspace, preferred, nodeKind);
+}
+
+function findOpenPosition(
+  workspace: SynapseWorkspace,
+  preferred: SynapsePosition,
+  nodeKind: SynapseNode["kind"],
+): SynapsePosition {
+  if (positionIsOpen(workspace, preferred, nodeKind)) return preferred;
+  const stepX = canvasNodeWidth + nodeHorizontalGap;
+  const stepY = artifactNodeHeight + nodeVerticalGap;
+  for (let radius = 1; radius <= workspace.nodes.length + 2; radius += 1) {
+    for (const offset of placementOffsets(radius)) {
+      const candidate = { x: preferred.x + offset.x * stepX, y: preferred.y + offset.y * stepY };
+      if (positionIsOpen(workspace, candidate, nodeKind)) return candidate;
+    }
+  }
+  return { x: preferred.x + (workspace.nodes.length + 3) * stepX, y: preferred.y };
+}
+
+function placementOffsets(radius: number): SynapsePosition[] {
+  const offsets: SynapsePosition[] = [
+    { x: 0, y: radius },
+    { x: radius, y: 0 },
+    { x: 0, y: -radius },
+    { x: -radius, y: 0 },
+  ];
+  for (let step = 1; step <= radius; step += 1) {
+    offsets.push(
+      { x: radius, y: step },
+      { x: radius, y: -step },
+      { x: -radius, y: step },
+      { x: -radius, y: -step },
+      { x: step, y: radius },
+      { x: -step, y: radius },
+      { x: step, y: -radius },
+      { x: -step, y: -radius },
+    );
+  }
+  return offsets;
+}
+
+function positionIsOpen(
+  workspace: SynapseWorkspace,
+  position: SynapsePosition,
+  nodeKind: SynapseNode["kind"],
+): boolean {
+  const height = nodeKind === "provider" ? providerNodeHeight : artifactNodeHeight;
+  return workspace.nodes.every((node) => {
+    const nodeHeight = node.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
+    return (
+      position.x + canvasNodeWidth + nodeHorizontalGap <= node.position.x ||
+      node.position.x + canvasNodeWidth + nodeHorizontalGap <= position.x ||
+      position.y + height + nodeVerticalGap <= node.position.y ||
+      node.position.y + nodeHeight + nodeVerticalGap <= position.y
+    );
+  });
 }
 
 function threadFor(workspace: SynapseWorkspace, nodeId: string): SynapseThread {
@@ -752,9 +839,6 @@ function readPosition(value: unknown): SynapsePosition {
   const position = readObject(value, "position");
   const x = finiteNumber(position.x, "position.x");
   const y = finiteNumber(position.y, "position.y");
-  if (Math.abs(x) > 20_000 || Math.abs(y) > 20_000) {
-    throw new SynapseError("invalid_synapse_position", "Node coordinates are outside the supported canvas.");
-  }
   return { x, y };
 }
 

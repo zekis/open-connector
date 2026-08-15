@@ -8,7 +8,7 @@ import type {
   SynapseWorkspace,
   SynapseWorkspaceSummary,
 } from "./model";
-import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from "react";
 
 import {
   ArrowUpRight,
@@ -55,12 +55,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-const canvasWidth = 3_000;
-const canvasHeight = 2_000;
 const nodeWidth = 264;
 const providerNodeHeight = 118;
 const artifactNodeHeight = 164;
 const approvalNodeHeight = 142;
+const nodeHorizontalGap = 48;
+const nodeVerticalGap = 32;
 const approvalPollIntervalMs = 2_000;
 
 interface DragState {
@@ -73,8 +73,18 @@ interface PanState {
   pointerId: number;
   startX: number;
   startY: number;
-  scrollLeft: number;
-  scrollTop: number;
+  offsetX: number;
+  offsetY: number;
+}
+
+interface CanvasOffset {
+  x: number;
+  y: number;
+}
+
+interface CanvasOccupant {
+  position: { x: number; y: number };
+  height: number;
 }
 
 export interface SynapseApprovalCanvasItem {
@@ -396,6 +406,7 @@ function SynapseCanvas(props: {
   const dragRef = useRef<DragState | undefined>(undefined);
   const panRef = useRef<PanState | undefined>(undefined);
   const [panning, setPanning] = useState(false);
+  const [canvasOffset, setCanvasOffset] = useState<CanvasOffset>({ x: 0, y: 0 });
 
   function beginPan(event: ReactPointerEvent<HTMLDivElement>): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest(".synapse-node")) return;
@@ -403,8 +414,8 @@ function SynapseCanvas(props: {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      scrollLeft: event.currentTarget.scrollLeft,
-      scrollTop: event.currentTarget.scrollTop,
+      offsetX: canvasOffset.x,
+      offsetY: canvasOffset.y,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     setPanning(true);
@@ -414,8 +425,16 @@ function SynapseCanvas(props: {
   function movePan(event: ReactPointerEvent<HTMLDivElement>): void {
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    event.currentTarget.scrollLeft = pan.scrollLeft - (event.clientX - pan.startX);
-    event.currentTarget.scrollTop = pan.scrollTop - (event.clientY - pan.startY);
+    setCanvasOffset({
+      x: pan.offsetX + event.clientX - pan.startX,
+      y: pan.offsetY + event.clientY - pan.startY,
+    });
+  }
+
+  function panWithWheel(event: ReactWheelEvent<HTMLDivElement>): void {
+    if ((event.target as HTMLElement).closest(".synapse-node-markdown")) return;
+    setCanvasOffset((current) => ({ x: current.x - event.deltaX, y: current.y - event.deltaY }));
+    event.preventDefault();
   }
 
   function finishPan(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -429,7 +448,7 @@ function SynapseCanvas(props: {
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
-    if ((event.target as HTMLElement).closest("button,a")) return;
+    if ((event.target as HTMLElement).closest("button,a,.synapse-node-markdown")) return;
     if (props.linkingFrom) {
       props.onNodeSelect(node.id);
       return;
@@ -439,8 +458,8 @@ function SynapseCanvas(props: {
     const rect = scroll.getBoundingClientRect();
     dragRef.current = {
       nodeId: node.id,
-      offsetX: event.clientX - rect.left + scroll.scrollLeft - node.position.x,
-      offsetY: event.clientY - rect.top + scroll.scrollTop - node.position.y,
+      offsetX: event.clientX - rect.left - canvasOffset.x - node.position.x,
+      offsetY: event.clientY - rect.top - canvasOffset.y - node.position.y,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     props.onNodeSelect(node.id);
@@ -452,14 +471,8 @@ function SynapseCanvas(props: {
     if (!drag || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
-      x: Math.max(
-        20,
-        Math.min(canvasWidth - nodeWidth - 20, event.clientX - rect.left + scroll.scrollLeft - drag.offsetX),
-      ),
-      y: Math.max(
-        20,
-        Math.min(canvasHeight - artifactNodeHeight - 20, event.clientY - rect.top + scroll.scrollTop - drag.offsetY),
-      ),
+      x: event.clientX - rect.left - canvasOffset.x - drag.offsetX,
+      y: event.clientY - rect.top - canvasOffset.y - drag.offsetY,
     };
     props.onWorkspaceChange(moveNode(props.workspace, drag.nodeId, position));
   }
@@ -471,18 +484,8 @@ function SynapseCanvas(props: {
     if (!drag || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
-      x: Math.round(
-        Math.max(
-          20,
-          Math.min(canvasWidth - nodeWidth - 20, event.clientX - rect.left + scroll.scrollLeft - drag.offsetX),
-        ),
-      ),
-      y: Math.round(
-        Math.max(
-          20,
-          Math.min(canvasHeight - artifactNodeHeight - 20, event.clientY - rect.top + scroll.scrollTop - drag.offsetY),
-        ),
-      ),
+      x: Math.round(event.clientX - rect.left - canvasOffset.x - drag.offsetX),
+      y: Math.round(event.clientY - rect.top - canvasOffset.y - drag.offsetY),
     };
     props.onWorkspaceChange(moveNode(props.workspace, drag.nodeId, position));
     void apiPut<SynapseWorkspace>(
@@ -495,13 +498,15 @@ function SynapseCanvas(props: {
     <div
       className={panning ? "synapse-canvas-scroll panning" : "synapse-canvas-scroll"}
       ref={scrollRef}
+      style={{ backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }}
       onPointerDown={beginPan}
       onPointerMove={movePan}
       onPointerUp={finishPan}
       onPointerCancel={finishPan}
+      onWheel={panWithWheel}
     >
-      <div className="synapse-canvas" style={{ width: canvasWidth, height: canvasHeight }}>
-        <svg className="synapse-edges" width={canvasWidth} height={canvasHeight} aria-hidden="true">
+      <div className="synapse-canvas" style={{ transform: `translate(${canvasOffset.x}px, ${canvasOffset.y}px)` }}>
+        <svg className="synapse-edges" width="1" height="1" aria-hidden="true">
           <defs>
             <marker id="synapse-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
               <path d="M0,0 L8,4 L0,8 Z" />
@@ -513,15 +518,16 @@ function SynapseCanvas(props: {
             if (!source || !target) return null;
             const sourceHeight = source.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
             const targetHeight = target.kind === "provider" ? providerNodeHeight : artifactNodeHeight;
-            const startX = source.position.x + nodeWidth;
+            const direction = target.position.x >= source.position.x ? 1 : -1;
+            const startX = direction > 0 ? source.position.x + nodeWidth : source.position.x;
             const startY = source.position.y + sourceHeight / 2;
-            const endX = target.position.x;
+            const endX = direction > 0 ? target.position.x : target.position.x + nodeWidth;
             const endY = target.position.y + targetHeight / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
             return (
               <path
                 className="synapse-edge"
-                d={`M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`}
+                d={`M ${startX} ${startY} C ${startX + direction * bend} ${startY}, ${endX - direction * bend} ${endY}, ${endX} ${endY}`}
                 markerEnd="url(#synapse-arrow)"
                 key={edge.id}
               />
@@ -607,7 +613,11 @@ export function SynapseNodeCard(props: {
         <div className="synapse-node-copy">
           <span className="synapse-node-eyebrow">Provider source</span>
           <strong>{props.node.title}</strong>
-          <small>{props.node.instructions ?? "Ask this node to retrieve or act through its connection."}</small>
+          <div className="synapse-node-markdown provider-markdown">
+            <ChatMarkdown>
+              {props.node.instructions ?? "Ask this node to retrieve or act through its connection."}
+            </ChatMarkdown>
+          </div>
         </div>
         <span className="synapse-port input" />
         <span className="synapse-port output" />
@@ -615,6 +625,7 @@ export function SynapseNodeCard(props: {
     );
   }
   const Icon = artifactIcon(props.node.artifactKind);
+  const markdown = props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.";
   return (
     <article
       className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.linking ? " link-target" : ""}`}
@@ -636,7 +647,9 @@ export function SynapseNodeCard(props: {
         ) : null}
       </header>
       <strong>{props.node.title}</strong>
-      <p>{props.node.summary ?? props.node.content ?? "Open the node and ask Claude to develop this artifact."}</p>
+      <div className="synapse-node-markdown">
+        <ChatMarkdown>{markdown}</ChatMarkdown>
+      </div>
       <span className="synapse-port input" />
       <span className="synapse-port output" />
     </article>
@@ -844,9 +857,8 @@ function SynapseNodePanel(props: {
       </div>
       {props.node.kind === "artifact" && (props.node.summary || props.node.content) ? (
         <details className="synapse-node-context">
-          <summary>Artifact context</summary>
-          <div>{props.node.summary}</div>
-          {props.node.content ? <pre>{props.node.content}</pre> : null}
+          <summary>Artifact Markdown</summary>
+          <ChatMarkdown>{props.node.content ?? props.node.summary ?? ""}</ChatMarkdown>
         </details>
       ) : null}
       <div className="synapse-transcript" ref={transcriptRef}>
@@ -999,7 +1011,7 @@ function AddSourceDialog(props: {
       const next = await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes`, {
         kind: "provider",
         connectionId: option.connection.id,
-        position: initialNodePosition(props.workspace),
+        position: initialNodePosition(props.workspace, "provider"),
       });
       props.onCreated(next);
       props.onOpenChange(false);
@@ -1056,26 +1068,26 @@ function AddArtifactDialog(props: {
   onCreated(workspace: SynapseWorkspace): void;
 }): ReactNode {
   const [title, setTitle] = useState("");
-  const [summary, setSummary] = useState("");
+  const [markdown, setMarkdown] = useState("");
   const [kind, setKind] = useState<SynapseArtifactKind>("note");
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!title.trim() || busy) return;
+    if (!title.trim() || !markdown.trim() || busy) return;
     setBusy(true);
     try {
       const next = await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes`, {
         kind: "artifact",
         artifactKind: kind,
         title: title.trim(),
-        summary: summary.trim() || undefined,
-        position: initialNodePosition(props.workspace),
+        content: markdown.trim() || undefined,
+        position: initialNodePosition(props.workspace, "artifact"),
       });
       props.onCreated(next);
       props.onOpenChange(false);
       setTitle("");
-      setSummary("");
+      setMarkdown("");
     } finally {
       setBusy(false);
     }
@@ -1087,7 +1099,9 @@ function AddArtifactDialog(props: {
         <form onSubmit={(event) => void submit(event)}>
           <DialogHeader>
             <DialogTitle>Add an artifact</DialogTitle>
-            <DialogDescription>Seed the canvas with a note, draft, task, or other piece of context.</DialogDescription>
+            <DialogDescription>
+              Seed the canvas with a note, draft, task, or other piece of rendered Markdown.
+            </DialogDescription>
           </DialogHeader>
           <div className="synapse-artifact-form">
             <Label className="field">
@@ -1112,15 +1126,20 @@ function AddArtifactDialog(props: {
               <Input value={title} autoFocus onChange={(event) => setTitle(event.target.value)} />
             </Label>
             <Label className="field">
-              <span>Context</span>
-              <Textarea value={summary} rows={4} onChange={(event) => setSummary(event.target.value)} />
+              <span>Markdown</span>
+              <Textarea
+                value={markdown}
+                rows={7}
+                placeholder="Write the exact Markdown shown on this card…"
+                onChange={(event) => setMarkdown(event.target.value)}
+              />
             </Label>
           </div>
           <DialogFooter>
             <Button variant="outline" type="button" onClick={() => props.onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!title.trim() || busy}>
+            <Button type="submit" disabled={!title.trim() || !markdown.trim() || busy}>
               {busy ? <Loader2 className="spin" size={14} /> : <StickyNote size={14} />} Add artifact
             </Button>
           </DialogFooter>
@@ -1162,27 +1181,30 @@ function providerOptions(data: AppData): ProviderOption[] {
 }
 
 export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprovalCanvasItem[] {
-  return workspace.threads.flatMap((thread) => {
-    if (!thread.pendingApprovalId) return [];
+  const items: SynapseApprovalCanvasItem[] = [];
+  for (const thread of workspace.threads) {
+    if (!thread.pendingApprovalId) continue;
     const owner = workspace.nodes.find((node) => node.id === thread.nodeId);
-    if (!owner) return [];
+    if (!owner) continue;
     const pendingMessage = thread.messages.find((message) => message.id === thread.pendingMessageId);
     const activity = pendingApprovalActivity(pendingMessage?.toolActivity, thread.pendingApprovalId);
-    const rightX = owner.position.x + nodeWidth + 96;
-    const maximumX = canvasWidth - nodeWidth - 20;
-    const x = rightX <= maximumX ? rightX : Math.max(20, owner.position.x - nodeWidth - 96);
-    return [
-      {
-        id: `approval:${thread.pendingApprovalId}`,
-        approvalId: thread.pendingApprovalId,
-        nodeId: thread.nodeId,
-        title: activity?.actionId ?? activity?.label ?? "Connector action",
-        connectionDisplayName: activity?.connectionDisplayName,
-        input: activity?.input ?? {},
-        position: { x, y: Math.max(20, owner.position.y + 4) },
-      },
-    ];
-  });
+    const position = findOpenCanvasPosition(
+      workspace,
+      items.map((item) => ({ position: item.position, height: approvalNodeHeight })),
+      { x: owner.position.x + nodeWidth + nodeHorizontalGap, y: owner.position.y },
+      approvalNodeHeight,
+    );
+    items.push({
+      id: `approval:${thread.pendingApprovalId}`,
+      approvalId: thread.pendingApprovalId,
+      nodeId: thread.nodeId,
+      title: activity?.actionId ?? activity?.label ?? "Connector action",
+      connectionDisplayName: activity?.connectionDisplayName,
+      input: activity?.input ?? {},
+      position,
+    });
+  }
+  return items;
 }
 
 function pendingApprovalActivity(
@@ -1199,9 +1221,70 @@ function moveNode(workspace: SynapseWorkspace, nodeId: string, position: { x: nu
   };
 }
 
-function initialNodePosition(workspace: SynapseWorkspace): { x: number; y: number } {
-  const index = workspace.nodes.length;
-  return { x: 100 + (index % 4) * 320, y: 120 + Math.floor(index / 4) * 220 };
+function initialNodePosition(workspace: SynapseWorkspace, nodeKind: SynapseNode["kind"]): { x: number; y: number } {
+  const height = nodeKind === "provider" ? providerNodeHeight : artifactNodeHeight;
+  return findOpenCanvasPosition(workspace, [], { x: 100, y: 120 }, height);
+}
+
+function findOpenCanvasPosition(
+  workspace: SynapseWorkspace,
+  additionalOccupants: CanvasOccupant[],
+  preferred: { x: number; y: number },
+  height: number,
+): { x: number; y: number } {
+  const occupants: CanvasOccupant[] = [
+    ...workspace.nodes.map((node) => ({
+      position: node.position,
+      height: node.kind === "provider" ? providerNodeHeight : artifactNodeHeight,
+    })),
+    ...additionalOccupants,
+  ];
+  if (canvasPositionIsOpen(occupants, preferred, height)) return preferred;
+  const stepX = nodeWidth + nodeHorizontalGap;
+  const stepY = artifactNodeHeight + nodeVerticalGap;
+  for (let radius = 1; radius <= occupants.length + 2; radius += 1) {
+    for (const offset of canvasPlacementOffsets(radius)) {
+      const candidate = { x: preferred.x + offset.x * stepX, y: preferred.y + offset.y * stepY };
+      if (canvasPositionIsOpen(occupants, candidate, height)) return candidate;
+    }
+  }
+  return { x: preferred.x + (occupants.length + 3) * stepX, y: preferred.y };
+}
+
+function canvasPlacementOffsets(radius: number): Array<{ x: number; y: number }> {
+  const offsets = [
+    { x: 0, y: radius },
+    { x: radius, y: 0 },
+    { x: 0, y: -radius },
+    { x: -radius, y: 0 },
+  ];
+  for (let step = 1; step <= radius; step += 1) {
+    offsets.push(
+      { x: radius, y: step },
+      { x: radius, y: -step },
+      { x: -radius, y: step },
+      { x: -radius, y: -step },
+      { x: step, y: radius },
+      { x: -step, y: radius },
+      { x: step, y: -radius },
+      { x: -step, y: -radius },
+    );
+  }
+  return offsets;
+}
+
+function canvasPositionIsOpen(
+  occupants: CanvasOccupant[],
+  position: { x: number; y: number },
+  height: number,
+): boolean {
+  return occupants.every(
+    (occupant) =>
+      position.x + nodeWidth + nodeHorizontalGap <= occupant.position.x ||
+      occupant.position.x + nodeWidth + nodeHorizontalGap <= position.x ||
+      position.y + height + nodeVerticalGap <= occupant.position.y ||
+      occupant.position.y + occupant.height + nodeVerticalGap <= position.y,
+  );
 }
 
 function workspaceSummary(workspace: SynapseWorkspace): SynapseWorkspaceSummary {
