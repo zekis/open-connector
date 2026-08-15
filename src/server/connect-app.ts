@@ -120,6 +120,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     flows: flowRunner,
     approvals: connectionApprovals,
     agentChat,
+    actions,
+    getPolicySnapshot,
     store: options.runtimeDatabase.feedStore,
   });
   const flowTriggers = new FlowTriggerEngine({

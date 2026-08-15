@@ -136,6 +136,11 @@
   line-height: 1.32;
 }
 
+.feed-post-body,
+.feed-file-caption > div {
+  min-width: 0;
+}
+
 .feed-summary {
   display: -webkit-box;
   overflow: hidden;
@@ -150,6 +155,194 @@
   margin-top: 11px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+
+.feed-previews {
+  display: grid;
+  gap: 10px;
+  margin: 0 14px 14px;
+}
+
+.feed-email-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--primary) 3%, var(--background));
+}
+
+.feed-email-preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.feed-email-preview strong,
+.feed-file-caption strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-email-preview span,
+.feed-file-caption span,
+.feed-attachment-heading {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.feed-email-preview > div > span {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.feed-preview-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted-foreground);
+  background: var(--surface);
+}
+
+.feed-preview-icon.email {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.feed-attachment-heading {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 1px 3px 0;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.feed-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.feed-file-preview {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--background);
+}
+
+.feed-file-preview > img,
+.feed-file-preview > iframe,
+.feed-file-placeholder {
+  display: block;
+  width: 100%;
+  height: 190px;
+  border: 0;
+  object-fit: cover;
+  background:
+    radial-gradient(circle at 20% 12%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 36%),
+    color-mix(in srgb, var(--muted) 55%, var(--background));
+}
+
+.feed-file-preview > iframe {
+  pointer-events: none;
+}
+
+.feed-file-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+}
+
+.feed-file-placeholder svg {
+  width: 34px;
+  height: 34px;
+  opacity: 0.68;
+}
+
+.feed-file-caption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.feed-file-caption > div {
+  display: grid;
+  gap: 2px;
+}
+
+.feed-file-caption .feed-preview-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+
+.feed-preview-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1080px, calc(100vw - 32px));
+  height: min(820px, calc(100svh - 32px));
+  overflow: hidden;
+  padding: 16px;
+}
+
+.feed-preview-full {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--muted) 45%, var(--background));
+}
+
+.feed-preview-full img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.feed-preview-full iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
+
+.feed-preview-unavailable {
+  display: grid;
+  gap: 12px;
+  place-items: center;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.feed-preview-unavailable svg {
+  width: 42px;
+  height: 42px;
+}
+
+.feed-preview-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .feed-status {
@@ -374,6 +567,29 @@
     grid-template-columns: 32px 1fr;
     margin: 0 10px 10px;
     padding: 11px;
+  }
+
+  .feed-previews {
+    margin: 0 10px 10px;
+  }
+
+  .feed-email-preview {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .feed-email-preview > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .feed-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-file-preview > img,
+  .feed-file-preview > iframe,
+  .feed-file-placeholder {
+    height: 220px;
   }
 
   .feed-agent-post .feed-avatar {

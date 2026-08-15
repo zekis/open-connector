@@ -77,6 +77,49 @@ const outlookMessage = s.looseObject(
   },
   { description: "Outlook message resource." },
 );
+const outlookAttachment = s.looseObject(
+  {
+    id: nonEmptyString("Attachment ID."),
+    name: s.string({ description: "Attachment file name." }),
+    contentType: s.string({ description: "Attachment MIME type." }),
+    size: s.integer({ minimum: 0, description: "Attachment size in bytes." }),
+    isInline: s.boolean({ description: "Whether the attachment is embedded in the message body." }),
+    contentId: s.nullableString("Content ID used by inline message markup."),
+    sourceUrl: s.string({ description: "Provider URL for a cloud reference attachment." }),
+    lastModifiedDateTime: s.string({ description: "Attachment last-modified timestamp." }),
+  },
+  { description: "Outlook message attachment metadata without file content." },
+);
+const listAttachmentsOutput = s.object(
+  {
+    attachments: s.array(outlookAttachment, { description: "Attachments on the Outlook message." }),
+  },
+  { required: ["attachments"], description: "Outlook message attachment list response." },
+);
+const downloadedAttachment = s.object(
+  {
+    name: nonEmptyString("Downloaded attachment name."),
+    mimeType: nonEmptyString("Downloaded attachment MIME type."),
+    sizeBytes: s.integer({ minimum: 0, description: "Downloaded attachment size in bytes." }),
+    file: s.nullable(
+      s.looseObject(
+        {
+          fileId: nonEmptyString("Local transit file ID."),
+          downloadUrl: nonEmptyString("Local transit file download URL."),
+          name: nonEmptyString("Transit file name."),
+          mimeType: nonEmptyString("Transit file MIME type."),
+          sizeBytes: s.integer({ minimum: 0, description: "Transit file size in bytes." }),
+        },
+        { description: "Local transit file reference when transit storage is enabled." },
+      ),
+    ),
+    contentBase64: s.nullableString("Base64 content returned only when local transit storage is unavailable."),
+  },
+  {
+    required: ["name", "mimeType", "sizeBytes", "file", "contentBase64"],
+    description: "Downloaded Outlook attachment.",
+  },
+);
 const mailFolder = s.looseObject(
   {
     id: nonEmptyString("Mail folder ID."),
@@ -185,6 +228,22 @@ const actions: OutlookActionSource[] = [
       "messageId",
     ]),
     outlookMessage,
+  ),
+  action(
+    "list_attachments",
+    "List attachment metadata for an Outlook message without downloading attachment content.",
+    outlookReadScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input({ messageId }, ["messageId"]),
+    listAttachmentsOutput,
+  ),
+  action(
+    "download_attachment",
+    "Download the raw content of one Outlook message attachment.",
+    outlookReadScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input({ messageId, attachmentId: nonEmptyString("Outlook attachment ID.") }, ["messageId", "attachmentId"]),
+    downloadedAttachment,
   ),
   action(
     "create_draft",

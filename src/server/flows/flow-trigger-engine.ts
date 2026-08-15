@@ -185,6 +185,7 @@ export class FlowTriggerEngine {
       return;
     }
     for (const item of newItems) {
+      const payload = await this.enrichEventItem(flow, trigger.connectionId, connection.service, item.payload, policy);
       this.launch(
         flow,
         createEvent(trigger.type, now, {
@@ -192,10 +193,43 @@ export class FlowTriggerEngine {
           service: connection.service,
           eventId: trigger.type === "event" ? trigger.eventId : undefined,
           detectorActionId: plan.actionId,
-          items: [item.payload],
+          items: [payload],
         }),
       );
     }
+  }
+
+  private async enrichEventItem(
+    flow: FlowDefinition,
+    connectionId: string,
+    service: string,
+    payload: unknown,
+    policy: ActionPolicySnapshot,
+  ): Promise<unknown> {
+    const item = readRecord(payload);
+    if (service !== "outlook" || item?.hasAttachments !== true || typeof item.id !== "string") {
+      return payload;
+    }
+
+    const attachmentRun = await this.options.actions.run({
+      actionId: "outlook.list_attachments",
+      connectionId,
+      input: { messageId: item.id },
+      caller: "trigger",
+      policy,
+      flowId: flow.id,
+      approvalPolicy: "bypass",
+    });
+    const output = attachmentRun?.result.ok ? readRecord(attachmentRun.result.output) : undefined;
+    if (!Array.isArray(output?.attachments)) {
+      this.options.logger?.warn(
+        { flowId: flow.id, service, errorCode: attachmentRun?.result.error?.code },
+        "trigger attachment metadata enrichment failed",
+      );
+      return payload;
+    }
+
+    return { ...item, attachments: output.attachments };
   }
 
   private launch(flow: FlowDefinition, event: FlowTriggerEvent): void {
@@ -249,6 +283,10 @@ function createEvent(type: FlowTriggerEvent["type"], now: Date, payload: unknown
     occurredAt: now.toISOString(),
     payload,
   };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function isPollDue(lastCheckedAt: string | undefined, intervalSeconds: number, now: Date): boolean {

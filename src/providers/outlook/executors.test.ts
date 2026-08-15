@@ -57,6 +57,73 @@ describe("Outlook executors", () => {
     ).rejects.toEqual(expect.objectContaining<Partial<ProviderRequestError>>({ status: 400 }));
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("lists attachment metadata without requesting content bytes", async () => {
+    const fetcher = createFetch(async () =>
+      Response.json({
+        value: [
+          {
+            id: "attachment-1",
+            name: "plans.pdf",
+            contentType: "application/pdf",
+            size: 2048,
+            isInline: false,
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      outlookActionHandlers.list_attachments!({ messageId: "message 1" }, { accessToken: "access-token", fetcher }),
+    ).resolves.toMatchObject({ attachments: [{ id: "attachment-1", name: "plans.pdf" }] });
+
+    const [request] = vi.mocked(fetcher).mock.calls[0]!;
+    const url = new URL(request instanceof Request ? request.url : request.toString());
+    expect(url.pathname).toBe("/v1.0/me/messages/message%201/attachments");
+    expect(url.searchParams.get("$select")).not.toContain("contentBytes");
+  });
+
+  it("downloads bounded raw attachment content into transit storage", async () => {
+    const fetcher = createFetch(async (request) => {
+      const url = new URL(request instanceof Request ? request.url : request.toString());
+      return url.pathname.endsWith("/$value")
+        ? new Response("pdf-bytes", { headers: { "content-type": "application/pdf" } })
+        : Response.json({ id: "attachment-1", name: "plans.pdf", contentType: "application/pdf", size: 9 });
+    });
+    const create = vi.fn(async () => ({
+      fileId: "transit-1",
+      downloadUrl: "/api/files/transit-1",
+      sizeBytes: 9,
+      name: "plans.pdf",
+      mimeType: "application/pdf",
+    }));
+
+    await expect(
+      outlookActionHandlers.download_attachment!(
+        { messageId: "message-1", attachmentId: "attachment-1" },
+        {
+          accessToken: "access-token",
+          fetcher,
+          transitFiles: {
+            maxBytes: 1024,
+            create,
+            async read() {
+              throw new Error("not used");
+            },
+            async delete() {
+              return false;
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      name: "plans.pdf",
+      mimeType: "application/pdf",
+      file: { fileId: "transit-1" },
+      contentBase64: null,
+    });
+    expect(create).toHaveBeenCalledOnce();
+  });
 });
 
 function createFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): typeof fetch {

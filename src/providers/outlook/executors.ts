@@ -1,11 +1,14 @@
 import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
 import type { OAuthProviderContext } from "../provider-runtime.ts";
 
-import { compactObject, requiredRecord } from "../../core/cast.ts";
+import { Buffer } from "node:buffer";
+import { compactObject, optionalString, requiredRecord } from "../../core/cast.ts";
+import { readBoundedResponseBytes } from "../../core/request.ts";
 import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
 
 const outlookGraphBaseUrl = "https://graph.microsoft.com/v1.0";
 const graphHost = "graph.microsoft.com";
+const maximumOutlookAttachmentBytes = 20 * 1024 * 1024;
 
 type OutlookRuntimeDeps = OAuthProviderContext;
 
@@ -42,6 +45,12 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   },
   get_message(input, deps) {
     return getMessage(input, deps);
+  },
+  list_attachments(input, deps) {
+    return listAttachments(input, deps);
+  },
+  download_attachment(input, deps) {
+    return downloadAttachment(input, deps);
   },
   create_draft(input, deps) {
     return createDraft(input, deps);
@@ -373,6 +382,58 @@ async function getMessage(input: Record<string, unknown>, { accessToken, fetcher
     query,
     headers,
   });
+}
+
+async function listAttachments(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
+  const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
+  const payload = await outlookJsonRequest<{ value?: unknown[] }>(`me/messages/${messageId}/attachments`, {
+    accessToken,
+    fetcher,
+    query: {
+      $select: ["id", "name", "contentType", "size", "isInline", "contentId", "sourceUrl", "lastModifiedDateTime"].join(
+        ",",
+      ),
+    },
+  });
+  return { attachments: Array.isArray(payload.value) ? payload.value : [] };
+}
+
+async function downloadAttachment(input: Record<string, unknown>, deps: OutlookRuntimeDeps) {
+  const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
+  const attachmentId = encodeURIComponent(requiredString(input.attachmentId, "attachmentId"));
+  const attachmentPath = `me/messages/${messageId}/attachments/${attachmentId}`;
+  const metadata = await outlookJsonRequest<Record<string, unknown>>(attachmentPath, {
+    accessToken: deps.accessToken,
+    fetcher: deps.fetcher,
+    query: { $select: "id,name,contentType,size,isInline" },
+  });
+  const response = await outlookRequest(`${attachmentPath}/$value`, {
+    accessToken: deps.accessToken,
+    fetcher: deps.fetcher,
+  });
+  const name = optionalString(metadata.name) ?? "outlook-attachment";
+  const mimeType =
+    optionalString(response.headers.get("content-type")) ??
+    optionalString(metadata.contentType) ??
+    "application/octet-stream";
+  const bytes = await readBoundedResponseBytes(response, {
+    maxBytes: Math.min(maximumOutlookAttachmentBytes, deps.transitFiles?.maxBytes ?? maximumOutlookAttachmentBytes),
+    fieldName: name,
+    createError: (message) => new ProviderRequestError(413, message),
+  });
+
+  if (deps.transitFiles) {
+    const file = await deps.transitFiles.create(new File([Uint8Array.from(bytes)], name, { type: mimeType }));
+    return { name, mimeType, sizeBytes: bytes.byteLength, file, contentBase64: null };
+  }
+
+  return {
+    name,
+    mimeType,
+    sizeBytes: bytes.byteLength,
+    file: null,
+    contentBase64: Buffer.from(bytes).toString("base64"),
+  };
 }
 
 async function createDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {

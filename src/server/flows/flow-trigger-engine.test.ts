@@ -116,6 +116,47 @@ describe("FlowTriggerEngine", () => {
     ]);
   });
 
+  it("adds Outlook attachment metadata to a newly triggered email without downloading file content", async () => {
+    const harness = createHarness({
+      type: "new_email",
+      connectionId: "source-1",
+      pollIntervalSeconds: 60,
+    });
+    harness.actions.outputs.push(
+      { messages: [{ id: "existing", subject: "Existing" }] },
+      { messages: [{ id: "message-2", subject: "Plans", hasAttachments: true }] },
+      {
+        attachments: [
+          {
+            id: "attachment-1",
+            name: "plans.pdf",
+            contentType: "application/pdf",
+            size: 2048,
+            isInline: false,
+          },
+        ],
+      },
+    );
+
+    await harness.engine.tick(new Date("2026-08-05T01:00:00.000Z"));
+    await harness.engine.tick(new Date("2026-08-05T01:01:00.000Z"));
+
+    expect(harness.actions.inputs[2]).toMatchObject({
+      actionId: "outlook.list_attachments",
+      connectionId: "source-1",
+      input: { messageId: "message-2" },
+      approvalPolicy: "bypass",
+    });
+    expect(harness.starts[0]?.event?.payload).toMatchObject({
+      items: [
+        {
+          id: "message-2",
+          attachments: [{ id: "attachment-1", name: "plans.pdf", contentType: "application/pdf" }],
+        },
+      ],
+    });
+  });
+
   it("accepts API payloads only for API-triggered flows", async () => {
     const harness = createHarness({ type: "api" });
 

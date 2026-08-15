@@ -442,6 +442,19 @@ export interface FeedActionSummary {
   status: "pending" | "completed" | "failed" | "denied";
 }
 
+export type FeedPreviewKind = "email" | "image" | "pdf" | "document" | "file";
+
+export interface FeedPreview {
+  id: string;
+  kind: FeedPreviewKind;
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  summary?: string;
+  contentUrl?: string;
+  externalUrl?: string;
+}
+
 export interface FeedItem {
   id: string;
   kind: "trigger" | "approval";
@@ -451,6 +464,7 @@ export interface FeedItem {
   summary?: string;
   author?: string;
   providerService?: string;
+  previews: FeedPreview[];
   flow?: {
     id: string;
     name: string;

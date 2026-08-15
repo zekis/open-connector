@@ -253,6 +253,9 @@ export class ConnectServer {
     }
     if (this.options.feed) {
       app.get("/api/feed", (context) => this.listFeed(context));
+      app.get("/api/feed/:id/previews/:previewId", (context) =>
+        this.getFeedPreview(context, context.req.param("id"), context.req.param("previewId")),
+      );
       app.post("/api/feed/:id/comments", (context) => this.replyToFeedItem(context, context.req.param("id")));
     }
 
@@ -958,6 +961,35 @@ export class ConnectServer {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof AgentChatError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof FlowError) return jsonError(context, error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  private async getFeedPreview(context: Context, itemId: string, previewId: string): Promise<Response> {
+    try {
+      const content = await this.options.feed!.getPreview(itemId, previewId);
+      const stored = content.fileId ? await this.options.transitFiles.read(content.fileId) : undefined;
+      const bytes = stored ? undefined : content.bytes;
+      if (!stored && !bytes) {
+        return jsonError(context, 404, "feed_preview_unavailable", "Feed preview content is unavailable.");
+      }
+      const name = stored?.name ?? content.name;
+      const mimeType = stored?.mimeType ?? content.mimeType;
+      const sizeBytes = stored?.sizeBytes ?? content.sizeBytes ?? bytes?.byteLength;
+      return new Response(stored?.file.stream() ?? bytes, {
+        headers: {
+          "Cache-Control": "private, max-age=300",
+          "Content-Disposition": contentDisposition(name),
+          ...(sizeBytes !== undefined ? { "Content-Length": String(sizeBytes) } : {}),
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+          "Content-Type": mimeType,
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    } catch (error) {
+      if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof FlowError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof TransitFileError) return jsonError(context, error.status, error.code, error.message);
       throw error;
     }
   }
@@ -1766,4 +1798,9 @@ function readSearchQuery(context: Context, defaultLimit = DEFAULT_ACTION_SEARCH_
     service: optionalString(context.req.query("service")),
     limit,
   };
+}
+
+function contentDisposition(value: string): string {
+  const asciiName = value.replace(/[^\x20-\x7e]|["\\]/gu, "_");
+  return `inline; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(value)}`;
 }

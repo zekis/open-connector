@@ -1,4 +1,4 @@
-import type { AppData, FeedApprovalSummary, FeedItem, FeedPage, ProviderDefinition } from "./model";
+import type { AppData, FeedApprovalSummary, FeedItem, FeedPage, FeedPreview, ProviderDefinition } from "./model";
 import type { FormEvent, ReactNode } from "react";
 
 import {
@@ -6,10 +6,16 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  ExternalLink,
+  File,
+  FileImage,
   FileText,
   Inbox,
   Loader2,
+  Mail,
+  Maximize2,
   MessageCircle,
+  Paperclip,
   Radio,
   Send,
   Sparkles,
@@ -22,6 +28,7 @@ import { apiGet, apiPost } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
 import { EmptyState, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 const feedRefreshIntervalMs = 5_000;
@@ -158,6 +165,7 @@ export function FeedCard(props: {
   onReply(event: FormEvent, item: FeedItem): Promise<void>;
 }): ReactNode {
   const pendingApproval = props.item.approvals.some((approval) => approval.status === "pending");
+  const [selectedPreview, setSelectedPreview] = useState<FeedPreview | undefined>(undefined);
   return (
     <article className={pendingApproval ? "feed-card needs-approval" : "feed-card"}>
       <div className="feed-post">
@@ -182,6 +190,10 @@ export function FeedCard(props: {
           ) : null}
         </div>
       </div>
+
+      {props.item.previews.length > 0 ? (
+        <FeedPreviewGallery previews={props.item.previews} onOpen={setSelectedPreview} />
+      ) : null}
 
       {props.item.agentSummary || props.item.actions.length > 0 ? (
         <div className="feed-agent-post">
@@ -291,8 +303,172 @@ export function FeedCard(props: {
           </Button>
         </form>
       ) : null}
+
+      <FeedPreviewDialog preview={selectedPreview} onOpenChange={(open) => !open && setSelectedPreview(undefined)} />
     </article>
   );
+}
+
+function FeedPreviewGallery(props: { previews: FeedPreview[]; onOpen(preview: FeedPreview): void }): ReactNode {
+  const email = props.previews.find((preview) => preview.kind === "email");
+  const attachments = props.previews.filter((preview) => preview.kind !== "email");
+  return (
+    <section className="feed-previews" aria-label="Post previews">
+      {email ? <FeedEmailPreview preview={email} onOpen={props.onOpen} /> : null}
+      {attachments.length > 0 ? (
+        <div className="feed-attachment-heading">
+          <Paperclip size={13} /> {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
+        </div>
+      ) : null}
+      {attachments.length > 0 ? (
+        <div className="feed-preview-grid">
+          {attachments.map((preview) => (
+            <FeedFilePreview key={preview.id} preview={preview} onOpen={props.onOpen} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function FeedEmailPreview(props: { preview: FeedPreview; onOpen(preview: FeedPreview): void }): ReactNode {
+  const canOpen = Boolean(props.preview.contentUrl || props.preview.externalUrl);
+  return (
+    <div className="feed-email-preview">
+      <span className="feed-preview-icon email">
+        <Mail size={18} />
+      </span>
+      <div>
+        <strong>Email</strong>
+        <span>{props.preview.summary ?? "Open the complete message and its original formatting."}</span>
+      </div>
+      {canOpen ? (
+        <Button variant="ghost" size="sm" onClick={() => props.onOpen(props.preview)}>
+          <Maximize2 size={14} /> Open email
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function FeedFilePreview(props: { preview: FeedPreview; onOpen(preview: FeedPreview): void }): ReactNode {
+  const canOpen = Boolean(props.preview.contentUrl || props.preview.externalUrl);
+  const visual = props.preview.kind === "image" && props.preview.contentUrl;
+  const pdf = props.preview.kind === "pdf" && props.preview.contentUrl;
+  return (
+    <div className={`feed-file-preview ${props.preview.kind}`}>
+      {visual ? (
+        <img src={props.preview.contentUrl} alt={props.preview.name} loading="lazy" />
+      ) : pdf ? (
+        <iframe
+          src={`${props.preview.contentUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0`}
+          title={`Preview of ${props.preview.name}`}
+          loading="lazy"
+          tabIndex={-1}
+        />
+      ) : (
+        <span className="feed-file-placeholder">
+          <PreviewIcon preview={props.preview} />
+        </span>
+      )}
+      <div className="feed-file-caption">
+        <span className="feed-preview-icon">
+          <PreviewIcon preview={props.preview} />
+        </span>
+        <div>
+          <strong title={props.preview.name}>{props.preview.name}</strong>
+          <span>{previewMeta(props.preview)}</span>
+        </div>
+        {canOpen ? (
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label={`Open ${props.preview.name}`}
+            onClick={() => props.onOpen(props.preview)}
+          >
+            <Maximize2 size={15} />
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FeedPreviewDialog(props: { preview: FeedPreview | undefined; onOpenChange(open: boolean): void }): ReactNode {
+  const preview = props.preview;
+  const embeddedUrl = preview ? previewContentUrl(preview) : undefined;
+  return (
+    <Dialog open={Boolean(preview)} onOpenChange={props.onOpenChange}>
+      <DialogContent className="feed-preview-dialog sm:max-w-[min(1080px,calc(100vw-2rem))]">
+        {preview ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{preview.name}</DialogTitle>
+              <DialogDescription>{previewMeta(preview)}</DialogDescription>
+            </DialogHeader>
+            <div className={`feed-preview-full ${preview.kind}`}>
+              {preview.kind === "image" && embeddedUrl ? (
+                <img src={embeddedUrl} alt={preview.name} />
+              ) : embeddedUrl ? (
+                <iframe src={embeddedUrl} title={preview.name} />
+              ) : (
+                <div className="feed-preview-unavailable">
+                  <PreviewIcon preview={preview} />
+                  <span>Use the connected application to open this item in full.</span>
+                </div>
+              )}
+            </div>
+            <div className="feed-preview-dialog-actions">
+              {preview.contentUrl ? (
+                <Button asChild variant="outline" size="sm">
+                  <a href={preview.contentUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} /> Open raw file
+                  </a>
+                </Button>
+              ) : null}
+              {preview.externalUrl ? (
+                <Button asChild size="sm">
+                  <a href={preview.externalUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} /> Open in connected app
+                  </a>
+                </Button>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewIcon({ preview }: { preview: FeedPreview }): ReactNode {
+  if (preview.kind === "email") return <Mail size={20} />;
+  if (preview.kind === "image") return <FileImage size={20} />;
+  if (preview.kind === "pdf" || preview.kind === "document") return <FileText size={20} />;
+  return <File size={20} />;
+}
+
+function previewContentUrl(preview: FeedPreview): string | undefined {
+  if (!preview.contentUrl) return undefined;
+  if (preview.kind === "pdf") return `${preview.contentUrl}#view=FitH`;
+  if (preview.kind === "document" && !isTextMimeType(preview.mimeType)) return undefined;
+  if (preview.kind === "file") return undefined;
+  return preview.contentUrl;
+}
+
+function isTextMimeType(mimeType: string | undefined): boolean {
+  return mimeType?.startsWith("text/") === true;
+}
+
+function previewMeta(preview: FeedPreview): string {
+  const type = preview.kind === "pdf" ? "PDF" : (preview.mimeType ?? humanizeAction(preview.kind));
+  return preview.sizeBytes === undefined ? type : `${type} · ${formatBytes(preview.sizeBytes)}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KB`;
+  return `${(bytes / (1_024 * 1_024)).toFixed(bytes < 10 * 1_024 * 1_024 ? 1 : 0)} MB`;
 }
 
 function AgentWorking(): ReactNode {

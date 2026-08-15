@@ -60,6 +60,27 @@ export interface FeedFlowSummary {
   trigger: FlowTriggerType;
 }
 
+export type FeedPreviewKind = "email" | "image" | "pdf" | "document" | "file";
+
+export interface FeedPreview {
+  id: string;
+  kind: FeedPreviewKind;
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  summary?: string;
+  contentUrl?: string;
+  externalUrl?: string;
+}
+
+export interface FeedPreviewContent {
+  name: string;
+  mimeType: string;
+  sizeBytes?: number;
+  fileId?: string;
+  bytes?: Uint8Array<ArrayBuffer>;
+}
+
 export interface FeedItem {
   id: string;
   kind: "trigger" | "approval";
@@ -69,6 +90,7 @@ export interface FeedItem {
   summary?: string;
   author?: string;
   providerService?: string;
+  previews: FeedPreview[];
   flow?: FeedFlowSummary;
   agentSummary?: string;
   actions: FeedActionSummary[];

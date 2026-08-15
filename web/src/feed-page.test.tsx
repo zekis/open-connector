@@ -22,6 +22,23 @@ const item: FeedItem = {
   summary: "The commissioning plan is ready for review.",
   author: "Mel Blanch",
   providerService: "outlook",
+  previews: [
+    {
+      id: "email",
+      kind: "email",
+      name: "Roy Hill weekly update",
+      summary: "The commissioning plan is ready for review.",
+      contentUrl: "/api/feed/flow%3Arun-1/previews/email",
+    },
+    {
+      id: "attachment-0",
+      kind: "pdf",
+      name: "Commissioning plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42_000,
+      contentUrl: "/api/feed/flow%3Arun-1/previews/attachment-0",
+    },
+  ],
   flow: {
     id: "flow-1",
     name: "Archive project email",
@@ -70,6 +87,9 @@ describe("FeedCard", () => {
     expect(html).toContain("Roy Hill weekly update");
     expect(html).toContain("Archived the source email and prepared a reply.");
     expect(html).toContain("Please acknowledge it.");
+    expect(html).toContain("Open email");
+    expect(html).toContain("Commissioning plan.pdf");
+    expect(html).toContain("1 attachment");
     expect(html).toContain("Approve outlook.send_message");
     expect(html).toContain("Decide the pending request to continue");
     expect(html).toContain('class="provider-icon large"');

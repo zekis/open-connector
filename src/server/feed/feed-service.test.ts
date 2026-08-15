@@ -37,11 +37,24 @@ const detail: FlowRunDetail = {
       occurredAt: "2026-08-14T01:00:00.000Z",
       payload: {
         service: "outlook",
+        connectionId: "outlook-1",
         items: [
           {
+            id: "message-1",
             subject: "Roy Hill weekly update",
             bodyPreview: "The commissioning plan is ready for review.",
             from: { emailAddress: { name: "Mel Blanch", address: "mel@example.com" } },
+            hasAttachments: true,
+            webLink: "https://outlook.office.com/mail/deeplink/read/message-1",
+            attachments: [
+              {
+                id: "attachment-1",
+                name: "Commissioning plan.pdf",
+                contentType: "application/pdf",
+                size: 42_000,
+                isInline: false,
+              },
+            ],
           },
         ],
       },
@@ -84,6 +97,10 @@ describe("FeedService", () => {
       summary: "The commissioning plan is ready for review.",
       author: "Mel Blanch",
       providerService: "outlook",
+      previews: [
+        expect.objectContaining({ id: "email", kind: "email", name: "Roy Hill weekly update" }),
+        expect.objectContaining({ id: "attachment-0", kind: "pdf", name: "Commissioning plan.pdf" }),
+      ],
       agentSummary: "Archived the project email in Obsidian.",
       actions: [{ actionId: "obsidian.create_note", status: "completed" }],
       canReply: true,
@@ -126,9 +143,45 @@ describe("FeedService", () => {
 
     expect(page.items.find((item) => item.id === `approval:${approval.id}`)).toMatchObject({
       kind: "approval",
+      previews: [],
       approvals: [{ id: approval.id, kind: "action" }],
       canReply: false,
     });
+  });
+
+  it("loads one attachment through its originating connection without exposing provider credentials", async () => {
+    const actions = {
+      run: vi.fn(async () => ({
+        executionId: "execution-1",
+        auditPersisted: true,
+        result: {
+          ok: true,
+          output: {
+            name: "Commissioning plan.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 42_000,
+            file: { fileId: "transit-1" },
+            contentBase64: null,
+          },
+        },
+      })),
+    };
+    const service = createService(new MemoryFeedStore(), [], completedResponse("Done."), undefined, actions);
+
+    await expect(service.getPreview("flow:run-1", "attachment-0")).resolves.toMatchObject({
+      name: "Commissioning plan.pdf",
+      mimeType: "application/pdf",
+      fileId: "transit-1",
+    });
+    expect(actions.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "outlook.download_attachment",
+        connectionId: "outlook-1",
+        input: { messageId: "message-1", attachmentId: "attachment-1" },
+        caller: "web",
+        approvalPolicy: "bypass",
+      }),
+    );
   });
 });
 
@@ -137,6 +190,7 @@ function createService(
   approvals: ActionApproval[],
   response: AgentChatResponse | undefined,
   respond = vi.fn(async () => response!),
+  actions?: ConstructorParameters<typeof FeedService>[0]["actions"],
 ): FeedService {
   return new FeedService({
     flows: {
@@ -156,6 +210,7 @@ function createService(
       },
     },
     agentChat: { respond },
+    actions,
     store,
   });
 }
