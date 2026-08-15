@@ -44,6 +44,7 @@
     "actions": "Actions",
     "agents": "Agents",
     "chat": "Discussion",
+    "synapse": "Synapse",
     "flows": "Flux",
     "triggers": "Déclencheurs",
     "approvals": "Approbations",
@@ -88,6 +89,10 @@
       "chat": {
         "title": "Discussion",
         "subtitle": "Discutez avec votre agent et vos applications connectées."
+      },
+      "synapse": {
+        "title": "Synapse",
+        "subtitle": "Explorez les fournisseurs et les artefacts connectés sur un canevas piloté par agent."
       },
       "flows": {
         "title": "Flux",

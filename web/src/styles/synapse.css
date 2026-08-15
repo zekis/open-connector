@@ -1,0 +1,633 @@
+.synapse-main {
+  padding: 0;
+  overflow: hidden;
+}
+
+.synapse-page {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--background);
+}
+
+.synapse-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 14px;
+  min-height: 62px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.synapse-workspace-control,
+.synapse-toolbar-actions,
+.synapse-linking-hint,
+.synapse-panel-actions,
+.synapse-source-search {
+  display: flex;
+  align-items: center;
+}
+
+.synapse-workspace-control {
+  min-width: 0;
+  gap: 10px;
+}
+
+.synapse-workspace-control > div {
+  display: grid;
+  min-width: 0;
+}
+
+.synapse-workspace-control small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.synapse-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in oklab, var(--brand) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--brand) 12%, transparent);
+  color: var(--brand);
+}
+
+.synapse-workspace-select {
+  width: min(320px, 30vw);
+  background: var(--background);
+}
+
+.synapse-toolbar-actions {
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.synapse-linking-hint {
+  gap: 7px;
+  color: var(--info);
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.synapse-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid color-mix(in oklab, var(--destructive) 30%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 8%, var(--background));
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.synapse-stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.synapse-stage.with-panel {
+  grid-template-columns: minmax(480px, 1fr) minmax(360px, 430px);
+}
+
+.synapse-canvas-scroll {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background-color: color-mix(in oklab, var(--background) 95%, var(--muted));
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--foreground) 15%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+}
+
+.synapse-canvas {
+  position: relative;
+  isolation: isolate;
+}
+
+.synapse-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.synapse-edge {
+  fill: none;
+  stroke: color-mix(in oklab, var(--brand) 56%, var(--muted-foreground));
+  stroke-width: 1.6;
+  opacity: 0.8;
+}
+
+#synapse-arrow path {
+  fill: color-mix(in oklab, var(--brand) 56%, var(--muted-foreground));
+}
+
+.synapse-node {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 264px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--card) 97%, transparent);
+  box-shadow:
+    0 8px 28px color-mix(in oklab, black 12%, transparent),
+    var(--console-shadow-sm);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.synapse-node:active {
+  cursor: grabbing;
+}
+
+.synapse-node.selected {
+  border-color: color-mix(in oklab, var(--brand) 78%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--brand) 18%, transparent),
+    0 12px 34px color-mix(in oklab, black 14%, transparent);
+}
+
+.synapse-node.link-target {
+  animation: synapse-link-target 1.3s ease-in-out infinite;
+  cursor: crosshair;
+}
+
+@keyframes synapse-link-target {
+  50% {
+    border-color: var(--info);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--info) 18%, transparent);
+  }
+}
+
+.synapse-node.provider {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 118px;
+  gap: 12px;
+  padding: 16px;
+  border-left: 4px solid var(--brand);
+}
+
+.synapse-node.artifact {
+  min-height: 164px;
+  padding: 14px 16px 16px;
+  border-top: 3px solid var(--success);
+}
+
+.synapse-node.artifact.draft {
+  border-top-color: var(--warning);
+}
+.synapse-node.artifact.email {
+  border-top-color: var(--info);
+}
+.synapse-node.artifact.search_result {
+  border-top-color: var(--brand);
+}
+.synapse-node.artifact.task {
+  border-top-color: var(--reward);
+}
+
+.synapse-node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.synapse-node-icon.provider {
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.synapse-node-icon.provider .provider-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.synapse-node-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.synapse-node-copy strong,
+.synapse-node.artifact > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+}
+
+.synapse-node-copy small,
+.synapse-node.artifact p {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.synapse-node-eyebrow,
+.synapse-node.artifact header {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.synapse-node.artifact header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+
+.synapse-node.artifact header a {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.synapse-node.artifact > strong {
+  display: block;
+  margin-bottom: 7px;
+  line-height: 1.35;
+}
+
+.synapse-node.artifact p {
+  margin: 0;
+  -webkit-line-clamp: 4;
+}
+
+.synapse-port {
+  position: absolute;
+  top: calc(50% - 6px);
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--background);
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 60%, var(--border));
+}
+
+.synapse-port.input {
+  left: -7px;
+}
+.synapse-port.output {
+  right: -7px;
+}
+
+.synapse-canvas-hint {
+  position: absolute;
+  top: 120px;
+  left: 100px;
+  display: grid;
+  width: 360px;
+  gap: 8px;
+  padding: 28px;
+  border: 1px dashed color-mix(in oklab, var(--brand) 40%, var(--border));
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--card) 80%, transparent);
+  color: var(--muted-foreground);
+}
+
+.synapse-canvas-hint strong {
+  color: var(--foreground);
+  font-size: 16px;
+}
+.synapse-canvas-hint svg {
+  color: var(--brand);
+}
+
+.synapse-panel {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+}
+
+.synapse-panel-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.synapse-panel-header > div {
+  display: grid;
+  min-width: 0;
+}
+
+.synapse-panel-header span,
+.synapse-panel-header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-panel-header span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.synapse-panel-header strong {
+  font-size: 13px;
+}
+
+.synapse-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+
+.synapse-panel-actions {
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.synapse-node-context {
+  max-height: 180px;
+  overflow: auto;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.synapse-node-context summary {
+  color: var(--foreground);
+  cursor: pointer;
+  font-weight: 650;
+}
+.synapse-node-context div {
+  margin-top: 8px;
+}
+.synapse-node-context pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font-family: var(--font-sans);
+}
+
+.synapse-transcript {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.synapse-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.synapse-message.user {
+  justify-content: flex-end;
+}
+.synapse-message.assistant > svg {
+  flex: 0 0 auto;
+  margin-top: 7px;
+  color: var(--success);
+}
+.synapse-message > div {
+  min-width: 0;
+  max-width: 92%;
+}
+
+.synapse-message-bubble {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.synapse-message.user .synapse-message-bubble {
+  border-color: color-mix(in oklab, var(--brand) 28%, var(--border));
+  background: color-mix(in oklab, var(--brand) 13%, var(--background));
+}
+
+.synapse-message.thinking .synapse-message-bubble {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+}
+
+.synapse-message .chat-tool-list {
+  margin-bottom: 7px;
+}
+.synapse-message .chat-tool-call summary {
+  font-size: 11px;
+}
+.synapse-message .chat-markdown {
+  font-size: inherit;
+}
+
+.synapse-chat-empty,
+.synapse-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+
+.synapse-chat-empty {
+  min-height: 260px;
+  gap: 8px;
+  padding: 24px;
+}
+
+.synapse-chat-empty strong {
+  color: var(--foreground);
+}
+.synapse-chat-empty span {
+  max-width: 280px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.synapse-chat-empty > svg {
+  color: var(--brand);
+}
+
+.synapse-panel-error {
+  padding: 8px 12px;
+  border-top: 1px solid color-mix(in oklab, var(--destructive) 28%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 7%, transparent);
+  color: var(--destructive);
+  font-size: 11px;
+}
+
+.synapse-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+
+.synapse-composer textarea {
+  min-height: 68px;
+  max-height: 160px;
+  resize: vertical;
+}
+
+.synapse-empty {
+  min-height: 0;
+  gap: 12px;
+  padding: 48px;
+}
+
+.synapse-empty > span {
+  display: inline-flex;
+  padding: 18px;
+  border: 1px solid color-mix(in oklab, var(--brand) 32%, var(--border));
+  border-radius: 22px;
+  background: color-mix(in oklab, var(--brand) 10%, transparent);
+  color: var(--brand);
+}
+
+.synapse-empty h2 {
+  max-width: 600px;
+  margin: 0;
+  color: var(--foreground);
+  font-size: 24px;
+}
+.synapse-empty p {
+  max-width: 540px;
+  margin: 0 0 8px;
+  line-height: 1.6;
+}
+
+.synapse-dialog-field {
+  margin: 20px 0;
+}
+.synapse-artifact-form {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.synapse-source-dialog {
+  max-width: min(620px, calc(100vw - 2rem));
+}
+.synapse-source-search {
+  gap: 8px;
+}
+.synapse-source-search svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.synapse-source-options {
+  display: grid;
+  max-height: min(460px, 58vh);
+  overflow-y: auto;
+  gap: 6px;
+  padding: 4px;
+}
+
+.synapse-source-options button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--background);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.synapse-source-options button:hover {
+  border-color: var(--brand);
+  background: var(--accent);
+}
+.synapse-source-options button > span {
+  display: grid;
+  min-width: 0;
+}
+.synapse-source-options button small {
+  color: var(--muted-foreground);
+}
+.synapse-source-empty {
+  padding: 32px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .synapse-stage.with-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .synapse-panel {
+    position: absolute;
+    z-index: 20;
+    inset: 62px 0 0 auto;
+    width: min(430px, 94vw);
+    box-shadow: -10px 0 34px color-mix(in oklab, black 22%, transparent);
+  }
+  .synapse-toolbar-actions [data-slot="button"] {
+    padding-inline: 8px;
+  }
+}
+
+@media (max-width: 720px) {
+  .synapse-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .synapse-toolbar-actions {
+    width: 100%;
+    overflow-x: auto;
+  }
+  .synapse-workspace-select {
+    width: min(72vw, 320px);
+  }
+  .synapse-linking-hint {
+    order: 3;
+  }
+}

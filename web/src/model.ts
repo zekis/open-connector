@@ -483,6 +483,81 @@ export interface FeedPage {
   items: FeedItem[];
 }
 
+export type SynapseArtifactKind = "email" | "draft" | "document" | "search_result" | "note" | "task" | "generic";
+
+export interface SynapsePosition {
+  x: number;
+  y: number;
+}
+
+interface SynapseNodeBase {
+  id: string;
+  title: string;
+  position: SynapsePosition;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SynapseProviderNode extends SynapseNodeBase {
+  kind: "provider";
+  connectionId: string;
+  service: string;
+  instructions?: string;
+}
+
+export interface SynapseArtifactNode extends SynapseNodeBase {
+  kind: "artifact";
+  artifactKind: SynapseArtifactKind;
+  summary?: string;
+  content?: string;
+  externalUrl?: string;
+  sourceActionId?: string;
+  sourceConnectionId?: string;
+  sourceActivityId?: string;
+  data?: unknown;
+}
+
+export type SynapseNode = SynapseProviderNode | SynapseArtifactNode;
+
+export interface SynapseEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  label?: string;
+  createdAt: string;
+}
+
+export interface SynapseMessage extends AgentChatMessage {
+  id: string;
+  createdAt: string;
+  toolActivity?: AgentChatToolActivity[];
+}
+
+export interface SynapseThread {
+  nodeId: string;
+  messages: SynapseMessage[];
+  pendingApprovalId?: string;
+  pendingMessageId?: string;
+  updatedAt: string;
+}
+
+export interface SynapseWorkspace {
+  id: string;
+  name: string;
+  nodes: SynapseNode[];
+  edges: SynapseEdge[];
+  threads: SynapseThread[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SynapseWorkspaceSummary {
+  id: string;
+  name: string;
+  nodeCount: number;
+  updatedAt: string;
+}
+
 export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }
   | { type: "response"; response: AgentChatResponse }

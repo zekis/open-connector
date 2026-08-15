@@ -58,6 +58,19 @@ export interface IAgentChatService {
   getApprovalResult(approvalId: string): Promise<AgentChatApprovalResult>;
 }
 
+export interface AgentChatExtensionTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface AgentChatExtension {
+  systemPrompt: string;
+  context?: unknown;
+  tools: AgentChatExtensionTool[];
+  runTool(toolName: string, input: Record<string, unknown>): Promise<AgentChatToolActivity | undefined>;
+}
+
 interface ChatContext {
   connections: ConnectionSummary[];
   connectionsById: Map<string, ConnectionSummary>;
@@ -78,6 +91,7 @@ interface ContinueConversationOptions {
   voiceMode: boolean;
   onProgress?: AgentChatProgressListener;
   signal?: AbortSignal;
+  extension?: AgentChatExtension;
 }
 
 interface ParsedChatRequest {
@@ -163,6 +177,23 @@ export class AgentChatService implements IAgentChatService {
         voiceMode: request.voiceMode,
         onProgress,
         signal,
+      }),
+    );
+  }
+
+  async respondWithExtension(
+    input: unknown,
+    extension: AgentChatExtension,
+    onProgress?: AgentChatProgressListener,
+    signal?: AbortSignal,
+  ): Promise<AgentChatResponse> {
+    const request = readChatRequest(input);
+    return await this.withErrorHandling(async () =>
+      this.continueConversation(request.messages, await this.prepareChat(), [], {
+        voiceMode: request.voiceMode,
+        onProgress,
+        signal,
+        extension,
       }),
     );
   }
@@ -280,8 +311,14 @@ export class AgentChatService implements IAgentChatService {
         oauthToken: prepared.oauthToken,
         model: prepared.model,
         effort: "medium",
-        systemPrompt: createSystemPrompt(options.voiceMode),
-        prompt: createChatPrompt(messages, prepared.context.connections, toolActivity),
+        systemPrompt: createSystemPrompt(options.voiceMode, options.extension?.systemPrompt),
+        prompt: createChatPrompt(
+          messages,
+          prepared.context.connections,
+          toolActivity,
+          options.extension?.tools,
+          options.extension?.context,
+        ),
         outputSchema: claudeAgentDecisionSchema,
         signal: options.signal,
       });
@@ -305,7 +342,13 @@ export class AgentChatService implements IAgentChatService {
         options.onProgress,
         toolStartedProgress(decision.toolName, decision.arguments, prepared.context),
       );
-      const activity = await this.runTool(decision.toolName, decision.arguments, prepared.context, options.signal);
+      const activity = await this.runTool(
+        decision.toolName,
+        decision.arguments,
+        prepared.context,
+        options.extension,
+        options.signal,
+      );
       await emitProgress(options.onProgress, toolCompletedProgress(activity, prepared.context));
       if (activity.approvalId) {
         await this.options.approvals.attachChatContinuation(
@@ -370,6 +413,7 @@ export class AgentChatService implements IAgentChatService {
     toolName: string,
     input: Record<string, unknown>,
     context: ChatContext,
+    extension?: AgentChatExtension,
     signal?: AbortSignal,
   ): Promise<AgentChatToolActivity> {
     if (toolName === searchToolName) {
@@ -378,6 +422,8 @@ export class AgentChatService implements IAgentChatService {
     if (toolName === runToolName) {
       return await this.runAction(input, context, "enforce", signal);
     }
+    const extensionActivity = await extension?.runTool(toolName, input);
+    if (extensionActivity) return extensionActivity;
     return failedActivity("action", `Unknown chat tool: ${toolName}.`, input, {
       code: "unknown_chat_tool",
       message: `The supplied chat tool does not exist: ${toolName}.`,
@@ -532,7 +578,7 @@ function readMessages(body: Record<string, unknown>): AgentChatMessage[] {
   return messages;
 }
 
-function createSystemPrompt(voiceMode: boolean): string {
+function createSystemPrompt(voiceMode: boolean, extensionPrompt?: string): string {
   return `You are the conversational agent inside Open Connector.
 
 Answer the user directly and use connected applications when their request needs external data or an explicitly requested action.
@@ -556,7 +602,7 @@ Voice response rules:
 - when more results exist, summarize the most useful items and ask whether the user wants more detail or the next part of the list
 - avoid reading long identifiers, URLs, raw payloads, or repetitive detail unless the user explicitly asks for them`
       : ""
-  }`;
+  }${extensionPrompt ? `\n\nWorkspace rules:\n${extensionPrompt}` : ""}`;
 }
 
 function createInterruptionSystemPrompt(): string {
@@ -585,6 +631,8 @@ function createChatPrompt(
   messages: AgentChatMessage[],
   connections: ConnectionSummary[],
   toolActivity: AgentChatToolActivity[],
+  extensionTools: AgentChatExtensionTool[] = [],
+  extensionContext?: unknown,
 ): string {
   return `Continue this conversation and choose the next single step.
 
@@ -595,7 +643,10 @@ Connected applications:
 ${JSON.stringify(connections.map(connectionReference))}
 
 Available host tools:
-${JSON.stringify(chatTools)}
+${JSON.stringify([...chatTools, ...extensionTools])}
+
+Workspace context:
+${JSON.stringify(extensionContext ?? null)}
 
 Conversation:
 ${JSON.stringify(messages)}

@@ -15,6 +15,27 @@ const githubProfile = {
 };
 
 describe("D1RuntimeDatabase", () => {
+  it("persists encrypted Synapse workspaces", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("synapse-key"),
+    });
+    const workspace = {
+      id: "synapse-1",
+      name: "Opportunity research",
+      nodes: [],
+      edges: [],
+      threads: [],
+      createdAt: "2026-08-15T01:00:00.000Z",
+      updatedAt: "2026-08-15T01:00:00.000Z",
+    };
+
+    await database.synapseStore.setWorkspace(workspace);
+
+    await expect(database.synapseStore.getWorkspace(workspace.id)).resolves.toEqual(workspace);
+    await expect(database.synapseStore.listWorkspaces()).resolves.toEqual([workspace]);
+    await expect(database.synapseStore.deleteWorkspace(workspace.id)).resolves.toBe(true);
+  });
+
   it("persists encrypted Feed conversation threads", async () => {
     const database = new D1RuntimeDatabase(new SqliteD1Database(), {
       secretCodec: new AesGcmSecretCodec("feed-key"),
@@ -582,6 +603,7 @@ class SqliteD1Database implements D1DatabaseBinding {
       readFileSync(new URL("../../../migrations/0013_connection_approvals.sql", import.meta.url), "utf8"),
     );
     this.database.exec(readFileSync(new URL("../../../migrations/0014_feed.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0015_synapse.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

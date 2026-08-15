@@ -44,6 +44,7 @@
     "actions": "操作",
     "agents": "智能体",
     "chat": "聊天",
+    "synapse": "Synapse",
     "flows": "流程",
     "triggers": "触发器",
     "approvals": "审批",
@@ -88,6 +89,10 @@
       "chat": {
         "title": "聊天",
         "subtitle": "与智能体及已连接的应用交谈。"
+      },
+      "synapse": {
+        "title": "Synapse",
+        "subtitle": "在智能体驱动的画布上探索已连接的提供商和工件。"
       },
       "flows": {
         "title": "流程",

@@ -218,6 +218,49 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.systemPrompt).toContain("ask whether the user wants more detail");
   });
 
+  it("runs host-provided workspace tools alongside connector tools", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "synapse_add_artifact", arguments: { title: "Useful result" } },
+      { kind: "final", text: "I added the result to the canvas." },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Keep that result" }] },
+      {
+        systemPrompt: "Prefer durable artifact cards for useful results.",
+        context: { selectedNodeId: "node-1" },
+        tools: [
+          {
+            name: "synapse_add_artifact",
+            description: "Add an artifact card.",
+            inputSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+          },
+        ],
+        async runTool(toolName, input) {
+          calls.push({ toolName, input });
+          if (toolName !== "synapse_add_artifact") return undefined;
+          return {
+            id: "graph-activity-1",
+            type: "action",
+            label: "Add artifact",
+            ok: true,
+            actionId: toolName,
+            input,
+            output: { nodeId: "artifact-1" },
+          };
+        },
+      },
+    );
+
+    expect(calls).toEqual([{ toolName: "synapse_add_artifact", input: { title: "Useful result" } }]);
+    expect(response.toolActivity).toMatchObject([{ actionId: "synapse_add_artifact", ok: true }]);
+    expect(claude.inputs[0]?.systemPrompt).toContain("Prefer durable artifact cards");
+    expect(claude.inputs[0]?.prompt).toContain("synapse_add_artifact");
+    expect(claude.inputs[0]?.prompt).toContain('"selectedNodeId":"node-1"');
+  });
+
   it("uses Claude to decide whether a live voice interruption cancels the running task", async () => {
     const claude = new FakeClaudeCodeClient([
       { cancelCurrentTask: true, reason: "The user explicitly replaced the request." },

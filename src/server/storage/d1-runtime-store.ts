@@ -21,6 +21,7 @@ import type {
   IFlowStore,
 } from "../flows/flow-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
+import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
   AbandonIdempotencyInput,
   CompleteIdempotencyInput,
@@ -56,6 +57,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly flowStore: D1FlowStore;
   readonly feedStore: D1FeedStore;
   readonly connectionApprovalStore: D1ConnectionApprovalStore;
+  readonly synapseStore: D1SynapseStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -69,6 +71,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.flowStore = new D1FlowStore(database, secretCodec);
     this.feedStore = new D1FeedStore(database, secretCodec);
     this.connectionApprovalStore = new D1ConnectionApprovalStore(database, secretCodec);
+    this.synapseStore = new D1SynapseStore(database, secretCodec);
   }
 }
 
@@ -803,6 +806,55 @@ export class D1FeedStore implements IFeedStore {
     return await Promise.all(
       results.map(async (row) => parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value")))),
     );
+  }
+}
+
+export class D1SynapseStore implements ISynapseStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setWorkspace(workspace: SynapseWorkspace): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into synapse_workspaces (id, updated_at, value)
+        values (?, ?, ?)
+        on conflict(id) do update set
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .bind(workspace.id, workspace.updatedAt, await this.secretCodec.encode(JSON.stringify(workspace)))
+      .run();
+  }
+
+  async getWorkspace(id: string): Promise<SynapseWorkspace | undefined> {
+    const row = await this.database
+      .prepare("select value from synapse_workspaces where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row ? parseJson<SynapseWorkspace>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listWorkspaces(limit = 100): Promise<SynapseWorkspace[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    const { results } = await this.database
+      .prepare("select value from synapse_workspaces order by updated_at desc, id desc limit ?")
+      .bind(boundedLimit)
+      .all<RuntimeRow>();
+    return await Promise.all(
+      results.map(async (row) => parseJson<SynapseWorkspace>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  async deleteWorkspace(id: string): Promise<boolean> {
+    const result = await this.database.prepare("delete from synapse_workspaces where id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
   }
 }
 

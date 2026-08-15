@@ -44,6 +44,7 @@
     "actions": "動作",
     "agents": "代理",
     "chat": "聊天",
+    "synapse": "Synapse",
     "flows": "流程",
     "triggers": "觸發器",
     "approvals": "核准",
@@ -88,6 +89,10 @@
       "chat": {
         "title": "聊天",
         "subtitle": "與代理及已連線的應用程式交談。"
+      },
+      "synapse": {
+        "title": "Synapse",
+        "subtitle": "在代理驅動的畫布上探索已連線的供應商和成品。"
       },
       "flows": {
         "title": "流程",

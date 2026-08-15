@@ -21,6 +21,7 @@ import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
 import type { RunLogCaller, RunLogListInput } from "./storage/runtime-store.ts";
 import type { RuntimeGrant, RuntimeTokenService } from "./storage/runtime-token-service.ts";
+import type { SynapseService } from "./synapse/synapse-service.ts";
 import type { Context } from "hono";
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -70,6 +71,7 @@ import { createTransitFileResponse, TransitFileError } from "./files/transit-fil
 import { FlowError } from "./flows/flow-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
+import { SynapseError } from "./synapse/synapse-service.ts";
 
 /**
  * Dependencies required to construct the local connector server.
@@ -82,6 +84,7 @@ export interface IConnectServerOptions {
   agentSettings?: AgentSettingsService;
   agentChat?: IAgentChatService;
   feed?: FeedService;
+  synapse?: SynapseService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
@@ -257,6 +260,30 @@ export class ConnectServer {
         this.getFeedPreview(context, context.req.param("id"), context.req.param("previewId")),
       );
       app.post("/api/feed/:id/comments", (context) => this.replyToFeedItem(context, context.req.param("id")));
+    }
+    if (this.options.synapse) {
+      app.get("/api/synapses", (context) => this.listSynapses(context));
+      app.post("/api/synapses", (context) => this.createSynapse(context));
+      app.get("/api/synapses/:id", (context) => this.getSynapse(context, context.req.param("id")));
+      app.put("/api/synapses/:id", (context) => this.updateSynapse(context, context.req.param("id")));
+      app.delete("/api/synapses/:id", (context) => this.deleteSynapse(context, context.req.param("id")));
+      app.post("/api/synapses/:id/nodes", (context) => this.addSynapseNode(context, context.req.param("id")));
+      app.put("/api/synapses/:id/nodes/:nodeId", (context) =>
+        this.updateSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
+      app.delete("/api/synapses/:id/nodes/:nodeId", (context) =>
+        this.deleteSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
+      app.post("/api/synapses/:id/edges", (context) => this.addSynapseEdge(context, context.req.param("id")));
+      app.delete("/api/synapses/:id/edges/:edgeId", (context) =>
+        this.deleteSynapseEdge(context, context.req.param("id"), context.req.param("edgeId")),
+      );
+      app.post("/api/synapses/:id/nodes/:nodeId/messages", (context) =>
+        this.chatWithSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
+      app.get("/api/synapses/:id/nodes/:nodeId/approval", (context) =>
+        this.syncSynapseApproval(context, context.req.param("id"), context.req.param("nodeId")),
+      );
     }
 
     app.get("/api/runs", (context) => this.listRuns(context));
@@ -990,6 +1017,70 @@ export class ConnectServer {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof FlowError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof TransitFileError) return jsonError(context, error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  private async listSynapses(context: Context): Promise<Response> {
+    return context.json(await this.options.synapse!.list());
+  }
+
+  private async createSynapse(context: Context): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.create(await readJsonBody(context)));
+  }
+
+  private async getSynapse(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.get(id));
+  }
+
+  private async updateSynapse(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.update(id, await readJsonBody(context)));
+  }
+
+  private async deleteSynapse(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.delete(id));
+  }
+
+  private async addSynapseNode(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.addNode(id, await readJsonBody(context)));
+  }
+
+  private async updateSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(
+      context,
+      this.options.synapse!.updateNode(id, nodeId, await readJsonBody(context)),
+    );
+  }
+
+  private async deleteSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.deleteNode(id, nodeId));
+  }
+
+  private async addSynapseEdge(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.addEdge(id, await readJsonBody(context)));
+  }
+
+  private async deleteSynapseEdge(context: Context, id: string, edgeId: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.deleteEdge(id, edgeId));
+  }
+
+  private async chatWithSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(
+      context,
+      this.options.synapse!.chat(id, nodeId, await readJsonBody(context), context.req.raw.signal),
+    );
+  }
+
+  private async syncSynapseApproval(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.syncPendingApproval(id, nodeId));
+  }
+
+  private async writeSynapseResult(context: Context, operation: Promise<unknown>): Promise<Response> {
+    try {
+      return context.json(await operation);
+    } catch (error) {
+      if (error instanceof SynapseError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof AgentChatError) return jsonError(context, error.status, error.code, error.message);
       throw error;
     }
   }

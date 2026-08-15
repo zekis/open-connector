@@ -25,6 +25,7 @@ import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
+import { SynapseService } from "./synapse/synapse-service.ts";
 
 export interface ConnectAppOptions {
   catalog: CatalogStore;
@@ -124,6 +125,12 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     getPolicySnapshot,
     store: options.runtimeDatabase.feedStore,
   });
+  const synapse = new SynapseService({
+    catalog: options.catalog,
+    connections,
+    agentChat,
+    store: options.runtimeDatabase.synapseStore,
+  });
   const flowTriggers = new FlowTriggerEngine({
     catalog: options.catalog,
     flows,
@@ -144,6 +151,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       agentSettings,
       agentChat,
       feed,
+      synapse,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,

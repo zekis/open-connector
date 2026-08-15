@@ -44,6 +44,7 @@
     "actions": "アクション",
     "agents": "エージェント",
     "chat": "チャット",
+    "synapse": "Synapse",
     "flows": "フロー",
     "triggers": "トリガー",
     "approvals": "承認",
@@ -88,6 +89,10 @@
       "chat": {
         "title": "チャット",
         "subtitle": "エージェントや接続済みアプリケーションと対話します。"
+      },
+      "synapse": {
+        "title": "Synapse",
+        "subtitle": "エージェント搭載キャンバスで接続済みプロバイダーと成果物を探索します。"
       },
       "flows": {
         "title": "フロー",

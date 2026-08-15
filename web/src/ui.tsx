@@ -24,6 +24,7 @@ import {
   Activity,
   Bot,
   BookOpen,
+  BrainCircuit,
   Cable,
   Home,
   Inbox,
@@ -58,6 +59,7 @@ import { ProvidersPage } from "./providers-page";
 import { ResourcesPage } from "./resources-page";
 import { RunsPage } from "./runs-page";
 import { InlineError, StatusDot } from "./shared-ui";
+import { SynapsePage } from "./synapse-page";
 import { useThemeMode } from "./theme";
 import { TriggersPage } from "./triggers-page";
 import { Button } from "@/components/ui/button";
@@ -72,6 +74,7 @@ const navItems = [
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
   { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
+  { path: "/synapse", labelKey: "nav.synapse", icon: BrainCircuit },
   { path: "/flows", labelKey: "nav.flows", icon: Workflow },
   { path: "/triggers", labelKey: "nav.triggers", icon: Zap },
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
@@ -375,9 +378,10 @@ function AppShell(props: {
   const heading = headingForPath(location.pathname);
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
-  const isBrowserPage = section === "actions" || section === "runs" || section === "chat";
+  const isBrowserPage = section === "actions" || section === "runs" || section === "chat" || section === "synapse";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
+  const isSynapsePage = section === "synapse";
   const pendingApprovalCount =
     (props.data.flowApprovals ?? []).filter((approval) => approval.status === "pending").length +
     (props.data.actionApprovals ?? []).filter((approval) => approval.status === "pending").length;
@@ -386,6 +390,7 @@ function AppShell(props: {
     isOverviewPage ? "overview-main" : "",
     isRunsPage ? "runs-main" : "",
     isChatPage ? "chat-main" : "",
+    isSynapsePage ? "synapse-main" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -466,6 +471,7 @@ function AppShell(props: {
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/synapse" element={<SynapsePage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
@@ -653,6 +659,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "chat") {
     return "chat";
+  }
+  if (section === "synapse") {
+    return "synapse";
   }
   if (section === "access") {
     return "access";

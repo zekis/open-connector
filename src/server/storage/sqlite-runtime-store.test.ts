@@ -54,6 +54,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0012_flow_triggers.sql",
       "0013_connection_approvals.sql",
       "0014_feed.sql",
+      "0015_synapse.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -88,6 +89,32 @@ describe("SqliteRuntimeDatabase", () => {
         message: "sqlite migrations ready",
       },
     ]);
+  });
+
+  it("persists Synapse canvases and their node conversations", async () => {
+    const databasePath = await createDatabasePath();
+    const workspace = {
+      id: "synapse-1",
+      name: "Sales research",
+      nodes: [],
+      edges: [],
+      threads: [],
+      createdAt: "2026-08-15T01:00:00.000Z",
+      updatedAt: "2026-08-15T01:00:00.000Z",
+    };
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("synapse-key"),
+    });
+    await first.synapseStore.setWorkspace(workspace);
+    first.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("synapse-key"),
+    });
+    await expect(second.synapseStore.getWorkspace(workspace.id)).resolves.toEqual(workspace);
+    await expect(second.synapseStore.listWorkspaces()).resolves.toEqual([workspace]);
+    await expect(second.synapseStore.deleteWorkspace(workspace.id)).resolves.toBe(true);
+    second.close();
   });
 
   it("persists local runtime state across database instances", async () => {

@@ -20,6 +20,7 @@ import type {
   IFlowStore,
 } from "../flows/flow-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
+import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
   AbandonIdempotencyInput,
   CompleteIdempotencyInput,
@@ -88,7 +89,8 @@ type IdSecretTable =
   | "flow_trigger_states"
   | "feed_threads"
   | "connection_action_permissions"
-  | "action_approvals";
+  | "action_approvals"
+  | "synapse_workspaces";
 
 /**
  * Shared SQLite connection for local runtime state.
@@ -104,6 +106,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly flowStore: SqliteFlowStore;
   readonly feedStore: SqliteFeedStore;
   readonly connectionApprovalStore: SqliteConnectionApprovalStore;
+  readonly synapseStore: SqliteSynapseStore;
 
   private readonly database: DatabaseSync;
   private readonly secretCodec: ISecretCodec;
@@ -122,6 +125,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.flowStore = new SqliteFlowStore(this.database, this.secretCodec);
     this.feedStore = new SqliteFeedStore(this.database, this.secretCodec);
     this.connectionApprovalStore = new SqliteConnectionApprovalStore(this.database, this.secretCodec);
+    this.synapseStore = new SqliteSynapseStore(this.database, this.secretCodec);
   }
 
   close(): void {
@@ -148,6 +152,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "feed_threads",
           "connection_action_permissions",
           "action_approvals",
+          "synapse_workspaces",
         ] as IdSecretTable[]
       ).map((table) => readRotatedIdSecrets(this.database, this.secretCodec, nextSecretCodec, table)),
     );
@@ -165,6 +170,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "feed_threads",
           "connection_action_permissions",
           "action_approvals",
+          "synapse_workspaces",
         ] as IdSecretTable[]
       ).entries()) {
         writeRotatedIdSecrets(this.database, table, flowRecords[index]!);
@@ -184,6 +190,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from action_approvals;
       delete from connection_action_permissions;
       delete from feed_threads;
+      delete from synapse_workspaces;
       delete from flow_trigger_states;
       delete from flow_approvals;
       delete from flow_steps;
@@ -876,6 +883,49 @@ export class SqliteFeedStore implements IFeedStore {
     return await Promise.all(
       rows.map(async (row) => parseJson<FeedThread>(await this.secretCodec.decode(readString(row, "value")))),
     );
+  }
+}
+
+export class SqliteSynapseStore implements ISynapseStore {
+  private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setWorkspace(workspace: SynapseWorkspace): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into synapse_workspaces (id, updated_at, value)
+        values (?, ?, ?)
+        on conflict(id) do update set
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .run(workspace.id, workspace.updatedAt, await this.secretCodec.encode(JSON.stringify(workspace)));
+  }
+
+  async getWorkspace(id: string): Promise<SynapseWorkspace | undefined> {
+    const row = this.database.prepare("select value from synapse_workspaces where id = ?").get(id);
+    return row ? parseJson<SynapseWorkspace>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listWorkspaces(limit = 100): Promise<SynapseWorkspace[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    const rows = this.database
+      .prepare("select value from synapse_workspaces order by updated_at desc, id desc limit ?")
+      .all(boundedLimit);
+    return await Promise.all(
+      rows.map(async (row) => parseJson<SynapseWorkspace>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  async deleteWorkspace(id: string): Promise<boolean> {
+    return this.database.prepare("delete from synapse_workspaces where id = ?").run(id).changes > 0;
   }
 }
 

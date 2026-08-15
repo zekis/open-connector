@@ -44,6 +44,7 @@
     "actions": "Actions",
     "agents": "Agents",
     "chat": "Chat",
+    "synapse": "Synapse",
     "flows": "Flows",
     "triggers": "Triggers",
     "approvals": "Approvals",
@@ -88,6 +89,10 @@
       "chat": {
         "title": "Chat",
         "subtitle": "Talk with your agent and connected applications."
+      },
+      "synapse": {
+        "title": "Synapse",
+        "subtitle": "Explore connected providers and artifacts on an agent-powered canvas."
       },
       "flows": {
         "title": "Flows",

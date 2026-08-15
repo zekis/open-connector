@@ -4,6 +4,7 @@ import type { IOAuthStateStore } from "../../oauth/oauth-flow-service.ts";
 import type { IConnectionApprovalStore } from "../approvals/connection-approval-types.ts";
 import type { IFeedStore } from "../feed/feed-types.ts";
 import type { IFlowStore } from "../flows/flow-types.ts";
+import type { ISynapseStore } from "../synapse/synapse-types.ts";
 import type { IIdempotencyStore } from "./idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./runtime-policy-store.ts";
 import type { IRunLogStore } from "./runtime-store.ts";
@@ -20,4 +21,5 @@ export interface RuntimeDatabase {
   flowStore: IFlowStore;
   feedStore: IFeedStore;
   connectionApprovalStore: IConnectionApprovalStore;
+  synapseStore: ISynapseStore;
 }
