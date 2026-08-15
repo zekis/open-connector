@@ -375,7 +375,7 @@ function AppShell(props: {
   const heading = headingForPath(location.pathname);
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
-  const isBrowserPage = section === "actions" || section === "runs" || section === "chat" || section === "feed";
+  const isBrowserPage = section === "actions" || section === "runs" || section === "chat";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
   const pendingApprovalCount =
