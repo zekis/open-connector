@@ -140,6 +140,7 @@ export class ConnectionApprovalService {
     messages: AgentChatApprovalContinuation["messages"],
     toolActivity: AgentChatToolActivity[],
     voiceMode = false,
+    batchApprovalIds: string[] = [id],
   ): Promise<ActionApproval> {
     const approval = await this.getPendingApproval(id);
     if (approval.caller !== "chat") {
@@ -150,6 +151,7 @@ export class ConnectionApprovalService {
       chat: {
         messages: structuredClone(messages),
         toolActivity: structuredClone(toolActivity),
+        batchApprovalIds: structuredClone(batchApprovalIds),
         voiceMode,
       },
     };
@@ -194,8 +196,8 @@ export class ConnectionApprovalService {
     if (!approval || approval.caller !== "chat" || !approval.chat) {
       throw new ConnectionApprovalError("approval_not_found", `Chat approval not found: ${id}.`, 404);
     }
-    if (approval.status !== "consumed") {
-      throw new ConnectionApprovalError("approval_not_consumed", "The Chat approval has not been consumed.");
+    if (approval.status === "pending") {
+      throw new ConnectionApprovalError("approval_not_resolved", "The Chat approval has not been resolved.");
     }
     const updated: ActionApproval = {
       ...approval,
@@ -204,8 +206,8 @@ export class ConnectionApprovalService {
         response: structuredClone(response),
       },
     };
-    if (!(await this.options.store.updateActionApproval(updated, "consumed"))) {
-      throw new ConnectionApprovalError("approval_not_consumed", "The Chat approval changed before completion.");
+    if (!(await this.options.store.updateActionApproval(updated, approval.status))) {
+      throw new ConnectionApprovalError("approval_changed", "The Chat approval changed before completion.");
     }
     return updated;
   }

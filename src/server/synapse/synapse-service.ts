@@ -264,10 +264,10 @@ export class SynapseService {
     const body = readObject(input, "Synapse chat message");
     const content = readText(body.content, "content", maximumChatCharacters);
     const thread = threadFor(workspace, nodeId);
-    if (thread.pendingApprovalId) {
+    if (pendingApprovalIds(thread).length > 0) {
       throw new SynapseError(
         "synapse_waiting_for_approval",
-        "Approve or deny the pending connector action before continuing this node conversation.",
+        "Resolve the queued connector approvals before continuing this node conversation.",
         409,
       );
     }
@@ -366,21 +366,25 @@ export class SynapseService {
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
     const thread = threadFor(workspace, nodeId);
-    if (!thread.pendingApprovalId) return this.presentWorkspace(workspace);
-    const result = await this.options.agentChat.getApprovalResult(thread.pendingApprovalId);
-    if (result.response) {
-      await this.applyAgentResponse(workspace, selectedNode, thread, result.response, thread.pendingMessageId);
+    const approvalIds = pendingApprovalIds(thread);
+    if (approvalIds.length === 0) return this.presentWorkspace(workspace);
+    const results = await Promise.all(
+      approvalIds.map((approvalId) => this.options.agentChat.getApprovalResult(approvalId)),
+    );
+    const response =
+      results.find((result) => result.response?.status !== "waiting_for_approval")?.response ??
+      results.find((result) => result.response)?.response;
+    if (response) {
+      await this.applyAgentResponse(workspace, selectedNode, thread, response, thread.pendingMessageId);
       return await this.save(workspace);
     }
-    if (result.status === "denied" || result.status === "expired") {
+    if (results.every((result) => result.status === "denied" || result.status === "expired")) {
       const message = thread.messages.find((candidate) => candidate.id === thread.pendingMessageId);
       if (message) {
-        message.content =
-          result.status === "denied"
-            ? "The connector action was denied, so Claude stopped this request."
-            : "The connector approval expired before the action could run.";
+        message.content = "The queued connector actions were denied or expired before they could run.";
       }
       thread.pendingApprovalId = undefined;
+      thread.pendingApprovalIds = undefined;
       thread.pendingMessageId = undefined;
       thread.updatedAt = new Date().toISOString();
       return await this.save(workspace);
@@ -586,11 +590,14 @@ export class SynapseService {
     response: AgentChatResponse,
     replaceMessageId?: string,
   ): Promise<void> {
-    const approvedAction = replaceMessageId
-      ? thread.messages
-          .find((candidate) => candidate.id === replaceMessageId)
-          ?.toolActivity?.find((activity) => activity.approvalId === thread.pendingApprovalId)
+    const priorMessage = replaceMessageId
+      ? thread.messages.find((candidate) => candidate.id === replaceMessageId)
       : undefined;
+    const resolvedApprovalIds = replaceMessageId ? new Set(pendingApprovalIds(thread)) : new Set<string>();
+    const legacyApprovedActions =
+      priorMessage?.toolActivity?.filter(
+        (activity) => activity.approvalId && resolvedApprovalIds.has(activity.approvalId),
+      ) ?? [];
     const message: SynapseMessage = { ...response.message, toolActivity: response.toolActivity };
     if (replaceMessageId) {
       const index = thread.messages.findIndex((candidate) => candidate.id === replaceMessageId);
@@ -600,17 +607,26 @@ export class SynapseService {
       thread.messages.push(message);
     }
     thread.messages = thread.messages.slice(-maximumThreadMessages);
-    thread.pendingApprovalId = response.status === "waiting_for_approval" ? response.approvalId : undefined;
+    const nextApprovalIds = response.status === "waiting_for_approval" ? responseApprovalIds(response) : [];
+    thread.pendingApprovalId = nextApprovalIds[0];
+    thread.pendingApprovalIds = nextApprovalIds.length > 0 ? nextApprovalIds : undefined;
     thread.pendingMessageId = response.status === "waiting_for_approval" ? response.message.id : undefined;
     thread.updatedAt = response.message.createdAt;
-    await this.materializeConnectorResults(workspace, selectedNode, response.toolActivity, approvedAction);
+    await this.materializeConnectorResults(
+      workspace,
+      selectedNode,
+      response.toolActivity,
+      resolvedApprovalIds,
+      legacyApprovedActions,
+    );
   }
 
   private async materializeConnectorResults(
     workspace: SynapseWorkspace,
     selectedNode: SynapseNode,
     activities: AgentChatToolActivity[],
-    approvedAction?: AgentChatToolActivity,
+    resolvedApprovalIds = new Set<string>(),
+    legacyApprovedActions: AgentChatToolActivity[] = [],
   ): Promise<void> {
     const hasCuratedArtifacts = activities.some(
       (activity) => activity.ok && activity.actionId === "synapse_add_artifacts",
@@ -627,10 +643,14 @@ export class SynapseService {
         continue;
       }
       const isApprovedAction = Boolean(
-        approvedAction?.actionId === activity.actionId &&
-        approvedAction.connectionId === activity.connectionId &&
-        activity.ok,
+        activity.ok &&
+        ((activity.approvalId && resolvedApprovalIds.has(activity.approvalId)) ||
+          (!activity.approvalId &&
+            legacyApprovedActions.some(
+              (pending) => pending.actionId === activity.actionId && pending.connectionId === activity.connectionId,
+            ))),
       );
+      if (activity.approvalId && !isApprovedAction) continue;
       if (
         !isApprovedAction &&
         workspace.nodes.some((node) => node.kind === "artifact" && node.sourceActivityId === activity.id)
@@ -1492,6 +1512,16 @@ function threadFor(workspace: SynapseWorkspace, nodeId: string): SynapseThread {
   const thread: SynapseThread = { nodeId, messages: [], updatedAt: new Date().toISOString() };
   workspace.threads.push(thread);
   return thread;
+}
+
+function pendingApprovalIds(thread: SynapseThread): string[] {
+  return [
+    ...new Set([...(thread.pendingApprovalIds ?? []), ...(thread.pendingApprovalId ? [thread.pendingApprovalId] : [])]),
+  ];
+}
+
+function responseApprovalIds(response: AgentChatResponse): string[] {
+  return [...new Set([...(response.approvalIds ?? []), ...(response.approvalId ? [response.approvalId] : [])])];
 }
 
 function requiredNode(workspace: SynapseWorkspace, nodeId: string): SynapseNode {

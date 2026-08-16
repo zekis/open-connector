@@ -41,6 +41,7 @@ export type AgentChatProgressListener = (progress: AgentChatProgress) => void | 
 export interface AgentChatResponse {
   status: "completed" | "waiting_for_approval" | "failed";
   approvalId?: string;
+  approvalIds?: string[];
   message: AgentChatMessage & {
     id: string;
     createdAt: string;
@@ -51,6 +52,7 @@ export interface AgentChatResponse {
 export interface AgentChatApprovalContinuation {
   messages: AgentChatMessage[];
   toolActivity: AgentChatToolActivity[];
+  batchApprovalIds?: string[];
   voiceMode?: boolean;
   response?: AgentChatResponse;
 }

@@ -195,6 +195,7 @@ describe("AgentChatService", () => {
           input: { query: "record-42" },
         },
       },
+      { kind: "final", text: "The action is queued for approval." },
       { kind: "final", text: "Record 42 is active." },
     ]);
     const service = createService(claude, actions, true, approvals);
@@ -207,7 +208,7 @@ describe("AgentChatService", () => {
     expect(approvals.approval.chat).toMatchObject({
       messages: [{ role: "user", content: "Is record 42 active?" }],
     });
-    expect(approvals.approval.chat?.toolActivity).toHaveLength(1);
+    expect(approvals.approval.chat?.toolActivity).toHaveLength(2);
     approvals.approve();
 
     const completed = await service.resume(approvalId);
@@ -218,8 +219,101 @@ describe("AgentChatService", () => {
       input: { query: "record-42" },
       approvalPolicy: "bypass",
     });
-    expect(claude.inputs[2]?.prompt).toContain('"active":true');
+    expect(claude.inputs[3]?.prompt).toContain('"active":true');
     expect((await service.getApprovalResult(approvalId)).response).toEqual(completed);
+  });
+
+  it("queues every approval request before executing the approved batch", async () => {
+    const firstApprovalId = "11111111-1111-4111-8111-111111111111";
+    const secondApprovalId = "22222222-2222-4222-8222-222222222222";
+    const approvals = new FakeChatApprovals([
+      createChatApproval(firstApprovalId, "record-1"),
+      createChatApproval(secondApprovalId, "record-2"),
+    ]);
+    const actions = new FakeActionRunner([
+      {
+        ok: false,
+        error: {
+          code: "approval_pending",
+          message: "Action queued and pending approval.",
+          details: { approvalId: firstApprovalId },
+        },
+      },
+      {
+        ok: false,
+        error: {
+          code: "approval_pending",
+          message: "Action queued and pending approval.",
+          details: { approvalId: secondApprovalId },
+        },
+      },
+      { ok: true, output: { id: "record-1", updated: true } },
+      { ok: true, output: { id: "record-2", updated: true } },
+    ]);
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          input: { query: "record-1" },
+        },
+      },
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          input: { query: "record-2" },
+        },
+      },
+      { kind: "final", text: "Both changes are queued." },
+      { kind: "final", text: "Both approved changes completed." },
+    ]);
+    const service = createService(claude, actions, true, approvals);
+
+    const waiting = await service.respond({
+      messages: [{ role: "user", content: "Update both records." }],
+    });
+
+    expect(waiting).toMatchObject({
+      status: "waiting_for_approval",
+      approvalId: firstApprovalId,
+      approvalIds: [firstApprovalId, secondApprovalId],
+    });
+    expect((await approvals.getActionApproval(firstApprovalId))?.chat?.batchApprovalIds).toEqual([
+      firstApprovalId,
+      secondApprovalId,
+    ]);
+    expect((await approvals.getActionApproval(secondApprovalId))?.chat?.batchApprovalIds).toEqual([
+      firstApprovalId,
+      secondApprovalId,
+    ]);
+    expect(actions.inputs).toHaveLength(2);
+
+    approvals.approve(firstApprovalId);
+    const stillWaiting = await service.resume(firstApprovalId);
+    expect(stillWaiting).toMatchObject({
+      status: "waiting_for_approval",
+      approvalId: secondApprovalId,
+      approvalIds: [secondApprovalId],
+    });
+    expect(actions.inputs).toHaveLength(2);
+
+    approvals.approve(secondApprovalId);
+    const completed = await service.resume(secondApprovalId);
+    expect(completed).toMatchObject({
+      status: "completed",
+      message: { content: "Both approved changes completed." },
+    });
+    expect(actions.inputs.slice(2)).toEqual([
+      expect.objectContaining({ input: { query: "record-1" }, approvalPolicy: "bypass" }),
+      expect.objectContaining({ input: { query: "record-2" }, approvalPolicy: "bypass" }),
+    ]);
+    expect((await service.getApprovalResult(firstApprovalId)).response).toEqual(completed);
+    expect((await service.getApprovalResult(secondApprovalId)).response).toEqual(completed);
   });
 
   it("rejects conversation history that does not end with a user message", async () => {
@@ -399,14 +493,19 @@ const successfulActionResult: ExecutionResult = {
 };
 
 class FakeChatApprovals {
-  approval: ActionApproval;
+  private readonly approvals = new Map<string, ActionApproval>();
 
-  constructor(approval = createChatApproval(crypto.randomUUID())) {
-    this.approval = approval;
+  constructor(approval: ActionApproval | ActionApproval[] = createChatApproval(crypto.randomUUID())) {
+    for (const item of Array.isArray(approval) ? approval : [approval]) this.approvals.set(item.id, item);
+  }
+
+  get approval(): ActionApproval {
+    return this.approvals.values().next().value!;
   }
 
   async getActionApproval(id: string): Promise<ActionApproval | undefined> {
-    return id === this.approval.id ? structuredClone(this.approval) : undefined;
+    const approval = this.approvals.get(id);
+    return approval ? structuredClone(approval) : undefined;
   }
 
   async attachChatContinuation(
@@ -414,42 +513,50 @@ class FakeChatApprovals {
     messages: NonNullable<ActionApproval["chat"]>["messages"],
     toolActivity: NonNullable<ActionApproval["chat"]>["toolActivity"],
     voiceMode = false,
+    batchApprovalIds = [id],
   ): Promise<ActionApproval> {
-    if (id !== this.approval.id) throw new Error("Unexpected approval id");
-    this.approval = { ...this.approval, chat: { messages, toolActivity, voiceMode } };
-    return structuredClone(this.approval);
+    const approval = this.approvals.get(id);
+    if (!approval) throw new Error("Unexpected approval id");
+    const updated = { ...approval, chat: { messages, toolActivity, voiceMode, batchApprovalIds } };
+    this.approvals.set(id, updated);
+    return structuredClone(updated);
   }
 
   async consumeApproved(id: string): Promise<ActionApproval> {
-    if (id !== this.approval.id || this.approval.status !== "approved") throw new Error("Approval is not approved");
-    this.approval = { ...this.approval, status: "consumed", consumedAt: new Date().toISOString() };
-    return structuredClone(this.approval);
+    const approval = this.approvals.get(id);
+    if (!approval || approval.status !== "approved") throw new Error("Approval is not approved");
+    const updated = { ...approval, status: "consumed" as const, consumedAt: new Date().toISOString() };
+    this.approvals.set(id, updated);
+    return structuredClone(updated);
   }
 
   async storeChatResponse(id: string, response: AgentChatResponse): Promise<ActionApproval> {
-    if (id !== this.approval.id || !this.approval.chat) throw new Error("Unexpected approval id");
-    this.approval = { ...this.approval, chat: { ...this.approval.chat, response } };
-    return structuredClone(this.approval);
+    const approval = this.approvals.get(id);
+    if (!approval?.chat) throw new Error("Unexpected approval id");
+    const updated = { ...approval, chat: { ...approval.chat, response } };
+    this.approvals.set(id, updated);
+    return structuredClone(updated);
   }
 
-  approve(): void {
-    this.approval = {
-      ...this.approval,
+  approve(id = this.approval.id): void {
+    const approval = this.approvals.get(id)!;
+    this.approvals.set(id, {
+      ...approval,
       status: "approved",
       resolvedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    };
+    });
   }
 }
 
-function createChatApproval(id: string): ActionApproval {
+function createChatApproval(id: string, query = "record-42"): ActionApproval {
   return {
     id,
     status: "pending",
     actionId: "example.lookup",
     connectionId: connection.id,
     caller: "chat",
-    input: { query: "record-42" },
+    input: { query },
     requestHash: "request-hash",
     requestedAt: new Date().toISOString(),
   };

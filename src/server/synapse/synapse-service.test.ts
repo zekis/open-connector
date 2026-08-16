@@ -809,6 +809,28 @@ describe("SynapseService", () => {
       ]),
     );
   });
+
+  it("stores every approval queued by one node conversation", async () => {
+    const approvalIds = ["approval-1", "approval-2"];
+    const agentChat = {
+      respondWithExtension: vi.fn(async () => waitingResponse(approvalIds[0]!, approvalIds)),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    };
+    const service = createService(agentChat);
+    const workspace = await service.create({ name: "Queued updates" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: 100, y: 100 },
+    });
+
+    const waiting = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Update both records." });
+
+    expect(waiting.threads[0]).toMatchObject({
+      pendingApprovalId: approvalIds[0],
+      pendingApprovalIds: approvalIds,
+    });
+  });
 });
 
 function cardsOverlap(
@@ -883,10 +905,11 @@ function completedResponse(toolActivity: AgentChatResponse["toolActivity"]): Age
   };
 }
 
-function waitingResponse(approvalId: string): AgentChatResponse {
+function waitingResponse(approvalId: string, approvalIds = [approvalId]): AgentChatResponse {
   return {
     status: "waiting_for_approval",
     approvalId,
+    approvalIds,
     message: {
       id: "waiting-message",
       role: "assistant",

@@ -1250,6 +1250,12 @@ export class ConnectServer {
   private async denyActionRequest(context: Context, id: string): Promise<Response> {
     try {
       const denied = await this.options.connectionApprovals!.deny(id);
+      if (denied.caller === "chat" && denied.chat && this.options.agentChat) {
+        const response = await this.options.agentChat.resume(id);
+        await this.recordFeedApprovalResponse(id, response);
+        const resumed = await this.options.connectionApprovals!.getActionApproval(id);
+        return context.json(serializeActionApproval(resumed ?? denied));
+      }
       await this.recordFeedApprovalDenied(id);
       return context.json(serializeActionApproval(denied));
     } catch (error) {

@@ -11,6 +11,7 @@ import type {
   SynapseSelectionResult,
   SynapseChatStreamEvent,
   SynapseSize,
+  SynapseThread,
   SynapseWorkspace,
   SynapseWorkspaceSummary,
 } from "./model";
@@ -422,7 +423,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
         `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(item.nodeId)}/approval`,
       );
       applyWorkspace(next);
-      if (!next.threads.some((thread) => thread.pendingApprovalId === item.approvalId)) {
+      if (!next.threads.some((thread) => pendingSynapseApprovalIds(thread).includes(item.approvalId))) {
         setSelectedApprovalId(undefined);
       }
       props.onRefresh();
@@ -1587,9 +1588,13 @@ function SynapseNodePanel(props: {
   const [sending, setSending] = useState(false);
   const [liveProgress, setLiveProgress] = useState<AgentChatProgress[]>([]);
   const [error, setError] = useState<string>();
-  const [approvalDecision, setApprovalDecision] = useState<"approve" | "deny" | null>(null);
+  const [approvalDecision, setApprovalDecision] = useState<{
+    approvalId: string;
+    decision: "approve" | "deny";
+  }>();
   const transcriptRef = useRef<HTMLDivElement>(null);
   const thread = props.workspace.threads.find((candidate) => candidate.nodeId === props.node.id);
+  const pendingApprovalIds = thread ? pendingSynapseApprovalIds(thread) : [];
   const configured = props.data.agentConnections?.some((connection) => connection.provider === "claude_code");
   const hasArtifactContext = props.node.kind === "artifact" && Boolean(props.node.summary || props.node.content);
 
@@ -1631,12 +1636,13 @@ function SynapseNodePanel(props: {
     }
   }
 
-  async function decide(decision: "approve" | "deny"): Promise<void> {
-    if (!thread?.pendingApprovalId || approvalDecision) return;
-    setApprovalDecision(decision);
+  async function decide(decision: "approve" | "deny", approvalId?: string): Promise<void> {
+    const targetApprovalId = approvalId ?? pendingApprovalIds[0];
+    if (!targetApprovalId || approvalDecision) return;
+    setApprovalDecision({ approvalId: targetApprovalId, decision });
     setError(undefined);
     try {
-      await apiPost(`/api/action-approvals/${encodeURIComponent(thread.pendingApprovalId)}/${decision}`, {});
+      await apiPost(`/api/action-approvals/${encodeURIComponent(targetApprovalId)}/${decision}`, {});
       const next = await apiGet<SynapseWorkspace>(
         `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.node.id)}/approval`,
       );
@@ -1645,7 +1651,7 @@ function SynapseNodePanel(props: {
     } catch (caught) {
       setError(messageFrom(caught, `Could not ${decision} this action.`));
     } finally {
-      setApprovalDecision(null);
+      setApprovalDecision(undefined);
     }
   }
 
@@ -1699,9 +1705,9 @@ function SynapseNodePanel(props: {
                 {message.toolActivity?.length ? (
                   <ChatToolActivityList
                     activities={message.toolActivity}
-                    activeApprovalId={thread.pendingApprovalId}
-                    approvalDecision={approvalDecision}
-                    onApprovalDecision={(decision) => void decide(decision)}
+                    activeApprovalIds={pendingApprovalIds}
+                    approvalDecision={approvalDecision ? { ...approvalDecision } : undefined}
+                    onApprovalDecision={(decision, approvalId) => void decide(decision, approvalId)}
                   />
                 ) : null}
                 <div className="synapse-message-bubble">
@@ -1722,9 +1728,9 @@ function SynapseNodePanel(props: {
             <Bot size={15} />
             <SynapseLiveProgress
               progress={liveProgress}
-              activeApprovalId={thread?.pendingApprovalId}
+              activeApprovalIds={pendingApprovalIds}
               approvalDecision={approvalDecision}
-              onApprovalDecision={(decision) => void decide(decision)}
+              onApprovalDecision={(decision, approvalId) => void decide(decision, approvalId)}
             />
           </div>
         ) : null}
@@ -1733,8 +1739,10 @@ function SynapseNodePanel(props: {
       <form className="synapse-composer" onSubmit={(event) => void send(event)}>
         <Textarea
           value={draft}
-          disabled={!configured || Boolean(thread?.pendingApprovalId)}
-          placeholder={thread?.pendingApprovalId ? "Waiting for approval…" : "Ask about this node and its connections…"}
+          disabled={!configured || pendingApprovalIds.length > 0}
+          placeholder={
+            pendingApprovalIds.length > 0 ? "Waiting for approvals…" : "Ask about this node and its connections…"
+          }
           rows={3}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -1747,7 +1755,7 @@ function SynapseNodePanel(props: {
         <Button
           type="submit"
           size="icon"
-          disabled={!configured || !draft.trim() || sending || Boolean(thread?.pendingApprovalId)}
+          disabled={!configured || !draft.trim() || sending || pendingApprovalIds.length > 0}
         >
           {sending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
           <span className="sr-only">Send</span>
@@ -1765,9 +1773,9 @@ export function mergeSynapseProgress(current: AgentChatProgress[], progress: Age
 
 function SynapseLiveProgress(props: {
   progress: AgentChatProgress[];
-  activeApprovalId?: string;
-  approvalDecision: "approve" | "deny" | null;
-  onApprovalDecision(decision: "approve" | "deny"): void;
+  activeApprovalIds: string[];
+  approvalDecision?: { approvalId: string; decision: "approve" | "deny" };
+  onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
 }): ReactNode {
   const latest = props.progress.at(-1);
   return (
@@ -1777,7 +1785,7 @@ function SynapseLiveProgress(props: {
           <ChatToolActivityList
             key={progress.id}
             activities={[progress.tool.activity]}
-            activeApprovalId={props.activeApprovalId}
+            activeApprovalIds={props.activeApprovalIds}
             approvalDecision={props.approvalDecision}
             onApprovalDecision={props.onApprovalDecision}
           />
@@ -2145,30 +2153,37 @@ function providerOptions(data: AppData): ProviderOption[] {
 export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprovalCanvasItem[] {
   const items: SynapseApprovalCanvasItem[] = [];
   for (const thread of workspace.threads) {
-    if (!thread.pendingApprovalId) continue;
     const owner = workspace.nodes.find((node) => node.id === thread.nodeId);
     if (!owner) continue;
     const pendingMessage = thread.messages.find((message) => message.id === thread.pendingMessageId);
-    const activity = pendingApprovalActivity(pendingMessage?.toolActivity, thread.pendingApprovalId);
-    const ownerSize = sizeForCanvasNode(owner);
-    const position = findOpenCanvasPosition(
-      workspace,
-      items.map((item) => ({ position: item.position, width: approvalNodeWidth, height: approvalNodeHeight })),
-      { x: owner.position.x + ownerSize.width + nodeHorizontalGap, y: owner.position.y },
-      { width: approvalNodeWidth, height: approvalNodeHeight },
-    );
-    items.push({
-      id: `approval:${thread.pendingApprovalId}`,
-      approvalId: thread.pendingApprovalId,
-      nodeId: thread.nodeId,
-      service: activity?.actionId?.split(".")[0] ?? "connector",
-      title: activity?.actionId ?? activity?.label ?? "Connector action",
-      connectionDisplayName: activity?.connectionDisplayName,
-      input: activity?.input ?? {},
-      position,
-    });
+    for (const approvalId of pendingSynapseApprovalIds(thread)) {
+      const activity = pendingApprovalActivity(pendingMessage?.toolActivity, approvalId);
+      const ownerSize = sizeForCanvasNode(owner);
+      const position = findOpenCanvasPosition(
+        workspace,
+        items.map((item) => ({ position: item.position, width: approvalNodeWidth, height: approvalNodeHeight })),
+        { x: owner.position.x + ownerSize.width + nodeHorizontalGap, y: owner.position.y },
+        { width: approvalNodeWidth, height: approvalNodeHeight },
+      );
+      items.push({
+        id: `approval:${approvalId}`,
+        approvalId,
+        nodeId: thread.nodeId,
+        service: activity?.actionId?.split(".")[0] ?? "connector",
+        title: activity?.actionId ?? activity?.label ?? "Connector action",
+        connectionDisplayName: activity?.connectionDisplayName,
+        input: activity?.input ?? {},
+        position,
+      });
+    }
   }
   return items;
+}
+
+function pendingSynapseApprovalIds(thread: SynapseThread): string[] {
+  return [
+    ...new Set([...(thread.pendingApprovalIds ?? []), ...(thread.pendingApprovalId ? [thread.pendingApprovalId] : [])]),
+  ];
 }
 
 function pendingApprovalActivity(

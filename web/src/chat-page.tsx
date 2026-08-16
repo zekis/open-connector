@@ -790,14 +790,25 @@ function ChatMessageView(props: {
 export function ChatToolActivityList(props: {
   activities: AgentChatToolActivity[];
   activeApprovalId?: string;
-  approvalDecision: "approve" | "deny" | null;
-  onApprovalDecision(decision: "approve" | "deny"): void;
+  activeApprovalIds?: string[];
+  approvalDecision?: "approve" | "deny" | null | { approvalId: string; decision: "approve" | "deny" };
+  onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
 }): ReactNode {
+  const activeApprovalIds = new Set([
+    ...(props.activeApprovalIds ?? []),
+    ...(props.activeApprovalId ? [props.activeApprovalId] : []),
+  ]);
   return (
     <div className="chat-tool-list">
       {props.activities.map((activity) => {
         const approvalId = approvalIdFromToolActivity(activity);
-        const waiting = approvalId !== undefined && approvalId === props.activeApprovalId;
+        const waiting = approvalId !== undefined && activeApprovalIds.has(approvalId);
+        const decision =
+          props.approvalDecision && typeof props.approvalDecision === "object"
+            ? props.approvalDecision.approvalId === approvalId
+              ? props.approvalDecision.decision
+              : null
+            : props.approvalDecision;
         return (
           <div className="chat-tool-activity" key={activity.id}>
             {waiting ? (
@@ -805,29 +816,25 @@ export function ChatToolActivityList(props: {
                 <Clock3 size={16} aria-hidden="true" />
                 <span>
                   <strong>Waiting for approval</strong>
-                  <small>Claude is paused and will continue automatically after approval.</small>
+                  <small>Queued without executing. Approve this exact action once.</small>
                 </span>
                 <div className="chat-approval-actions">
                   <Button
                     size="sm"
-                    disabled={props.approvalDecision !== null}
-                    onClick={() => props.onApprovalDecision("approve")}
+                    disabled={decision !== null && decision !== undefined}
+                    onClick={() => props.onApprovalDecision("approve", approvalId)}
                   >
-                    {props.approvalDecision === "approve" ? (
-                      <Loader2 className="spin" size={14} />
-                    ) : (
-                      <Check size={14} />
-                    )}
-                    {props.approvalDecision === "approve" ? "Approving…" : "Approve and continue"}
+                    {decision === "approve" ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                    {decision === "approve" ? "Approving…" : "Approve once"}
                   </Button>
                   <Button
                     variant="destructive"
                     size="sm"
-                    disabled={props.approvalDecision !== null}
-                    onClick={() => props.onApprovalDecision("deny")}
+                    disabled={decision !== null && decision !== undefined}
+                    onClick={() => props.onApprovalDecision("deny", approvalId)}
                   >
-                    {props.approvalDecision === "deny" ? <Loader2 className="spin" size={14} /> : <X size={14} />}
-                    {props.approvalDecision === "deny" ? "Denying…" : "Deny"}
+                    {decision === "deny" ? <Loader2 className="spin" size={14} /> : <X size={14} />}
+                    {decision === "deny" ? "Denying…" : "Deny"}
                   </Button>
                   <Button variant="outline" size="sm" asChild>
                     <Link to="/approvals" target="_blank" rel="noreferrer">

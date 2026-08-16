@@ -296,6 +296,63 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Sales inbox");
     expect(html).toContain("Read outlook.send_message aloud");
   });
+
+  it("projects every queued connector approval from one agent turn", () => {
+    const workspace: SynapseWorkspace = {
+      id: "synapse-1",
+      name: "Bulk update",
+      nodes: [providerNode],
+      edges: [],
+      threads: [
+        {
+          nodeId: providerNode.id,
+          pendingApprovalId: "approval-1",
+          pendingApprovalIds: ["approval-1", "approval-2"],
+          pendingMessageId: "message-1",
+          updatedAt: "2026-08-15T01:02:00.000Z",
+          messages: [
+            {
+              id: "message-1",
+              role: "assistant",
+              content: "Two changes are queued.",
+              createdAt: "2026-08-15T01:02:00.000Z",
+              toolActivity: [
+                {
+                  id: "activity-1",
+                  type: "action",
+                  label: "azure_devops.update_work_item",
+                  ok: false,
+                  actionId: "azure_devops.update_work_item",
+                  connectionId: "devops-1",
+                  approvalId: "approval-1",
+                  input: { id: 194047, state: "Done" },
+                  output: { error: { code: "approval_pending" } },
+                },
+                {
+                  id: "activity-2",
+                  type: "action",
+                  label: "azure_devops.update_work_item",
+                  ok: false,
+                  actionId: "azure_devops.update_work_item",
+                  connectionId: "devops-1",
+                  approvalId: "approval-2",
+                  input: { id: 194048, state: "Done" },
+                  output: { error: { code: "approval_pending" } },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      createdAt: "2026-08-15T01:00:00.000Z",
+      updatedAt: "2026-08-15T01:02:00.000Z",
+    };
+
+    expect(synapseApprovalItems(workspace)).toEqual([
+      expect.objectContaining({ approvalId: "approval-1", input: { id: 194047, state: "Done" } }),
+      expect.objectContaining({ approvalId: "approval-2", input: { id: 194048, state: "Done" } }),
+    ]);
+  });
 });
 
 describe("zoomCanvasView", () => {

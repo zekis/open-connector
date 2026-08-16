@@ -401,6 +401,7 @@ export interface AgentChatProgressTool {
 export interface AgentChatResponse {
   status: "completed" | "waiting_for_approval" | "failed";
   approvalId?: string;
+  approvalIds?: string[];
   message: AgentChatMessage & {
     id: string;
     createdAt: string;
@@ -560,6 +561,7 @@ export interface SynapseThread {
   nodeId: string;
   messages: SynapseMessage[];
   pendingApprovalId?: string;
+  pendingApprovalIds?: string[];
   pendingMessageId?: string;
   updatedAt: string;
 }

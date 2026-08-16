@@ -626,6 +626,9 @@ function createAgentChatResponseSchema(): JsonSchema {
     {
       status: jsonSchema.stringEnum("Chat turn status.", ["completed", "waiting_for_approval", "failed"]),
       approvalId: jsonSchema.uuid("Approval currently pausing this Chat turn."),
+      approvalIds: jsonSchema.array(jsonSchema.uuid("Queued approval identifier."), {
+        description: "Every connector approval queued by this Chat turn.",
+      }),
       message: jsonSchema.object(
         {
           id: jsonSchema.uuid("Assistant message identifier."),

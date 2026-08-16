@@ -133,7 +133,7 @@ describe("ChatPage", () => {
     );
 
     expect(html).toContain("Waiting for approval");
-    expect(html).toContain("Approve and continue");
+    expect(html).toContain("Approve once");
     expect(html).toContain(">Deny<");
     expect(html).toContain('class="chat-tool-call pending"');
     expect(html).not.toContain('class="chat-tool-call failed"');

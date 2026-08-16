@@ -100,7 +100,7 @@ describe("ConnectionApprovalService", () => {
     if (!next.allowed) expect(next.approval.id).not.toBe(first.approval.id);
   });
 
-  it("persists Chat continuation state and consumes the approved action before storing its response", async () => {
+  it("persists queued Chat state before storing its resumed response", async () => {
     const { service, store } = createService();
     await service.replacePermissions(connection.id, {
       permissions: [{ actionId: "example.echo", approval: "require_approval" }],
@@ -113,8 +113,30 @@ describe("ConnectionApprovalService", () => {
     });
     if (requested.allowed) throw new Error("Expected a pending approval.");
 
-    await service.attachChatContinuation(requested.approval.id, [{ role: "user", content: "Send hello" }], []);
+    await service.attachChatContinuation(requested.approval.id, [{ role: "user", content: "Send hello" }], [], false, [
+      requested.approval.id,
+      "approval-2",
+    ]);
     await service.approve(requested.approval.id);
+    await service.storeChatResponse(requested.approval.id, {
+      status: "waiting_for_approval",
+      approvalId: "approval-2",
+      approvalIds: ["approval-2"],
+      message: {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "One more action is waiting.",
+        createdAt: new Date().toISOString(),
+      },
+      toolActivity: [],
+    });
+    await expect(store.getActionApproval(requested.approval.id)).resolves.toMatchObject({
+      status: "approved",
+      chat: {
+        batchApprovalIds: [requested.approval.id, "approval-2"],
+        response: { status: "waiting_for_approval", approvalId: "approval-2" },
+      },
+    });
     await service.consumeApproved(requested.approval.id, "chat");
     await service.storeChatResponse(requested.approval.id, {
       status: "completed",

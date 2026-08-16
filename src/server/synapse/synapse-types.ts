@@ -69,6 +69,7 @@ export interface SynapseThread {
   nodeId: string;
   messages: SynapseMessage[];
   pendingApprovalId?: string;
+  pendingApprovalIds?: string[];
   pendingMessageId?: string;
   updatedAt: string;
 }
