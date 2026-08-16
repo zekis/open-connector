@@ -644,6 +644,7 @@ export class SynapseService {
       priorMessage?.toolActivity?.filter(
         (activity) => activity.approvalId && resolvedApprovalIds.has(activity.approvalId),
       ) ?? [];
+    const approvalDrafts = approvalDraftsById(workspace, resolvedApprovalIds);
     const message: SynapseMessage = { ...response.message, toolActivity: response.toolActivity };
     if (replaceMessageId) {
       const index = thread.messages.findIndex((candidate) => candidate.id === replaceMessageId);
@@ -654,6 +655,13 @@ export class SynapseService {
     }
     thread.messages = thread.messages.slice(-maximumThreadMessages);
     const nextApprovalIds = response.status === "waiting_for_approval" ? responseApprovalIds(response) : [];
+    reconcileDraftApprovalAssignments(
+      workspace,
+      selectedNode,
+      response.toolActivity,
+      resolvedApprovalIds,
+      nextApprovalIds,
+    );
     thread.pendingApprovalId = nextApprovalIds[0];
     thread.pendingApprovalIds = nextApprovalIds.length > 0 ? nextApprovalIds : undefined;
     thread.pendingMessageId = response.status === "waiting_for_approval" ? response.message.id : undefined;
@@ -664,6 +672,7 @@ export class SynapseService {
       response.toolActivity,
       resolvedApprovalIds,
       legacyApprovedActions,
+      approvalDrafts,
     );
   }
 
@@ -673,6 +682,7 @@ export class SynapseService {
     activities: AgentChatToolActivity[],
     resolvedApprovalIds = new Set<string>(),
     legacyApprovedActions: AgentChatToolActivity[] = [],
+    approvalDrafts = new Map<string, SynapseArtifactNode>(),
   ): Promise<void> {
     const hasCuratedArtifacts = activities.some(
       (activity) => activity.ok && activity.actionId === "synapse_add_artifacts",
@@ -696,6 +706,11 @@ export class SynapseService {
       }
       const isApprovedAction = isResolvedApprovalAction(activity, resolvedApprovalIds, legacyApprovedActions);
       if (activity.approvalId && !isApprovedAction) continue;
+      const approvalDraft = activity.approvalId ? approvalDrafts.get(activity.approvalId) : undefined;
+      if (isApprovedAction && approvalDraft) {
+        updateApprovedDraft(approvalDraft, activity);
+        continue;
+      }
       if (
         !isApprovedAction &&
         workspace.nodes.some((node) => node.kind === "artifact" && node.sourceActivityId === activity.id)
@@ -774,6 +789,7 @@ export class SynapseService {
     const workspace = await this.options.store.getWorkspace(id);
     if (!workspace) throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
     removeLegacyRawConnectorArtifacts(workspace);
+    if (migratePendingApprovalDrafts(workspace)) await this.options.store.setWorkspace(workspace);
     return workspace;
   }
 
@@ -935,13 +951,14 @@ Multi-selection rules:
 Rules:
 - use the selected node and its connected component as your factual canvas context; do not assume unrelated canvas nodes
 - use connector tools whenever current external data or a side effect is needed
-- add a provider node with synapse_add_provider when you use a connection that is not already represented in the visible context
+- add a provider node with synapse_add_provider when retrieved information needs a durable source node and that connection is not already represented nearby
+- do not add a provider node for a proposed create, update, send, or delete action; the host puts the provider identity and approval controls directly on its draft card
 - after retrieving useful results, call synapse_add_artifacts and create one concise artifact per useful result; fan-outs are preferred over burying results in chat
 - retrieve attachment metadata for useful emails that report attachments so the canvas can render those files
 - put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
 - include sourceActivityId from connector tool activity when turning that result into artifacts
 - never create an artifact containing raw JSON, a JSON code fence, an API response dump, or provider field-reference maps; translate structured results into concise human-readable Markdown
-- create draft artifacts for proposed messages or documents before sending when the user is still reviewing them
+- create exactly one draft artifact for each proposed side effect before requesting its connector action; the host merges pending approval into that draft rather than creating another canvas node
 - update the selected draft or artifact in place with synapse_update_artifact when the user requests revisions
 - connect nodes whose relationship helps explain the work
 - keep chat concise because durable detail belongs in artifact cards
@@ -1046,6 +1063,269 @@ function isResolvedApprovalAction(
           (pending) => pending.actionId === activity.actionId && pending.connectionId === activity.connectionId,
         ))),
   );
+}
+
+function approvalDraftsById(workspace: SynapseWorkspace, approvalIds: Set<string>): Map<string, SynapseArtifactNode> {
+  const drafts = new Map<string, SynapseArtifactNode>();
+  for (const node of workspace.nodes) {
+    if (node.kind !== "artifact") continue;
+    for (const approvalId of node.approvalIds ?? []) {
+      if (approvalIds.has(approvalId)) drafts.set(approvalId, node);
+    }
+  }
+  return drafts;
+}
+
+function migratePendingApprovalDrafts(workspace: SynapseWorkspace): boolean {
+  let migrated = false;
+  for (const thread of workspace.threads) {
+    const approvalIds = pendingApprovalIds(thread);
+    if (approvalIds.length === 0) continue;
+    const assigned = new Set(
+      workspace.nodes.flatMap((node) => (node.kind === "artifact" ? (node.approvalIds ?? []) : [])),
+    );
+    if (approvalIds.every((approvalId) => assigned.has(approvalId))) continue;
+    const selectedNode = workspace.nodes.find((node) => node.id === thread.nodeId);
+    const pendingMessage = thread.messages.find((message) => message.id === thread.pendingMessageId);
+    if (!selectedNode || !pendingMessage?.toolActivity) continue;
+    const beforeNodeCount = workspace.nodes.length;
+    const beforeEdgeCount = workspace.edges.length;
+    reconcileDraftApprovalAssignments(workspace, selectedNode, pendingMessage.toolActivity, new Set(), approvalIds);
+    migrated ||=
+      workspace.nodes.length !== beforeNodeCount ||
+      workspace.edges.length !== beforeEdgeCount ||
+      workspace.nodes.some(
+        (node) =>
+          node.kind === "artifact" && node.approvalIds?.some((approvalId) => approvalIds.includes(approvalId)) === true,
+      );
+  }
+  return migrated;
+}
+
+function reconcileDraftApprovalAssignments(
+  workspace: SynapseWorkspace,
+  selectedNode: SynapseNode,
+  activities: AgentChatToolActivity[],
+  previousApprovalIds: Set<string>,
+  nextApprovalIds: string[],
+): void {
+  for (const node of workspace.nodes) {
+    if (node.kind !== "artifact" || !node.approvalIds) continue;
+    const retained = node.approvalIds.filter((approvalId) => !previousApprovalIds.has(approvalId));
+    node.approvalIds = retained.length > 0 ? retained : undefined;
+  }
+  const unassigned = nextApprovalIds.filter(
+    (approvalId) => !workspace.nodes.some((node) => node.kind === "artifact" && node.approvalIds?.includes(approvalId)),
+  );
+  if (unassigned.length === 0) return;
+
+  const connectedIds = new Set(connectedNodesByDistance(workspace, [selectedNode.id]).map(({ nodeId }) => nodeId));
+  const pendingActivities = activities.filter(
+    (activity) => activity.approvalId && unassigned.includes(activity.approvalId),
+  );
+  const drafts = workspace.nodes.filter(
+    (node): node is SynapseArtifactNode =>
+      node.kind === "artifact" &&
+      node.artifactKind === "draft" &&
+      connectedIds.has(node.id) &&
+      (node.approvalIds?.length ?? 0) === 0,
+  );
+  if (drafts.length === 0 && pendingActivities.length > 0) {
+    drafts.push(createFallbackApprovalDraft(workspace, selectedNode, pendingActivities));
+  }
+  if (drafts.length === 0) return;
+  const createdDraftIds = activityCreatedNodeIds(activities, "synapse_add_artifacts", "nodes");
+  const createdDraftOrder = new Map(createdDraftIds.map((nodeId, index) => [nodeId, index]));
+  drafts.sort((left, right) => {
+    if (left.id === selectedNode.id) return -1;
+    if (right.id === selectedNode.id) return 1;
+    const leftCreated = createdDraftOrder.get(left.id);
+    const rightCreated = createdDraftOrder.get(right.id);
+    if (leftCreated !== undefined || rightCreated !== undefined) {
+      return (leftCreated ?? Number.MAX_SAFE_INTEGER) - (rightCreated ?? Number.MAX_SAFE_INTEGER);
+    }
+    return right.updatedAt.localeCompare(left.updatedAt);
+  });
+  if (drafts.length === 1) {
+    drafts[0]!.approvalIds = [...unassigned];
+  } else {
+    for (const [index, activity] of pendingActivities.entries()) {
+      const draft = drafts[index];
+      if (!draft || !activity.approvalId) break;
+      draft.approvalIds = [activity.approvalId];
+    }
+  }
+  removeRedundantApprovalProviders(workspace, selectedNode, activities, pendingActivities, unassigned);
+}
+
+function createFallbackApprovalDraft(
+  workspace: SynapseWorkspace,
+  selectedNode: SynapseNode,
+  pendingActivities: AgentChatToolActivity[],
+): SynapseArtifactNode {
+  const first = pendingActivities[0]!;
+  const title =
+    pendingActivities.length === 1
+      ? `Draft ${pendingActionLabel(first)}`
+      : `Draft ${pendingActivities.length} connector changes`;
+  const content = [
+    `# ${title}`,
+    "**Status:** Pending approval — not yet executed",
+    pendingActivities.length === 1
+      ? `**Action:** ${humanize(first.actionId ?? first.label)}`
+      : `Review each of the ${pendingActivities.length} queued actions with the Previous and Next controls.`,
+  ].join("\n\n");
+  const artifact: ArtifactInput = {
+    artifactKind: "draft",
+    title,
+    content,
+    sourceActionId: first.actionId,
+    sourceConnectionId: first.connectionId,
+    sourceActivityId: first.id,
+    sourceInput: isRecord(first.input) ? first.input : undefined,
+  };
+  const now = new Date().toISOString();
+  const node: SynapseArtifactNode = {
+    id: crypto.randomUUID(),
+    kind: "artifact",
+    ...artifact,
+    position: nextFanPosition(workspace, selectedNode, "artifact", automaticArtifactSize(artifact)),
+    size: automaticArtifactSize(artifact),
+    autoSize: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  workspace.nodes.push(node);
+  workspace.edges.push({
+    id: crypto.randomUUID(),
+    sourceNodeId: selectedNode.id,
+    targetNodeId: node.id,
+    createdAt: now,
+  });
+  return node;
+}
+
+function pendingActionLabel(activity: AgentChatToolActivity): string {
+  if (isRecord(activity.input)) {
+    for (const key of ["title", "subject", "name"]) {
+      const value = activity.input[key];
+      if (typeof value === "string" && value.trim()) return value.trim().slice(0, maximumNodeTitleCharacters - 6);
+    }
+  }
+  return humanize(activity.actionId ?? activity.label);
+}
+
+function activityCreatedNodeIds(
+  activities: AgentChatToolActivity[],
+  actionId: string,
+  outputKey: "node" | "nodes",
+): string[] {
+  const nodeIds: string[] = [];
+  for (const activity of activities) {
+    if (!activity.ok || activity.actionId !== actionId || !isRecord(activity.output)) continue;
+    const values = outputKey === "nodes" ? activity.output.nodes : [activity.output.node];
+    if (!Array.isArray(values)) continue;
+    for (const value of values) {
+      if (isRecord(value) && typeof value.id === "string") nodeIds.push(value.id);
+    }
+  }
+  return nodeIds;
+}
+
+function removeRedundantApprovalProviders(
+  workspace: SynapseWorkspace,
+  selectedNode: SynapseNode,
+  activities: AgentChatToolActivity[],
+  pendingActivities: AgentChatToolActivity[],
+  approvalIds: string[],
+): void {
+  const connectionIds = new Set(
+    pendingActivities.flatMap((activity) => (activity.connectionId ? [activity.connectionId] : [])),
+  );
+  if (connectionIds.size === 0) return;
+  const providerIds = new Set(activityCreatedNodeIds(activities, "synapse_add_provider", "node"));
+  for (const providerId of providerIds) {
+    const provider = workspace.nodes.find(
+      (node): node is SynapseProviderNode => node.id === providerId && node.kind === "provider",
+    );
+    if (!provider || provider.id === selectedNode.id || !connectionIds.has(provider.connectionId)) continue;
+    const incomingNodeIds = workspace.edges
+      .filter((edge) => edge.targetNodeId === provider.id)
+      .map((edge) => edge.sourceNodeId);
+    const outgoingNodeIds = workspace.edges
+      .filter((edge) => edge.sourceNodeId === provider.id)
+      .map((edge) => edge.targetNodeId);
+    const approvalDraftIds = workspace.nodes
+      .filter(
+        (node): node is SynapseArtifactNode =>
+          node.kind === "artifact" && node.approvalIds?.some((approvalId) => approvalIds.includes(approvalId)) === true,
+      )
+      .map((node) => node.id);
+    const targets = outgoingNodeIds.length > 0 ? outgoingNodeIds : approvalDraftIds;
+    for (const sourceNodeId of incomingNodeIds.length > 0 ? incomingNodeIds : [selectedNode.id]) {
+      for (const targetNodeId of targets) {
+        if (sourceNodeId === targetNodeId) continue;
+        if (workspace.edges.some((edge) => edge.sourceNodeId === sourceNodeId && edge.targetNodeId === targetNodeId)) {
+          continue;
+        }
+        workspace.edges.push({
+          id: crypto.randomUUID(),
+          sourceNodeId,
+          targetNodeId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+    workspace.nodes = workspace.nodes.filter((node) => node.id !== provider.id);
+    workspace.edges = workspace.edges.filter(
+      (edge) => edge.sourceNodeId !== provider.id && edge.targetNodeId !== provider.id,
+    );
+  }
+}
+
+function updateApprovedDraft(draft: SynapseArtifactNode, activity: AgentChatToolActivity): void {
+  if (!activity.actionId || !activity.connectionId) return;
+  const boundedSourceInput = boundedData(activity.input, 4_000);
+  const sourceInput = isRecord(boundedSourceInput) ? boundedSourceInput : undefined;
+  const candidate = artifactCandidates(activity.output, activity.actionId, activity.connectionId, sourceInput)[0];
+  draft.artifactKind = candidate?.artifactKind ?? draft.artifactKind;
+  draft.summary = draft.summary ?? candidate?.summary;
+  draft.externalUrl = candidate?.externalUrl ?? draft.externalUrl;
+  draft.sourceActionId = activity.actionId;
+  draft.sourceConnectionId = activity.connectionId;
+  draft.sourceActivityId = activity.id;
+  draft.sourceInput = sourceInput;
+  draft.itemIdentity = candidate?.itemIdentity ?? draft.itemIdentity;
+  draft.data = candidate?.data ?? activity.output;
+  draft.approvalIds = undefined;
+  draft.content = completedDraftMarkdown(draft.content ?? candidate?.content, draft.externalUrl, activity.actionId);
+  draft.updatedAt = new Date().toISOString();
+  if (draft.autoSize !== false) {
+    draft.autoSize = true;
+    draft.size = automaticNodeSize(draft);
+  }
+}
+
+function completedDraftMarkdown(
+  content: string | undefined,
+  externalUrl: string | undefined,
+  actionId: string,
+): string {
+  const outcome = actionId.includes(".create_")
+    ? "Created"
+    : actionId.includes(".update_")
+      ? "Updated"
+      : actionId.includes(".send_")
+        ? "Sent"
+        : actionId.includes(".delete_")
+          ? "Deleted"
+          : "Completed";
+  const status = `**Status:** ${outcome} successfully`;
+  let markdown = content?.trim() || status;
+  const replaced = markdown.replace(/\*\*Status:\*\*\s*Pending approval[^\n]*/i, status);
+  markdown = replaced === markdown && !/\*\*Status:\*\*/i.test(markdown) ? `${markdown}\n\n${status}` : replaced;
+  if (externalUrl && !markdown.includes(externalUrl)) markdown += `\n\n[Open created item](${externalUrl})`;
+  return markdown;
 }
 
 function artifactCandidates(

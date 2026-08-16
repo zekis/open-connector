@@ -6,6 +6,7 @@ import type {
   FeedPreview,
   ProviderDefinition,
   SaynaVoiceConfiguration,
+  SynapseArtifactNode,
   SynapseArtifactKind,
   SynapseNode,
   SynapseSelectionResult,
@@ -23,6 +24,8 @@ import {
   BrainCircuit,
   Cable,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   Clock3,
   CopyPlus,
@@ -73,8 +76,8 @@ import { Textarea } from "@/components/ui/textarea";
 const nodeWidth = 264;
 const providerNodeHeight = 118;
 const artifactNodeHeight = 164;
-const approvalNodeWidth = 320;
-const approvalNodeHeight = 190;
+const approvalNodeWidth = 420;
+const approvalNodeHeight = 360;
 const nodeHorizontalGap = 48;
 const nodeVerticalGap = 32;
 const approvalPollIntervalMs = 2_000;
@@ -123,15 +126,22 @@ interface CanvasOccupant {
   height: number;
 }
 
-export interface SynapseApprovalCanvasItem {
-  id: string;
+export interface SynapseApprovalRequestItem {
   approvalId: string;
-  nodeId: string;
   service: string;
   title: string;
   connectionDisplayName?: string;
   input: unknown;
+  draftNode?: SynapseArtifactNode;
+}
+
+export interface SynapseApprovalCanvasItem {
+  id: string;
+  approvalId: string;
+  nodeId: string;
+  requests: SynapseApprovalRequestItem[];
   position: { x: number; y: number };
+  size: SynapseSize;
 }
 
 interface ProviderOption {
@@ -201,9 +211,13 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     [props.data.providers],
   );
   const approvalItems = useMemo(() => (workspace ? synapseApprovalItems(workspace) : []), [workspace]);
-  const selectedApproval = approvalItems.find((item) => item.approvalId === selectedApprovalId);
+  const selectedApproval = approvalItems.find((item) =>
+    item.requests.some((request) => request.approvalId === selectedApprovalId),
+  );
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
-  const pendingApprovalKey = approvalItems.map((item) => `${item.nodeId}:${item.approvalId}`).join("|");
+  const pendingApprovalKey = approvalItems
+    .flatMap((item) => item.requests.map((request) => `${item.nodeId}:${request.approvalId}`))
+    .join("|");
 
   const applyWorkspace = useCallback((next: SynapseWorkspace): void => {
     setWorkspace(next);
@@ -435,18 +449,24 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     }
   }
 
-  async function decideCanvasApproval(item: SynapseApprovalCanvasItem, decision: "approve" | "deny"): Promise<void> {
+  async function decideCanvasApproval(
+    item: SynapseApprovalCanvasItem,
+    approvalId: string,
+    decision: "approve" | "deny",
+  ): Promise<void> {
     if (!workspace) return;
     setError(undefined);
     try {
-      await apiPost(`/api/action-approvals/${encodeURIComponent(item.approvalId)}/${decision}`, {});
+      await apiPost(`/api/action-approvals/${encodeURIComponent(approvalId)}/${decision}`, {});
       const next = await apiGet<SynapseWorkspace>(
         `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(item.nodeId)}/approval`,
       );
       applyWorkspace(next);
-      if (!next.threads.some((thread) => pendingSynapseApprovalIds(thread).includes(item.approvalId))) {
-        setSelectedApprovalId(undefined);
-      }
+      const remainingThread = next.threads.find((thread) => thread.nodeId === item.nodeId);
+      const remainingApprovalId = remainingThread
+        ? pendingSynapseApprovalIds(remainingThread).find((candidate) => candidate !== approvalId)
+        : undefined;
+      setSelectedApprovalId(remainingApprovalId);
       props.onRefresh();
     } catch (caught) {
       setError(messageFrom(caught, `Could not ${decision} this action.`));
@@ -688,6 +708,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
           <SynapseApprovalPanel
             workspace={workspace}
             item={selectedApproval}
+            providersByService={providersByService}
             onClose={() => setSelectedApprovalId(undefined)}
             onWorkspaceChange={applyWorkspace}
             onRefresh={props.onRefresh}
@@ -782,7 +803,7 @@ function SynapseCanvas(props: {
   onWorkspaceSaved(workspace: SynapseWorkspace): void;
   onNodeSelect(nodeId: string): void;
   onApprovalSelect(approvalId: string): void;
-  onApprovalDecision(item: SynapseApprovalCanvasItem, decision: "approve" | "deny"): Promise<void>;
+  onApprovalDecision(item: SynapseApprovalCanvasItem, approvalId: string, decision: "approve" | "deny"): Promise<void>;
   onContextRequest(request: SynapseContextRequest): void;
   onToggleSpeech(nodeId: string, text: string): void;
   onNodeCheckedChange(nodeId: string, checked: boolean): void;
@@ -794,6 +815,11 @@ function SynapseCanvas(props: {
   const workspaceRef = useRef(props.workspace);
   const [panning, setPanning] = useState(false);
   const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
+  const hiddenDraftNodeIds = new Set(
+    props.approvalItems.flatMap((item) =>
+      item.requests.flatMap((request) => (request.draftNode ? [request.draftNode.id] : [])),
+    ),
+  );
   workspaceRef.current = props.workspace;
 
   const revealSelectedNode = useCallback((): void => {
@@ -1043,6 +1069,7 @@ function SynapseCanvas(props: {
             </marker>
           </defs>
           {props.workspace.edges.map((edge) => {
+            if (hiddenDraftNodeIds.has(edge.sourceNodeId) || hiddenDraftNodeIds.has(edge.targetNodeId)) return null;
             const source = props.workspace.nodes.find((node) => node.id === edge.sourceNodeId);
             const target = props.workspace.nodes.find((node) => node.id === edge.targetNodeId);
             if (!source || !target) return null;
@@ -1070,8 +1097,8 @@ function SynapseCanvas(props: {
             const direction = item.position.x >= source.position.x ? 1 : -1;
             const startX = direction > 0 ? source.position.x + sourceSize.width : source.position.x;
             const startY = source.position.y + sourceSize.height / 2;
-            const endX = direction > 0 ? item.position.x : item.position.x + approvalNodeWidth;
-            const endY = item.position.y + approvalNodeHeight / 2;
+            const endX = direction > 0 ? item.position.x : item.position.x + item.size.width;
+            const endY = item.position.y + item.size.height / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
             return (
               <path
@@ -1083,40 +1110,42 @@ function SynapseCanvas(props: {
             );
           })}
         </svg>
-        {props.workspace.nodes.map((node) => (
-          <SynapseNodeCard
-            key={node.id}
-            node={node}
-            selected={props.selectedNodeId === node.id}
-            linking={props.linkingFrom !== undefined && props.linkingFrom !== node.id}
-            speechAvailable={props.speechAvailable}
-            speaking={props.speakingNodeId === node.id}
-            speechConnecting={props.speakingNodeId === node.id && props.speechConnecting}
-            checked={props.checkedNodeIds.has(node.id)}
-            provider={node.kind === "provider" ? props.providersByService.get(node.service) : undefined}
-            onPointerDown={(event) => beginDrag(event, node)}
-            onPointerMove={moveDrag}
-            onPointerUp={finishDrag}
-            onPointerCancel={finishDrag}
-            onContextMenu={(event) => requestContext(event, node)}
-            onResizePointerDown={(event) => beginResize(event, node)}
-            onResizePointerMove={moveResize}
-            onResizePointerUp={finishResize}
-            onSelect={() => props.onNodeSelect(node.id)}
-            onToggleSpeech={() => props.onToggleSpeech(node.id, synapseNodeSpeech(node))}
-            onCheckedChange={(checked) => props.onNodeCheckedChange(node.id, checked)}
-          />
-        ))}
+        {props.workspace.nodes
+          .filter((node) => !hiddenDraftNodeIds.has(node.id))
+          .map((node) => (
+            <SynapseNodeCard
+              key={node.id}
+              node={node}
+              selected={props.selectedNodeId === node.id}
+              linking={props.linkingFrom !== undefined && props.linkingFrom !== node.id}
+              speechAvailable={props.speechAvailable}
+              speaking={props.speakingNodeId === node.id}
+              speechConnecting={props.speakingNodeId === node.id && props.speechConnecting}
+              checked={props.checkedNodeIds.has(node.id)}
+              provider={node.kind === "provider" ? props.providersByService.get(node.service) : undefined}
+              onPointerDown={(event) => beginDrag(event, node)}
+              onPointerMove={moveDrag}
+              onPointerUp={finishDrag}
+              onPointerCancel={finishDrag}
+              onContextMenu={(event) => requestContext(event, node)}
+              onResizePointerDown={(event) => beginResize(event, node)}
+              onResizePointerMove={moveResize}
+              onResizePointerUp={finishResize}
+              onSelect={() => props.onNodeSelect(node.id)}
+              onToggleSpeech={() => props.onToggleSpeech(node.id, synapseNodeSpeech(node))}
+              onCheckedChange={(checked) => props.onNodeCheckedChange(node.id, checked)}
+            />
+          ))}
         {props.approvalItems.map((item) => (
           <SynapseApprovalNodeCard
             item={item}
-            provider={props.providersByService.get(item.service)}
-            selected={props.selectedApprovalId === item.approvalId}
+            providersByService={props.providersByService}
+            selected={item.requests.some((request) => request.approvalId === props.selectedApprovalId)}
             speechAvailable={props.speechAvailable}
             speaking={props.speakingNodeId === item.id}
             speechConnecting={props.speakingNodeId === item.id && props.speechConnecting}
             onSelect={() => props.onApprovalSelect(item.approvalId)}
-            onDecision={(decision) => props.onApprovalDecision(item, decision)}
+            onDecision={(approvalId, decision) => props.onApprovalDecision(item, approvalId, decision)}
             onToggleSpeech={() => props.onToggleSpeech(item.id, synapseApprovalSpeech(item))}
             key={item.id}
           />
@@ -1358,27 +1387,35 @@ function PreviewIcon({ preview }: { preview: FeedPreview }): ReactNode {
 
 export function SynapseApprovalNodeCard(props: {
   item: SynapseApprovalCanvasItem;
-  provider?: ProviderDefinition;
+  providersByService: Map<string, ProviderDefinition>;
   selected: boolean;
   speechAvailable: boolean;
   speaking: boolean;
   speechConnecting: boolean;
   onSelect(): void;
-  onDecision(decision: "approve" | "deny"): Promise<void>;
+  onDecision(approvalId: string, decision: "approve" | "deny"): Promise<void>;
   onToggleSpeech(): void;
 }): ReactNode {
+  const [page, setPage] = useState(0);
   const [decision, setDecision] = useState<"approve" | "deny" | null>(null);
+  const request = props.item.requests[Math.min(page, props.item.requests.length - 1)]!;
+  const provider = props.providersByService.get(request.service);
+  const markdown = approvalRequestMarkdown(request);
   const style = {
     transform: `translate(${props.item.position.x}px, ${props.item.position.y}px)`,
-    width: approvalNodeWidth,
-    height: approvalNodeHeight,
+    width: props.item.size.width,
+    height: props.item.size.height,
   };
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, props.item.requests.length - 1)));
+  }, [props.item.requests.length]);
 
   async function decide(next: "approve" | "deny"): Promise<void> {
     if (decision) return;
     setDecision(next);
     try {
-      await props.onDecision(next);
+      await props.onDecision(request.approvalId, next);
     } finally {
       setDecision(null);
     }
@@ -1397,22 +1434,80 @@ export function SynapseApprovalNodeCard(props: {
         available={props.speechAvailable}
         speaking={props.speaking}
         connecting={props.speechConnecting}
-        label={props.item.title}
+        label={request.draftNode?.title ?? request.title}
         onToggle={props.onToggleSpeech}
       />
-      <div className="synapse-node-icon provider approval-provider-icon">
-        {props.provider ? <ProviderIcon provider={props.provider} large /> : <Cable size={22} />}
-      </div>
-      <div className="synapse-approval-connector-copy">
-        <header>
-          <span>Connector approval</span>
+      <header className="synapse-approval-draft-header">
+        <span className="synapse-node-icon provider approval-provider-icon">
+          {provider ? <ProviderIcon provider={provider} large /> : <Cable size={22} />}
+        </span>
+        <span>
           <small>
-            <Clock3 size={11} /> Pending
+            Draft approval <Clock3 size={11} /> Pending
           </small>
-        </header>
-        <strong>{props.provider?.displayName ?? props.item.service}</strong>
-        <p>{props.item.connectionDisplayName ?? "Connected provider"}</p>
-        <code>{props.item.title}</code>
+          <strong>{request.draftNode?.title ?? request.title}</strong>
+          <em>
+            {provider?.displayName ?? request.service} · {request.connectionDisplayName ?? "Connected provider"}
+          </em>
+        </span>
+      </header>
+      {props.item.requests.length > 1 ? (
+        <nav className="synapse-approval-tabs" role="tablist" aria-label="Pending approval drafts">
+          {props.item.requests.map((candidate, index) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={index === page}
+              className={index === page ? "active" : undefined}
+              disabled={Boolean(decision)}
+              title={candidate.draftNode?.title ?? candidate.title}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                setPage(index);
+              }}
+              key={candidate.approvalId}
+            >
+              {index + 1}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+      <div className="synapse-approval-draft-content synapse-node-markdown">
+        <ChatMarkdown>{markdown}</ChatMarkdown>
+      </div>
+      <footer className="synapse-approval-draft-footer">
+        <div className="synapse-approval-pager">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={page === 0 || Boolean(decision)}
+            aria-label="Previous approval"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setPage((current) => Math.max(0, current - 1));
+            }}
+          >
+            <ChevronLeft size={15} />
+          </Button>
+          <span>
+            {page + 1} / {props.item.requests.length}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={page >= props.item.requests.length - 1 || Boolean(decision)}
+            aria-label="Next approval"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setPage((current) => Math.min(props.item.requests.length - 1, current + 1));
+            }}
+          >
+            <ChevronRight size={15} />
+          </Button>
+        </div>
         <div className="synapse-approval-node-actions">
           <Button
             size="sm"
@@ -1438,32 +1533,48 @@ export function SynapseApprovalNodeCard(props: {
             {decision === "deny" ? <Loader2 className="spin" size={13} /> : <X size={13} />} Deny
           </Button>
         </div>
-      </div>
+      </footer>
       <span className="synapse-port input" />
     </article>
   );
 }
 
 function synapseApprovalSpeech(item: SynapseApprovalCanvasItem): string {
-  return `Approval required. ${item.title}. ${item.connectionDisplayName ?? "Connected provider action"}. Open this node to approve or deny the request.`;
+  const request = item.requests[0]!;
+  return `Approval required. ${request.draftNode?.title ?? request.title}. ${request.connectionDisplayName ?? "Connected provider action"}. Open this draft to approve or deny the request.`;
+}
+
+function approvalRequestMarkdown(request: SynapseApprovalRequestItem): string {
+  if (request.draftNode?.content || request.draftNode?.summary) {
+    return request.draftNode.content ?? request.draftNode.summary ?? "";
+  }
+  return `### ${request.title}\n\nReview this exact connector request before it runs.\n\n\`\`\`json\n${formatJson(request.input)}\n\`\`\``;
 }
 
 function SynapseApprovalPanel(props: {
   workspace: SynapseWorkspace;
   item: SynapseApprovalCanvasItem;
+  providersByService: Map<string, ProviderDefinition>;
   onWorkspaceChange(workspace: SynapseWorkspace): void;
   onClose(): void;
   onRefresh(): void;
 }): ReactNode {
+  const [page, setPage] = useState(0);
   const [decision, setDecision] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string>();
+  const request = props.item.requests[Math.min(page, props.item.requests.length - 1)]!;
+  const provider = props.providersByService.get(request.service);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, props.item.requests.length - 1)));
+  }, [props.item.requests.length]);
 
   async function decide(nextDecision: "approve" | "deny"): Promise<void> {
     if (decision) return;
     setDecision(nextDecision);
     setError(undefined);
     try {
-      await apiPost(`/api/action-approvals/${encodeURIComponent(props.item.approvalId)}/${nextDecision}`, {});
+      await apiPost(`/api/action-approvals/${encodeURIComponent(request.approvalId)}/${nextDecision}`, {});
       const next = await apiGet<SynapseWorkspace>(
         `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.item.nodeId)}/approval`,
       );
@@ -1480,11 +1591,13 @@ function SynapseApprovalPanel(props: {
     <aside className="synapse-panel synapse-approval-panel">
       <header className="synapse-panel-header">
         <span className="synapse-panel-icon approval">
-          <ShieldCheck size={20} />
+          {provider ? <ProviderIcon provider={provider} large /> : <ShieldCheck size={20} />}
         </span>
         <div>
-          <span>Pending connector action</span>
-          <strong>{props.item.title}</strong>
+          <span>
+            Draft approval {page + 1} of {props.item.requests.length}
+          </span>
+          <strong>{request.draftNode?.title ?? request.title}</strong>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Close approval" onClick={props.onClose}>
           ×
@@ -1501,20 +1614,44 @@ function SynapseApprovalPanel(props: {
         <dl>
           <div>
             <dt>Action</dt>
-            <dd>{props.item.title}</dd>
+            <dd>{request.title}</dd>
           </div>
           <div>
             <dt>Connection</dt>
-            <dd>{props.item.connectionDisplayName ?? "Connected provider"}</dd>
+            <dd>{request.connectionDisplayName ?? "Connected provider"}</dd>
           </div>
         </dl>
+        <div className="synapse-approval-draft-panel-content">
+          <ChatMarkdown>{approvalRequestMarkdown(request)}</ChatMarkdown>
+        </div>
         <div className="synapse-approval-payload">
           <span>Request payload</span>
-          <pre>{formatJson(props.item.input)}</pre>
+          <pre>{formatJson(request.input)}</pre>
         </div>
       </div>
       {error ? <div className="synapse-panel-error">{error}</div> : null}
       <div className="synapse-approval-actions">
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={page === 0 || Boolean(decision)}
+          aria-label="Previous approval"
+          onClick={() => setPage((current) => Math.max(0, current - 1))}
+        >
+          <ChevronLeft size={16} />
+        </Button>
+        <span>
+          {page + 1} / {props.item.requests.length}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={page >= props.item.requests.length - 1 || Boolean(decision)}
+          aria-label="Next approval"
+          onClick={() => setPage((current) => Math.min(props.item.requests.length - 1, current + 1))}
+        >
+          <ChevronRight size={16} />
+        </Button>
         <Button variant="outline" disabled={Boolean(decision)} onClick={() => void decide("deny")}>
           {decision === "deny" ? <Loader2 className="spin" size={15} /> : <X size={15} />} Deny
         </Button>
@@ -2195,26 +2332,46 @@ export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprov
     const owner = workspace.nodes.find((node) => node.id === thread.nodeId);
     if (!owner) continue;
     const pendingMessage = thread.messages.find((message) => message.id === thread.pendingMessageId);
-    for (const approvalId of pendingSynapseApprovalIds(thread)) {
+    const requests = pendingSynapseApprovalIds(thread).map((approvalId): SynapseApprovalRequestItem => {
       const activity = pendingApprovalActivity(pendingMessage?.toolActivity, approvalId);
-      const ownerSize = sizeForCanvasNode(owner);
-      const position = findOpenCanvasPosition(
-        workspace,
-        items.map((item) => ({ position: item.position, width: approvalNodeWidth, height: approvalNodeHeight })),
-        { x: owner.position.x + ownerSize.width + nodeHorizontalGap, y: owner.position.y },
-        { width: approvalNodeWidth, height: approvalNodeHeight },
-      );
-      items.push({
-        id: `approval:${approvalId}`,
+      return {
         approvalId,
-        nodeId: thread.nodeId,
         service: activity?.actionId?.split(".")[0] ?? "connector",
         title: activity?.actionId ?? activity?.label ?? "Connector action",
         connectionDisplayName: activity?.connectionDisplayName,
         input: activity?.input ?? {},
-        position,
-      });
-    }
+        draftNode: workspace.nodes.find(
+          (node): node is SynapseArtifactNode =>
+            node.kind === "artifact" && node.approvalIds?.includes(approvalId) === true,
+        ),
+      };
+    });
+    if (requests.length === 0) continue;
+    const draftNodes = requests.flatMap((request) => (request.draftNode ? [request.draftNode] : []));
+    const size = draftNodes.reduce(
+      (current, draft) => {
+        const draftSize = sizeForCanvasNode(draft);
+        return { width: Math.max(current.width, draftSize.width), height: Math.max(current.height, draftSize.height) };
+      },
+      { width: approvalNodeWidth, height: approvalNodeHeight },
+    );
+    const ownerSize = sizeForCanvasNode(owner);
+    const position =
+      draftNodes[0]?.position ??
+      findOpenCanvasPosition(
+        workspace,
+        items.map((item) => ({ position: item.position, width: item.size.width, height: item.size.height })),
+        { x: owner.position.x + ownerSize.width + nodeHorizontalGap, y: owner.position.y },
+        size,
+      );
+    items.push({
+      id: `approval-stack:${thread.nodeId}`,
+      approvalId: requests[0]!.approvalId,
+      nodeId: thread.nodeId,
+      requests,
+      position,
+      size,
+    });
   }
   return items;
 }

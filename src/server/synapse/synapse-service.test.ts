@@ -6,7 +6,7 @@ import type {
   AgentChatProgressListener,
   AgentChatResponse,
 } from "../chat/agent-chat-types.ts";
-import type { ISynapseStore, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
+import type { ISynapseStore, SynapseArtifactNode, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
 
 import { describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
@@ -857,7 +857,7 @@ describe("SynapseService", () => {
     );
   });
 
-  it("groups an approved action batch under one provider source node", async () => {
+  it("groups an approved action batch into one draft card", async () => {
     const approvalIds = ["approval-1", "approval-2"];
     const waiting = waitingResponse(approvalIds[0]!, approvalIds);
     waiting.toolActivity = approvalIds.map((approvalId, index) => ({
@@ -904,22 +904,119 @@ describe("SynapseService", () => {
     const result = await service.syncPendingApproval(workspace.id, source.id);
 
     const providers = result.nodes.filter((node) => node.kind === "provider");
-    expect(providers).toHaveLength(2);
-    const batchProvider = providers.find((node) => node.id !== source.id)!;
-    expect(batchProvider).toMatchObject({
-      connectionId: "azure-devops-1",
-      instructions: "Completed 2 approved actions in this batch.",
-    });
-    const completedArtifacts = result.nodes.filter(
-      (node) => node.kind === "artifact" && node.sourceConnectionId === "azure-devops-1",
+    expect(providers).toEqual([expect.objectContaining({ id: source.id, connectionId: "azure-devops-1" })]);
+    const completedDrafts = result.nodes.filter(
+      (node): node is SynapseArtifactNode => node.kind === "artifact" && node.sourceConnectionId === "azure-devops-1",
     );
-    expect(completedArtifacts).toHaveLength(2);
-    expect(
-      result.edges.filter(
-        (edge) =>
-          edge.sourceNodeId === batchProvider.id && completedArtifacts.some((node) => node.id === edge.targetNodeId),
+    expect(completedDrafts).toHaveLength(1);
+    expect(completedDrafts[0]).toMatchObject({
+      approvalIds: undefined,
+      sourceConnectionId: "azure-devops-1",
+      sourceActionId: "azure_devops.update_work_item",
+      data: { id: 194048, title: "Ticket 194048", state: "Done" },
+    });
+    expect(completedDrafts[0]?.content).toContain("**Status:** Updated successfully");
+    expect(result.edges).toContainEqual(
+      expect.objectContaining({ sourceNodeId: source.id, targetNodeId: completedDrafts[0]?.id }),
+    );
+  });
+
+  it("merges a pending connector action into its draft and removes its transient provider node", async () => {
+    const approvalId = "approval-create-bug";
+    let resolved = false;
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const providerActivity = await extension.runTool("synapse_add_provider", {
+          connectionId: "azure-devops-1",
+          title: "Azure DevOps",
+        });
+        const providerOutput = providerActivity?.output as { node?: { id?: string } } | undefined;
+        const providerNodeId = providerOutput?.node?.id;
+        if (!providerActivity || !providerNodeId) throw new Error("Expected a provider node.");
+        const artifactActivity = await extension.runTool("synapse_add_artifacts", {
+          parentNodeId: providerNodeId,
+          artifacts: [
+            {
+              artifactKind: "draft",
+              title: "Draft Bug · Train arrival exception",
+              content:
+                "# Train arrival exception\n\n**Status:** Pending approval — not yet created\n\nReproducible scheduling failure.",
+            },
+          ],
+        });
+        if (!artifactActivity) throw new Error("Expected a draft artifact.");
+        const waiting = waitingResponse(approvalId);
+        waiting.toolActivity = [
+          providerActivity,
+          artifactActivity,
+          {
+            id: "pending-create-bug",
+            type: "action",
+            label: "azure_devops.create_work_item",
+            ok: false,
+            actionId: "azure_devops.create_work_item",
+            connectionId: "azure-devops-1",
+            connectionDisplayName: "ekaplus",
+            approvalId,
+            input: { title: "Train arrival exception", type: "Bug" },
+            output: { error: { code: "approval_pending" } },
+          },
+        ];
+        return waiting;
+      }),
+      getApprovalResult: vi.fn(async () =>
+        resolved
+          ? {
+              approvalId,
+              status: "consumed" as const,
+              response: completedResponse([
+                {
+                  id: "created-bug",
+                  type: "action",
+                  label: "azure_devops.create_work_item",
+                  ok: true,
+                  actionId: "azure_devops.create_work_item",
+                  connectionId: "azure-devops-1",
+                  approvalId,
+                  input: { title: "Train arrival exception", type: "Bug" },
+                  output: { id: 194200, title: "Train arrival exception", state: "New" },
+                },
+              ]),
+            }
+          : pendingApproval(approvalId),
       ),
-    ).toHaveLength(2);
+    });
+    const workspace = await service.create({ name: "Bug triage" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Exception report",
+      content: "ObjectDisposedException stack trace",
+      position: { x: 100, y: 100 },
+    });
+    const source = seeded.nodes[0]!;
+
+    const waiting = await service.chat(workspace.id, source.id, { content: "Create a YardCraft bug." });
+
+    expect(waiting.nodes.filter((node) => node.kind === "provider")).toHaveLength(0);
+    const draft = waiting.nodes.find((node) => node.kind === "artifact" && node.artifactKind === "draft");
+    expect(draft).toMatchObject({ approvalIds: [approvalId], title: "Draft Bug · Train arrival exception" });
+    expect(waiting.edges).toEqual([expect.objectContaining({ sourceNodeId: source.id, targetNodeId: draft?.id })]);
+
+    resolved = true;
+    const completed = await service.syncPendingApproval(workspace.id, source.id);
+
+    expect(completed.nodes).toHaveLength(2);
+    expect(completed.nodes.filter((node) => node.kind === "provider")).toHaveLength(0);
+    expect(completed.nodes.find((node) => node.id === draft?.id)).toMatchObject({
+      approvalIds: undefined,
+      sourceActionId: "azure_devops.create_work_item",
+      sourceActivityId: "created-bug",
+      data: { id: 194200, title: "Train arrival exception", state: "New" },
+    });
+    expect((completed.nodes.find((node) => node.id === draft?.id) as { content?: string }).content).toContain(
+      "**Status:** Created successfully",
+    );
   });
 
   it("stores every approval queued by one node conversation", async () => {

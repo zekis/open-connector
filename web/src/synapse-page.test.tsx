@@ -272,14 +272,19 @@ describe("SynapseNodeCard", () => {
     expect(item).toMatchObject({
       approvalId: "approval-1",
       nodeId: "provider-1",
-      title: "outlook.send_message",
-      connectionDisplayName: "Sales inbox",
+      requests: [
+        expect.objectContaining({
+          approvalId: "approval-1",
+          title: "outlook.send_message",
+          connectionDisplayName: "Sales inbox",
+        }),
+      ],
     });
 
     const html = renderToStaticMarkup(
       <SynapseApprovalNodeCard
         item={item!}
-        provider={provider}
+        providersByService={new Map([[provider.service, provider]])}
         selected
         speechAvailable
         speaking={false}
@@ -289,7 +294,8 @@ describe("SynapseNodeCard", () => {
         onToggleSpeech={() => {}}
       />,
     );
-    expect(html).toContain("Connector approval");
+    expect(html).toContain("Draft approval");
+    expect(html).toContain("1 / 1");
     expect(html).toContain("Approve once");
     expect(html).toContain(" Deny</button>");
     expect(html).toContain('class="provider-icon large"');
@@ -298,10 +304,22 @@ describe("SynapseNodeCard", () => {
   });
 
   it("projects every queued connector approval from one agent turn", () => {
+    const draft: SynapseArtifactNode = {
+      id: "draft-1",
+      kind: "artifact",
+      artifactKind: "draft",
+      title: "Close selected YardCraft items",
+      content: "# Proposed updates\n\nClose work items 194047 and 194048.",
+      approvalIds: ["approval-1", "approval-2"],
+      position: { x: 480, y: 120 },
+      size: { width: 520, height: 410 },
+      createdAt: "2026-08-15T01:01:00.000Z",
+      updatedAt: "2026-08-15T01:01:00.000Z",
+    };
     const workspace: SynapseWorkspace = {
       id: "synapse-1",
       name: "Bulk update",
-      nodes: [providerNode],
+      nodes: [providerNode, draft],
       edges: [],
       threads: [
         {
@@ -348,10 +366,44 @@ describe("SynapseNodeCard", () => {
       updatedAt: "2026-08-15T01:02:00.000Z",
     };
 
-    expect(synapseApprovalItems(workspace)).toEqual([
-      expect.objectContaining({ approvalId: "approval-1", input: { id: 194047, state: "Done" } }),
-      expect.objectContaining({ approvalId: "approval-2", input: { id: 194048, state: "Done" } }),
+    const items = synapseApprovalItems(workspace);
+    expect(items).toEqual([
+      expect.objectContaining({
+        approvalId: "approval-1",
+        position: draft.position,
+        size: draft.size,
+        requests: [
+          expect.objectContaining({
+            approvalId: "approval-1",
+            input: { id: 194047, state: "Done" },
+            draftNode: draft,
+          }),
+          expect.objectContaining({
+            approvalId: "approval-2",
+            input: { id: 194048, state: "Done" },
+            draftNode: draft,
+          }),
+        ],
+      }),
     ]);
+    const html = renderToStaticMarkup(
+      <SynapseApprovalNodeCard
+        item={items[0]!}
+        providersByService={new Map()}
+        selected={false}
+        speechAvailable={false}
+        speaking={false}
+        speechConnecting={false}
+        onSelect={() => {}}
+        onDecision={async () => {}}
+        onToggleSpeech={() => {}}
+      />,
+    );
+    expect(html).toContain("Close selected YardCraft items");
+    expect(html).toContain("Close work items 194047 and 194048.");
+    expect(html).toContain("1 / 2");
+    expect(html.match(/role="tab"/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Next approval"');
   });
 });
 
