@@ -4,9 +4,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   fitCanvasView,
+  appendSynapseUserMessage,
   panNodeIntoView,
   SynapseApprovalNodeCard,
   SynapseNodeCard,
+  synapseNodeSpeech,
   synapseApprovalItems,
   zoomCanvasView,
 } from "./synapse-page";
@@ -69,6 +71,10 @@ describe("SynapseNodeCard", () => {
         provider={provider}
         selected
         linking={false}
+        speechAvailable
+        speaking={false}
+        speechConnecting={false}
+        checked
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
@@ -78,6 +84,8 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onToggleSpeech={() => {}}
+        onCheckedChange={() => {}}
       />,
     );
 
@@ -85,6 +93,10 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Find important messages for this branch.");
     expect(html).toContain('class="provider-icon large"');
     expect(html).toContain("translate(100px, 120px)");
+    expect(html).toContain("Read Outlook aloud");
+    expect(html).toContain("Select Outlook");
+    expect(html).toContain("multi-selected");
+    expect(synapseNodeSpeech(providerNode)).toContain("Find important messages for this branch.");
   });
 
   it("renders an email artifact with its external source", () => {
@@ -93,6 +105,10 @@ describe("SynapseNodeCard", () => {
         node={artifactNode}
         selected={false}
         linking
+        speechAvailable
+        speaking
+        speechConnecting={false}
+        checked={false}
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
@@ -102,6 +118,8 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onToggleSpeech={() => {}}
+        onCheckedChange={() => {}}
       />,
     );
 
@@ -116,7 +134,30 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Resize New mining opportunity");
     expect(html).toContain("Open artifact resources");
     expect(html).toContain("Sales brief.pdf");
+    expect(html).toContain("Stop reading New mining opportunity");
     expect(html).not.toContain("<iframe");
+  });
+
+  it("adds a user turn to node history immediately while the agent is working", () => {
+    const workspace: SynapseWorkspace = {
+      id: "synapse-1",
+      name: "Sales research",
+      nodes: [providerNode],
+      edges: [],
+      threads: [],
+      createdAt: "2026-08-15T01:00:00.000Z",
+      updatedAt: "2026-08-15T01:00:00.000Z",
+    };
+
+    const next = appendSynapseUserMessage(workspace, providerNode.id, "What changed?", "local-user-1");
+
+    expect(next.threads).toEqual([
+      expect.objectContaining({
+        nodeId: providerNode.id,
+        messages: [expect.objectContaining({ id: "local-user-1", role: "user", content: "What changed?" })],
+      }),
+    ]);
+    expect(workspace.threads).toEqual([]);
   });
 
   it("projects a pending connector approval onto the canvas", () => {
@@ -167,10 +208,21 @@ describe("SynapseNodeCard", () => {
       connectionDisplayName: "Sales inbox",
     });
 
-    const html = renderToStaticMarkup(<SynapseApprovalNodeCard item={item!} selected onSelect={() => {}} />);
+    const html = renderToStaticMarkup(
+      <SynapseApprovalNodeCard
+        item={item!}
+        selected
+        speechAvailable
+        speaking={false}
+        speechConnecting={false}
+        onSelect={() => {}}
+        onToggleSpeech={() => {}}
+      />,
+    );
     expect(html).toContain("Approval required");
     expect(html).toContain("approve or deny");
     expect(html).toContain("Sales inbox");
+    expect(html).toContain("Read outlook.send_message aloud");
   });
 });
 

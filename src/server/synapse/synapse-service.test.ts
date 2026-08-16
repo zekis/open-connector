@@ -32,6 +32,69 @@ const connections = [
 ];
 
 describe("SynapseService", () => {
+  it("converges multiple selected nodes into one durable result with their joint context and conversation", async () => {
+    let extensionSeen: AgentChatExtension | undefined;
+    let messagesSeen: Array<{ role: string; content: string }> = [];
+    const service = createService({
+      respondWithExtension: vi.fn(async (input: unknown, extension: AgentChatExtension) => {
+        extensionSeen = extension;
+        messagesSeen = (input as { messages: Array<{ role: string; content: string }> }).messages;
+        await extension.runTool("synapse_add_artifacts", {
+          artifacts: [
+            {
+              artifactKind: "note",
+              title: "Joint summary",
+              content: "Both selected nodes describe the same opportunity.",
+            },
+          ],
+        });
+        return completedResponse([]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Selection synthesis" });
+    await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "email",
+      title: "Opportunity email",
+      content: "A sales opportunity arrived.",
+      position: { x: 100, y: 100 },
+    });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "document",
+      title: "Sales brief",
+      content: "The supporting brief.",
+      position: { x: 100, y: 400 },
+    });
+    const selectedNodeIds = seeded.nodes.map((node) => node.id);
+
+    const result = await service.chatSelection(workspace.id, {
+      nodeIds: selectedNodeIds,
+      content: "Summarise these together.",
+    });
+
+    expect(extensionSeen?.context).toMatchObject({
+      selectedNodeIds,
+      nodes: expect.arrayContaining(selectedNodeIds.map((id) => expect.objectContaining({ id, graphDistance: 0 }))),
+    });
+    expect(messagesSeen.at(-1)).toEqual({ role: "user", content: "Summarise these together." });
+    expect(result.workspace.nodes.find((node) => node.id === result.resultNodeId)).toMatchObject({
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Joint summary",
+    });
+    expect(
+      result.workspace.edges.filter(
+        (edge) => selectedNodeIds.includes(edge.sourceNodeId) && edge.targetNodeId === result.resultNodeId,
+      ),
+    ).toHaveLength(2);
+    expect(result.workspace.threads.find((thread) => thread.nodeId === result.resultNodeId)?.messages).toEqual([
+      expect.objectContaining({ role: "user", content: "Summarise these together." }),
+      expect.objectContaining({ role: "assistant" }),
+    ]);
+  });
+
   it("gives a selected node only its connected graph context and projects connector results into artifacts", async () => {
     let extensionSeen: AgentChatExtension | undefined;
     const agentChat = {
@@ -108,6 +171,35 @@ describe("SynapseService", () => {
     expect(result.nodes.filter((node) => node.kind === "provider" && node.connectionId === "outlook-1")).toHaveLength(
       2,
     );
+  });
+
+  it("includes earlier user and assistant turns when continuing a node conversation", async () => {
+    const conversations: Array<Array<{ role: string; content: string }>> = [];
+    const service = createService({
+      respondWithExtension: vi.fn(async (input: unknown) => {
+        conversations.push((input as { messages: Array<{ role: string; content: string }> }).messages);
+        return completedResponse([]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Conversation history" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Project note",
+      content: "Current project state.",
+      position: { x: 100, y: 100 },
+    });
+    const node = seeded.nodes[0]!;
+
+    await service.chat(workspace.id, node.id, { content: "What is this about?" });
+    await service.chat(workspace.id, node.id, { content: "What should I do next?" });
+
+    expect(conversations[1]?.slice(1).map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: "What is this about?" },
+      { role: "assistant", content: "Added the useful results to the canvas." },
+      { role: "user", content: "What should I do next?" },
+    ]);
   });
 
   it("reuses a stable provider item across repeated connector results", async () => {

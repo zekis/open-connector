@@ -90,6 +90,11 @@ export interface SynapseWorkspaceSummary {
   updatedAt: string;
 }
 
+export interface SynapseSelectionResult {
+  workspace: SynapseWorkspace;
+  resultNodeId: string;
+}
+
 export interface ISynapseStore {
   setWorkspace(workspace: SynapseWorkspace): Promise<void>;
   getWorkspace(id: string): Promise<SynapseWorkspace | undefined>;

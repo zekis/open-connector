@@ -57,6 +57,7 @@ export class SaynaVoiceClient {
   private nextPlaybackTime = 0;
   private speechQueue: QueuedSpeech[] = [];
   private speechInFlight?: QueuedSpeech;
+  private speechGeneration = 0;
   private finalTranscriptSegments: string[] = [];
   private incomingMessages = Promise.resolve();
   private playbackComplete = false;
@@ -124,20 +125,21 @@ export class SaynaVoiceClient {
   async speak(markdown: string): Promise<void> {
     const text = plainTextForSpeech(markdown);
     if (!text) return;
-    await this.queueResponseSpeech(splitSpeechForPlayback(text));
+    const generation = ++this.speechGeneration;
+    await this.queueResponseSpeech(splitSpeechForPlayback(text), generation);
   }
 
   async speakProgress(text: string): Promise<void> {
     const normalized = plainTextForSpeech(text);
     if (!normalized) return;
-    await this.queueSpeech({ text: normalized, kind: "progress" });
+    await this.queueSpeech({ text: normalized, kind: "progress" }, this.speechGeneration);
   }
 
-  private async queueSpeech(speech: QueuedSpeech): Promise<void> {
+  private async queueSpeech(speech: QueuedSpeech, generation: number): Promise<void> {
     try {
       await this.ensureConnected();
       await this.resumePlayback();
-      if (this.closed || this.speechInFlight?.text === speech.text) return;
+      if (this.closed || generation !== this.speechGeneration || this.speechInFlight?.text === speech.text) return;
       if (speech.kind === "response") {
         this.speechQueue = this.speechQueue.filter((item) => item.kind === "response");
       } else {
@@ -151,12 +153,12 @@ export class SaynaVoiceClient {
     }
   }
 
-  private async queueResponseSpeech(chunks: string[]): Promise<void> {
+  private async queueResponseSpeech(chunks: string[], generation: number): Promise<void> {
     if (chunks.length === 0) return;
     try {
       await this.ensureConnected();
       await this.resumePlayback();
-      if (this.closed) return;
+      if (this.closed || generation !== this.speechGeneration) return;
       this.speechQueue = chunks.map((text) => ({ text, kind: "response" }));
       this.startNextSpeech();
     } catch (error) {
@@ -173,6 +175,7 @@ export class SaynaVoiceClient {
   }
 
   stopSpeaking(): void {
+    this.speechGeneration += 1;
     const connected = this.socket?.readyState === WebSocket.OPEN;
     if (connected) this.socket?.send(JSON.stringify({ type: "clear" }));
     this.stopPlayback();

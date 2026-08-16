@@ -568,6 +568,11 @@ export interface SynapseWorkspaceSummary {
   updatedAt: string;
 }
 
+export interface SynapseSelectionResult {
+  workspace: SynapseWorkspace;
+  resultNodeId: string;
+}
+
 export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }
   | { type: "response"; response: AgentChatResponse }

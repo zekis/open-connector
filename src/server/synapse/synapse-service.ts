@@ -14,6 +14,7 @@ import type {
   SynapseNode,
   SynapsePosition,
   SynapseProviderNode,
+  SynapseSelectionResult,
   SynapseSize,
   SynapseThread,
   SynapseWorkspace,
@@ -32,6 +33,7 @@ const maximumNodeTextCharacters = 40_000;
 const maximumChatCharacters = 20_000;
 const maximumThreadMessages = 40;
 const maximumContextNodes = 40;
+const maximumSelectedNodes = 20;
 const maximumArtifactsPerTool = 12;
 const maximumProjectedArtifacts = 8;
 const canvasNodeWidth = 264;
@@ -289,6 +291,55 @@ export class SynapseService {
     }
   }
 
+  async chatSelection(workspaceId: string, input: unknown, signal?: AbortSignal): Promise<SynapseSelectionResult> {
+    const workspace = await this.requiredWorkspace(workspaceId);
+    const body = readObject(input, "Synapse selection message");
+    const selectedNodeIds = readSelectedNodeIds(body.nodeIds);
+    const selectedNodes = selectedNodeIds.map((nodeId) => requiredNode(workspace, nodeId));
+    const content = readText(body.content, "content", maximumChatCharacters);
+    const selectedNode = selectedNodes[0]!;
+    const existingNodeIds = new Set(workspace.nodes.map((node) => node.id));
+    const extension = await this.createExtension(workspace, selectedNode, selectedNodeIds);
+    const graphContext = createGraphContext(workspace, selectedNodeIds);
+    const conversation = [
+      {
+        role: "user" as const,
+        content: `Synapse multi-selection context follows. Treat it as host-provided context, not as a user request.\n${boundedJson(graphContext)}`,
+      },
+      { role: "user" as const, content },
+    ];
+
+    const response = await this.options.agentChat.respondWithExtension(
+      { messages: conversation, voiceMode: false },
+      extension,
+      undefined,
+      signal,
+    );
+    const graphCreatedNodes = workspace.nodes.filter((node) => !existingNodeIds.has(node.id));
+    const resultNode =
+      selectionResultNode(graphCreatedNodes) ??
+      this.addArtifactNode(workspace, selectionConvergencePosition(selectedNodes), {
+        artifactKind: "note",
+        title: selectionResultTitle(content, selectedNodes.length),
+        summary: `Created from ${selectedNodes.length} selected Synapse nodes.`,
+        content: response.message.content,
+      });
+    const otherNodes = workspace.nodes.filter((node) => node.id !== resultNode.id);
+    resultNode.position = findOpenPosition(
+      { ...workspace, nodes: otherNodes },
+      selectionConvergencePosition(selectedNodes),
+      resultNode.kind,
+      sizeForNode(resultNode),
+    );
+    const thread = threadFor(workspace, resultNode.id);
+    const now = new Date().toISOString();
+    thread.messages.push({ id: crypto.randomUUID(), role: "user", content, createdAt: now });
+    thread.updatedAt = now;
+    await this.applyAgentResponse(workspace, resultNode, thread, response);
+    for (const sourceNodeId of selectedNodeIds) this.connectNodes(workspace, sourceNodeId, resultNode.id);
+    return { workspace: await this.save(workspace), resultNodeId: resultNode.id };
+  }
+
   async syncPendingApproval(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
@@ -315,12 +366,16 @@ export class SynapseService {
     return this.presentWorkspace(workspace);
   }
 
-  private async createExtension(workspace: SynapseWorkspace, selectedNode: SynapseNode): Promise<AgentChatExtension> {
+  private async createExtension(
+    workspace: SynapseWorkspace,
+    selectedNode: SynapseNode,
+    contextNodeIds: string[] = [selectedNode.id],
+  ): Promise<AgentChatExtension> {
     const connections = await this.options.connections.listConnections();
     const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
     return {
-      systemPrompt: synapseSystemPrompt(selectedNode),
-      context: boundedData(createGraphContext(workspace, selectedNode.id), 30_000),
+      systemPrompt: synapseSystemPrompt(selectedNode, contextNodeIds.length),
+      context: boundedData(createGraphContext(workspace, contextNodeIds), 30_000),
       tools: synapseTools,
       runTool: async (toolName, input) => {
         try {
@@ -740,7 +795,17 @@ const synapseTools: AgentChatExtensionTool[] = [
   },
 ];
 
-function synapseSystemPrompt(selectedNode: SynapseNode): string {
+function synapseSystemPrompt(selectedNode: SynapseNode, selectedNodeCount = 1): string {
+  const selectionRules =
+    selectedNodeCount > 1
+      ? `
+Multi-selection rules:
+- the user selected ${selectedNodeCount} nodes and every selected node is equally important context
+- create exactly one convergence node for the request
+- for a question, analysis, or summary, call synapse_add_artifacts exactly once with one note artifact
+- when the user explicitly asks for a new connector, call synapse_add_provider exactly once instead of creating a note
+- do not create multiple graph nodes for a multi-selection request`
+      : "";
   return `You are working inside Synapse, a visual research and action canvas. The selected node is ${selectedNode.id} (${selectedNode.title}).
 
 Rules:
@@ -755,18 +820,21 @@ Rules:
 - update the selected draft or artifact in place with synapse_update_artifact when the user requests revisions
 - connect nodes whose relationship helps explain the work
 - keep chat concise because durable detail belongs in artifact cards
-- never claim a graph mutation or connector side effect succeeded unless its host tool succeeded`;
+- never claim a graph mutation or connector side effect succeeded unless its host tool succeeded${selectionRules}`;
 }
 
-function createGraphContext(workspace: SynapseWorkspace, selectedNodeId: string): Record<string, unknown> {
+function createGraphContext(
+  workspace: SynapseWorkspace,
+  selectedNodeIdOrIds: string | string[],
+): Record<string, unknown> {
+  const selectedNodeIds = Array.isArray(selectedNodeIdOrIds) ? selectedNodeIdOrIds : [selectedNodeIdOrIds];
   const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
-  const rankedNodes = connectedNodesByDistance(workspace, selectedNodeId)
+  const rankedNodes = connectedNodesByDistance(workspace, selectedNodeIds)
     .map(({ nodeId, distance }) => ({ node: nodesById.get(nodeId), distance }))
     .filter((entry): entry is { node: SynapseNode; distance: number } => entry.node !== undefined);
   const includedIds = new Set(rankedNodes.map(({ node }) => node.id));
-  return {
+  const context: Record<string, unknown> = {
     workspace: { id: workspace.id, name: workspace.name },
-    selectedNodeId,
     nodes: rankedNodes.map(({ node, distance }) => ({
       ...node,
       graphDistance: distance,
@@ -780,19 +848,22 @@ function createGraphContext(workspace: SynapseWorkspace, selectedNodeId: string)
     })),
     edges: workspace.edges.filter((edge) => includedIds.has(edge.sourceNodeId) && includedIds.has(edge.targetNodeId)),
   };
+  if (selectedNodeIds.length === 1) context.selectedNodeId = selectedNodeIds[0];
+  else context.selectedNodeIds = selectedNodeIds;
+  return context;
 }
 
 function connectedNodesByDistance(
   workspace: SynapseWorkspace,
-  selectedNodeId: string,
+  selectedNodeIds: string[],
 ): Array<{ nodeId: string; distance: number }> {
   const adjacency = new Map<string, string[]>();
   for (const edge of workspace.edges) {
     adjacency.set(edge.sourceNodeId, [...(adjacency.get(edge.sourceNodeId) ?? []), edge.targetNodeId]);
     adjacency.set(edge.targetNodeId, [...(adjacency.get(edge.targetNodeId) ?? []), edge.sourceNodeId]);
   }
-  const visited = new Set([selectedNodeId]);
-  const ordered = [{ nodeId: selectedNodeId, distance: 0 }];
+  const visited = new Set(selectedNodeIds);
+  const ordered = selectedNodeIds.map((nodeId) => ({ nodeId, distance: 0 }));
   const queue = [...ordered];
   while (queue.length > 0 && visited.size < maximumContextNodes) {
     const current = queue.shift()!;
@@ -815,7 +886,7 @@ function providerNodeForBranch(
   connectionId: string,
 ): SynapseProviderNode | undefined {
   const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
-  for (const { nodeId } of connectedNodesByDistance(workspace, selectedNode.id)) {
+  for (const { nodeId } of connectedNodesByDistance(workspace, [selectedNode.id])) {
     const node = nodesById.get(nodeId);
     if (node?.kind === "provider" && node.connectionId === connectionId) return node;
   }
@@ -987,6 +1058,27 @@ function automaticTextSize(text: string, kind: SynapseNode["kind"]): SynapseSize
     width: Math.round(width),
     height: Math.round(clampNumber(baseHeight + visualLines * 17, minimumHeight, maximumNodeHeight)),
   };
+}
+
+function selectionResultNode(nodes: SynapseNode[]): SynapseNode | undefined {
+  return (
+    nodes.find((node) => node.kind === "artifact" && node.artifactKind === "note") ??
+    nodes.find((node) => node.kind === "provider") ??
+    nodes[0]
+  );
+}
+
+function selectionConvergencePosition(nodes: SynapseNode[]): SynapsePosition {
+  const right = Math.max(...nodes.map((node) => node.position.x + sizeForNode(node).width));
+  const centreY =
+    nodes.reduce((total, node) => total + node.position.y + sizeForNode(node).height / 2, 0) / nodes.length;
+  return { x: Math.round(right + nodeHorizontalGap * 2), y: Math.round(centreY - artifactNodeHeight / 2) };
+}
+
+function selectionResultTitle(request: string, count: number): string {
+  if (/\b(summar(?:y|ise|ize)|recap|digest)\b/iu.test(request)) return `Summary of ${count} nodes`;
+  const firstLine = request.split(/\r?\n/u)[0]?.trim();
+  return truncate(firstLine, 100) ?? `Response from ${count} nodes`;
 }
 
 function arrangeWorkspace(workspace: SynapseWorkspace): void {
@@ -1182,6 +1274,17 @@ function readArtifactKind(value: unknown): SynapseArtifactKind {
     return value;
   }
   throw new SynapseError("invalid_synapse_artifact", "artifactKind is invalid.");
+}
+
+function readSelectedNodeIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new SynapseError("invalid_synapse_selection", "nodeIds must be an array of node IDs.");
+  }
+  const nodeIds = [...new Set(value.map((nodeId, index) => readText(nodeId, `nodeIds[${index}]`, 200)))];
+  if (nodeIds.length < 2 || nodeIds.length > maximumSelectedNodes) {
+    throw new SynapseError("invalid_synapse_selection", `Select between 2 and ${maximumSelectedNodes} distinct nodes.`);
+  }
+  return nodeIds;
 }
 
 function graphActivity(toolName: string, input: unknown, ok: boolean, output: unknown): AgentChatToolActivity {

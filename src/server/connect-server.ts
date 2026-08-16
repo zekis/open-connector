@@ -291,6 +291,9 @@ export class ConnectServer {
       app.post("/api/synapses/:id/nodes/:nodeId/messages", (context) =>
         this.chatWithSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
       );
+      app.post("/api/synapses/:id/selection/messages", (context) =>
+        this.chatWithSynapseSelection(context, context.req.param("id")),
+      );
       app.get("/api/synapses/:id/nodes/:nodeId/approval", (context) =>
         this.syncSynapseApproval(context, context.req.param("id"), context.req.param("nodeId")),
       );
@@ -1095,6 +1098,13 @@ export class ConnectServer {
     return await this.writeSynapseResult(
       context,
       this.options.synapse!.chat(id, nodeId, await readJsonBody(context), context.req.raw.signal),
+    );
+  }
+
+  private async chatWithSynapseSelection(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(
+      context,
+      this.options.synapse!.chatSelection(id, await readJsonBody(context), context.req.raw.signal),
     );
   }
 

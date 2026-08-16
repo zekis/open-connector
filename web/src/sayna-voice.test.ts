@@ -112,6 +112,20 @@ describe("Sayna voice helpers", () => {
     client.close();
   });
 
+  it("cancels speech stopped while the voice connection is still opening", async () => {
+    const runtime = installVoiceRuntime();
+    const client = createClient();
+    const speaking = client.speak("Read this Synapse node aloud.");
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+
+    client.stopSpeaking();
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await speaking;
+
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual([]);
+    client.close();
+  });
+
   it("speaks every chunk of a long response in sequence", async () => {
     const runtime = installVoiceRuntime();
     const client = createClient();
