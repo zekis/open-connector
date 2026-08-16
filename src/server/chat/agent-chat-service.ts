@@ -338,9 +338,10 @@ export class AgentChatService implements IAgentChatService {
       if (step === maxToolSteps) {
         throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
       }
+      const toolCallId = crypto.randomUUID();
       await emitProgress(
         options.onProgress,
-        toolStartedProgress(decision.toolName, decision.arguments, prepared.context),
+        toolStartedProgress(toolCallId, decision.toolName, decision.arguments, prepared.context),
       );
       const activity = await this.runTool(
         decision.toolName,
@@ -349,7 +350,10 @@ export class AgentChatService implements IAgentChatService {
         options.extension,
         options.signal,
       );
-      await emitProgress(options.onProgress, toolCompletedProgress(activity, prepared.context));
+      await emitProgress(
+        options.onProgress,
+        toolCompletedProgress(toolCallId, decision.toolName, activity, prepared.context),
+      );
       if (activity.approvalId) {
         await this.options.approvals.attachChatContinuation(
           activity.approvalId,
@@ -691,21 +695,38 @@ async function emitProgress(
 }
 
 function toolStartedProgress(
+  toolCallId: string,
   toolName: string,
   input: Record<string, unknown>,
   context: ChatContext,
 ): AgentChatProgress {
   if (toolName === searchToolName) {
-    return createProgress("tool_started", "Finding the right connected action…", [
-      "Hmm, I'm finding the right connection and action.",
-      "Okay, I'm checking which connection can handle that.",
-      "One moment, I'm finding the right connected action.",
-    ]);
+    return createProgress(
+      toolCallId,
+      "tool_started",
+      "Finding the right connected action…",
+      [
+        "Hmm, I'm finding the right connection and action.",
+        "Okay, I'm checking which connection can handle that.",
+        "One moment, I'm finding the right connected action.",
+      ],
+      {
+        id: toolCallId,
+        name: toolName,
+        type: "search",
+        label: "Search connected actions",
+        input,
+      },
+    );
   }
 
   const action = typeof input.actionId === "string" ? context.actionsById.get(input.actionId) : undefined;
   const providerName = action ? providerDisplayName(action.service, context) : "the connected app";
+  const connectionId = typeof input.connectionId === "string" ? input.connectionId : undefined;
+  const connection = connectionId ? context.connectionsById.get(connectionId) : undefined;
+  const actionId = typeof input.actionId === "string" ? input.actionId : undefined;
   return createProgress(
+    toolCallId,
     "tool_started",
     action ? `Running ${humanizeActionName(action.name)} in ${providerName}…` : "Running the connected action…",
     [
@@ -713,47 +734,87 @@ function toolStartedProgress(
       `Hmm, I'm working with ${providerName} now.`,
       `I've connected to ${providerName}. Let me check that.`,
     ],
+    {
+      id: toolCallId,
+      name: toolName,
+      type: "action",
+      label: actionId ?? humanizeActionName(toolName),
+      actionId,
+      connectionId,
+      connectionDisplayName: connection?.profile.displayName,
+      input: toolName === runToolName && isRecord(input.input) ? input.input : input,
+    },
   );
 }
 
-function toolCompletedProgress(activity: AgentChatToolActivity, context: ChatContext): AgentChatProgress {
+function toolCompletedProgress(
+  toolCallId: string,
+  toolName: string,
+  activity: AgentChatToolActivity,
+  context: ChatContext,
+): AgentChatProgress {
+  const tool = {
+    id: toolCallId,
+    name: toolName,
+    type: activity.type,
+    label: activity.label,
+    actionId: activity.actionId,
+    connectionId: activity.connectionId,
+    connectionDisplayName: activity.connectionDisplayName,
+    input: activity.input,
+    activity,
+  };
   if (activity.type === "search") {
     const matches = searchResultCount(activity.output);
     if (!activity.ok || matches === 0) {
-      return createProgress("tool_completed", "No matching connected action was found.", [
-        "Hmm, I couldn't find a matching connected action yet.",
-        "I haven't found the right connected action yet.",
-      ]);
+      return createProgress(
+        toolCallId,
+        "tool_completed",
+        "No matching connected action was found.",
+        ["Hmm, I couldn't find a matching connected action yet.", "I haven't found the right connected action yet."],
+        tool,
+      );
     }
-    return createProgress("tool_completed", `Found ${matches} matching connected action${matches === 1 ? "" : "s"}.`, [
-      "Okay, I found the connection and action I need.",
-      "Good, I found the connected action I need.",
-      "Yes, I found the right connection for that.",
-    ]);
+    return createProgress(
+      toolCallId,
+      "tool_completed",
+      `Found ${matches} matching connected action${matches === 1 ? "" : "s"}.`,
+      [
+        "Okay, I found the connection and action I need.",
+        "Good, I found the connected action I need.",
+        "Yes, I found the right connection for that.",
+      ],
+      tool,
+    );
   }
 
   const action = activity.actionId ? context.actionsById.get(activity.actionId) : undefined;
   const providerName = action ? providerDisplayName(action.service, context) : "the connected app";
   if (activity.approvalId) {
     return createProgress(
+      toolCallId,
       "tool_completed",
       `${providerName} is waiting for approval before ${action ? humanizeActionName(action.name) : "the action"}.`,
       "I need your approval before I can continue. You can approve the request here in Chat.",
+      tool,
     );
   }
   if (!activity.ok) {
     return createProgress(
+      toolCallId,
       "tool_completed",
       `${providerName} could not complete ${action ? humanizeActionName(action.name) : "the action"}.`,
       [
         `Hmm, ${providerName} couldn't complete that step. I'm checking what happened.`,
         `${providerName} hit a problem with that step. Let me inspect it.`,
       ],
+      tool,
     );
   }
 
   const readableSubject = action ? readableActionSubject(action.name) : undefined;
   return createProgress(
+    toolCallId,
     "tool_completed",
     `${providerName} completed ${action ? humanizeActionName(action.name) : "the action"}.`,
     readableSubject
@@ -762,16 +823,18 @@ function toolCompletedProgress(activity: AgentChatToolActivity, context: ChatCon
           `Okay, I've retrieved the ${readableSubject} from ${providerName}.`,
         ]
       : [`Okay, ${providerName} completed that step.`, `Good, that ${providerName} step is complete.`],
+    tool,
   );
 }
 
 function createProgress(
+  id: string,
   phase: AgentChatProgress["phase"],
   message: string,
   speech: string | readonly string[],
+  tool?: AgentChatProgress["tool"],
 ): AgentChatProgress {
-  const id = crypto.randomUUID();
-  return { id, phase, message, speech: selectSpeechVariant(speech, id) };
+  return { id, phase, message, speech: selectSpeechVariant(speech, id), tool };
 }
 
 function selectSpeechVariant(speech: string | readonly string[], seed: string): string {

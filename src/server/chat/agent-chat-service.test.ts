@@ -125,6 +125,26 @@ describe("AgentChatService", () => {
       "tool_started",
       "tool_completed",
     ]);
+    expect(progress[0]?.tool).toMatchObject({
+      name: "search_connector_actions",
+      label: "Search connected actions",
+      input: { query: "look up record" },
+    });
+    expect(progress[0]?.id).toBe(progress[1]?.id);
+    expect(progress[1]?.tool?.activity).toMatchObject({ type: "search", ok: true });
+    expect(progress[2]?.tool).toMatchObject({
+      name: "run_connector_action",
+      actionId: "example.lookup",
+      connectionId: connection.id,
+      connectionDisplayName: "Example account",
+      input: { query: "record-42" },
+    });
+    expect(progress[2]?.id).toBe(progress[3]?.id);
+    expect(progress[3]?.tool?.activity).toMatchObject({
+      type: "action",
+      ok: true,
+      actionId: "example.lookup",
+    });
     expect([
       "Hmm, I'm finding the right connection and action.",
       "Okay, I'm checking which connection can handle that.",

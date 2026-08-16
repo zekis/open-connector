@@ -21,6 +21,19 @@ export interface AgentChatProgress {
   phase: "tool_started" | "tool_completed";
   message: string;
   speech: string;
+  tool?: AgentChatProgressTool;
+}
+
+export interface AgentChatProgressTool {
+  id: string;
+  name: string;
+  type: AgentChatToolActivity["type"];
+  label: string;
+  actionId?: string;
+  connectionId?: string;
+  connectionDisplayName?: string;
+  input: unknown;
+  activity?: AgentChatToolActivity;
 }
 
 export type AgentChatProgressListener = (progress: AgentChatProgress) => void | Promise<void>;

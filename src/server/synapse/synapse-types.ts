@@ -1,4 +1,4 @@
-import type { AgentChatToolActivity } from "../chat/agent-chat-types.ts";
+import type { AgentChatProgress, AgentChatToolActivity } from "../chat/agent-chat-types.ts";
 import type { ProviderPreview } from "../previews/provider-preview.ts";
 
 export type SynapseNodeKind = "provider" | "artifact";
@@ -94,6 +94,11 @@ export interface SynapseSelectionResult {
   workspace: SynapseWorkspace;
   resultNodeId: string;
 }
+
+export type SynapseChatStreamEvent =
+  | { type: "progress"; progress: AgentChatProgress }
+  | { type: "workspace"; workspace: SynapseWorkspace }
+  | { type: "error"; error: { code: string; message: string } };
 
 export interface ISynapseStore {
   setWorkspace(workspace: SynapseWorkspace): Promise<void>;

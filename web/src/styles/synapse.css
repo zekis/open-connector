@@ -855,6 +855,40 @@
   color: var(--muted-foreground);
 }
 
+.synapse-live-progress {
+  display: grid;
+  gap: 7px;
+  min-width: min(360px, 100%);
+}
+
+.synapse-live-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--card) 92%, var(--brand));
+  font-size: 11px;
+}
+
+.synapse-live-tool > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.synapse-live-tool strong,
+.synapse-live-tool small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-live-tool small {
+  color: var(--muted-foreground);
+}
+
 .synapse-message .chat-tool-list {
   margin-bottom: 7px;
 }

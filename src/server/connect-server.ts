@@ -23,6 +23,7 @@ import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
 import type { RunLogCaller, RunLogListInput } from "./storage/runtime-store.ts";
 import type { RuntimeGrant, RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import type { SynapseService } from "./synapse/synapse-service.ts";
+import type { SynapseChatStreamEvent } from "./synapse/synapse-types.ts";
 import type { Context } from "hono";
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -290,6 +291,9 @@ export class ConnectServer {
       );
       app.post("/api/synapses/:id/nodes/:nodeId/messages", (context) =>
         this.chatWithSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
+      app.post("/api/synapses/:id/nodes/:nodeId/messages/stream", (context) =>
+        this.streamSynapseNodeChat(context, context.req.param("id"), context.req.param("nodeId")),
       );
       app.post("/api/synapses/:id/selection/messages", (context) =>
         this.chatWithSynapseSelection(context, context.req.param("id")),
@@ -1101,6 +1105,56 @@ export class ConnectServer {
     );
   }
 
+  private async streamSynapseNodeChat(context: Context, id: string, nodeId: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    const encoder = new TextEncoder();
+    const abortController = new AbortController();
+    const requestSignal = context.req.raw.signal;
+    const abort = (): void => abortController.abort();
+    if (requestSignal.aborted) abort();
+    else requestSignal.addEventListener("abort", abort, { once: true });
+    let cancelled = false;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const responseBody = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        const writeText = (value: string): void => {
+          if (cancelled) return;
+          try {
+            controller.enqueue(encoder.encode(value));
+          } catch {
+            cancelled = true;
+          }
+        };
+        const write = (event: SynapseChatStreamEvent): void => writeText(`${JSON.stringify(event)}\n`);
+
+        writeText("\n");
+        heartbeat = setInterval(() => writeText("\n"), 10_000);
+        void this.options
+          .synapse!.chat(id, nodeId, body, abortController.signal, (progress) => write({ type: "progress", progress }))
+          .then((workspace) => write({ type: "workspace", workspace }))
+          .catch((error: unknown) => write(synapseChatStreamError(error)))
+          .finally(() => {
+            if (heartbeat) clearInterval(heartbeat);
+            requestSignal.removeEventListener("abort", abort);
+            if (!cancelled) controller.close();
+          });
+      },
+      cancel: () => {
+        cancelled = true;
+        if (heartbeat) clearInterval(heartbeat);
+        requestSignal.removeEventListener("abort", abort);
+        abort();
+      },
+    });
+    return new Response(responseBody, {
+      headers: {
+        "Cache-Control": "no-store, no-transform",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
   private async chatWithSynapseSelection(context: Context, id: string): Promise<Response> {
     return await this.writeSynapseResult(
       context,
@@ -1726,6 +1780,13 @@ function agentChatStreamError(error: unknown): AgentChatStreamEvent {
   return error instanceof AgentChatError
     ? { type: "error", error: { code: error.code, message: error.message } }
     : { type: "error", error: { code: "agent_chat_failed", message: "Chat failed unexpectedly." } };
+}
+
+function synapseChatStreamError(error: unknown): SynapseChatStreamEvent {
+  if (error instanceof SynapseError || error instanceof AgentChatError) {
+    return { type: "error", error: { code: error.code, message: error.message } };
+  }
+  return { type: "error", error: { code: "synapse_chat_failed", message: "Synapse chat failed unexpectedly." } };
 }
 
 function serializeActionApproval(approval: ActionApproval): Omit<ActionApproval, "requestHash" | "chat"> {

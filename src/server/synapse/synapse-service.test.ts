@@ -1,11 +1,16 @@
 import type { ProviderDefinition } from "../../core/types.ts";
 import type { IActionRunner } from "../actions/action-runner.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
-import type { AgentChatApprovalResult, AgentChatResponse } from "../chat/agent-chat-types.ts";
+import type {
+  AgentChatApprovalResult,
+  AgentChatProgressListener,
+  AgentChatResponse,
+} from "../chat/agent-chat-types.ts";
 import type { ISynapseStore, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
 
 import { describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
+import { AgentChatError } from "../chat/agent-chat-service.ts";
 import { SynapseService } from "./synapse-service.ts";
 
 const connections = [
@@ -200,6 +205,94 @@ describe("SynapseService", () => {
       { role: "assistant", content: "Added the useful results to the canvas." },
       { role: "user", content: "What should I do next?" },
     ]);
+  });
+
+  it("streams tool progress and preserves a readable assistant failure after an agent timeout", async () => {
+    const completedActivity = {
+      id: "azure-devops-activity",
+      type: "action" as const,
+      label: "azure_devops.query_work_items",
+      ok: false,
+      actionId: "azure_devops.query_work_items",
+      connectionId: "azure-devops-1",
+      connectionDisplayName: "Yardcraft",
+      input: { project: "Yardcraft" },
+      output: { error: { code: "gateway_timeout", message: "Azure DevOps request failed with status 504." } },
+    };
+    const service = createService({
+      respondWithExtension: vi.fn(
+        async (
+          _input: unknown,
+          _extension: AgentChatExtension,
+          onProgress?: AgentChatProgressListener,
+        ): Promise<AgentChatResponse> => {
+          await onProgress?.({
+            id: "tool-call-1",
+            phase: "tool_started",
+            message: "Running Azure DevOps query…",
+            speech: "Checking Azure DevOps.",
+            tool: {
+              id: "tool-call-1",
+              name: "run_connector_action",
+              type: "action",
+              label: completedActivity.label,
+              actionId: completedActivity.actionId,
+              connectionId: completedActivity.connectionId,
+              connectionDisplayName: completedActivity.connectionDisplayName,
+              input: completedActivity.input,
+            },
+          });
+          await onProgress?.({
+            id: "tool-call-1",
+            phase: "tool_completed",
+            message: "Azure DevOps returned an error.",
+            speech: "Azure DevOps returned an error.",
+            tool: {
+              id: "tool-call-1",
+              name: "run_connector_action",
+              type: "action",
+              label: completedActivity.label,
+              actionId: completedActivity.actionId,
+              connectionId: completedActivity.connectionId,
+              connectionDisplayName: completedActivity.connectionDisplayName,
+              input: completedActivity.input,
+              activity: completedActivity,
+            },
+          });
+          throw new AgentChatError("claude_agent_timeout", "Claude Code exceeded its turn timeout.", 503);
+        },
+      ),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Azure DevOps failure" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Yardcraft",
+      position: { x: 100, y: 100 },
+    });
+    const progress: string[] = [];
+
+    const result = await service.chat(
+      workspace.id,
+      seeded.nodes[0]!.id,
+      { content: "Get every open work item." },
+      undefined,
+      (update) => {
+        progress.push(update.phase);
+      },
+    );
+
+    expect(progress).toEqual(["tool_started", "tool_completed"]);
+    expect(result.threads[0]?.messages).toEqual([
+      expect.objectContaining({ role: "user", content: "Get every open work item." }),
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.stringContaining("Claude Code exceeded its turn timeout."),
+        toolActivity: [completedActivity],
+      }),
+    ]);
+    expect(result.threads[0]?.messages[1]?.content).toContain("Azure DevOps request failed with status 504.");
   });
 
   it("reuses a stable provider item across repeated connector results", async () => {
@@ -553,7 +646,12 @@ function cardsOverlap(
 
 function createService(
   agentChat: {
-    respondWithExtension: (input: unknown, extension: AgentChatExtension) => Promise<AgentChatResponse>;
+    respondWithExtension: (
+      input: unknown,
+      extension: AgentChatExtension,
+      onProgress?: AgentChatProgressListener,
+      signal?: AbortSignal,
+    ) => Promise<AgentChatResponse>;
     getApprovalResult: (approvalId: string) => Promise<AgentChatApprovalResult>;
   },
   actions?: Pick<IActionRunner, "run">,

@@ -1,4 +1,5 @@
 import type {
+  AgentChatProgress,
   AgentChatToolActivity,
   AppData,
   ConnectionRecord,
@@ -8,6 +9,7 @@ import type {
   SynapseArtifactKind,
   SynapseNode,
   SynapseSelectionResult,
+  SynapseChatStreamEvent,
   SynapseSize,
   SynapseWorkspace,
   SynapseWorkspaceSummary,
@@ -46,7 +48,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import { apiDelete, apiGet, apiPost, apiPut } from "./api";
+import { apiDelete, apiGet, apiPost, apiPostNdjson, apiPut } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
 import { ChatToolActivityList } from "./chat-page";
 import { flowConnectionDisplayName } from "./flow-connection-picker";
@@ -1481,6 +1483,7 @@ function SynapseNodePanel(props: {
 }): ReactNode {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [liveProgress, setLiveProgress] = useState<AgentChatProgress[]>([]);
   const [error, setError] = useState<string>();
   const [approvalDecision, setApprovalDecision] = useState<"approve" | "deny" | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -1490,26 +1493,38 @@ function SynapseNodePanel(props: {
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
-  }, [thread?.messages.length, sending]);
+  }, [thread?.messages.length, liveProgress, sending]);
 
   async function send(event: FormEvent): Promise<void> {
     event.preventDefault();
     const content = draft.trim();
     if (!content || sending) return;
     setSending(true);
+    setLiveProgress([]);
     setDraft("");
     setError(undefined);
     props.onWorkspaceChange(appendSynapseUserMessage(props.workspace, props.node.id, content));
     try {
-      const next = await apiPost<SynapseWorkspace>(
-        `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.node.id)}/messages`,
+      let next: SynapseWorkspace | undefined;
+      await apiPostNdjson<SynapseChatStreamEvent>(
+        `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.node.id)}/messages/stream`,
         { content },
+        (item) => {
+          if (item.type === "error") throw new Error(item.error.message);
+          if (item.type === "progress") {
+            setLiveProgress((current) => mergeSynapseProgress(current, item.progress));
+          } else {
+            next = item.workspace;
+            props.onWorkspaceChange(item.workspace);
+          }
+        },
       );
-      props.onWorkspaceChange(next);
+      if (!next) throw new Error("Synapse chat ended before returning the updated canvas.");
       props.onRefresh();
     } catch (caught) {
       setError(messageFrom(caught, "Claude could not continue this node."));
     } finally {
+      setLiveProgress([]);
       setSending(false);
     }
   }
@@ -1603,9 +1618,12 @@ function SynapseNodePanel(props: {
         {sending ? (
           <div className="synapse-message assistant thinking">
             <Bot size={15} />
-            <div className="synapse-message-bubble">
-              <Loader2 className="spin" size={15} /> Claude is working across this branch…
-            </div>
+            <SynapseLiveProgress
+              progress={liveProgress}
+              activeApprovalId={thread?.pendingApprovalId}
+              approvalDecision={approvalDecision}
+              onApprovalDecision={(decision) => void decide(decision)}
+            />
           </div>
         ) : null}
       </div>
@@ -1634,6 +1652,48 @@ function SynapseNodePanel(props: {
         </Button>
       </form>
     </aside>
+  );
+}
+
+export function mergeSynapseProgress(current: AgentChatProgress[], progress: AgentChatProgress): AgentChatProgress[] {
+  const existingIndex = current.findIndex((item) => item.id === progress.id);
+  if (existingIndex < 0) return [...current, progress];
+  return current.map((item, index) => (index === existingIndex ? progress : item));
+}
+
+function SynapseLiveProgress(props: {
+  progress: AgentChatProgress[];
+  activeApprovalId?: string;
+  approvalDecision: "approve" | "deny" | null;
+  onApprovalDecision(decision: "approve" | "deny"): void;
+}): ReactNode {
+  const latest = props.progress.at(-1);
+  return (
+    <div className="synapse-live-progress">
+      {props.progress.map((progress) =>
+        progress.tool?.activity ? (
+          <ChatToolActivityList
+            key={progress.id}
+            activities={[progress.tool.activity]}
+            activeApprovalId={props.activeApprovalId}
+            approvalDecision={props.approvalDecision}
+            onApprovalDecision={props.onApprovalDecision}
+          />
+        ) : progress.tool ? (
+          <div className="synapse-live-tool" key={progress.id}>
+            <Loader2 className="spin" size={14} />
+            <span>
+              <strong>{progress.tool.actionId ?? progress.tool.label}</strong>
+              {progress.tool.connectionDisplayName ? <small>{progress.tool.connectionDisplayName}</small> : null}
+            </span>
+            <small>Running</small>
+          </div>
+        ) : null,
+      )}
+      <div className="synapse-message-bubble">
+        <Loader2 className="spin" size={15} /> {latest?.message ?? "Claude is working across this branch…"}
+      </div>
+    </div>
   );
 }
 

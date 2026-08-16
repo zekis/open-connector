@@ -3,7 +3,7 @@ import type { ConnectionService, ConnectionSummary } from "../../connection-serv
 import type { ActionPolicySnapshot } from "../../core/action-policy.ts";
 import type { IActionRunner } from "../actions/action-runner.ts";
 import type { AgentChatExtension, AgentChatExtensionTool, AgentChatService } from "../chat/agent-chat-service.ts";
-import type { AgentChatResponse, AgentChatToolActivity } from "../chat/agent-chat-types.ts";
+import type { AgentChatProgressListener, AgentChatResponse, AgentChatToolActivity } from "../chat/agent-chat-types.ts";
 import type { ProviderPreviewContent, ProviderPreviewDescriptor } from "../previews/provider-preview.ts";
 import type {
   ISynapseStore,
@@ -21,6 +21,7 @@ import type {
   SynapseWorkspaceSummary,
 } from "./synapse-types.ts";
 
+import { AgentChatError } from "../chat/agent-chat-service.ts";
 import {
   createProviderPreviews,
   ProviderPreviewError,
@@ -248,7 +249,13 @@ export class SynapseService {
     return await this.save(workspace);
   }
 
-  async chat(workspaceId: string, nodeId: string, input: unknown, signal?: AbortSignal): Promise<SynapseWorkspace> {
+  async chat(
+    workspaceId: string,
+    nodeId: string,
+    input: unknown,
+    signal?: AbortSignal,
+    onProgress?: AgentChatProgressListener,
+  ): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
     const body = readObject(input, "Synapse chat message");
@@ -276,18 +283,30 @@ export class SynapseService {
       ...thread.messages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
     ];
 
+    const completedToolActivity: AgentChatToolActivity[] = [];
+    const reportProgress: AgentChatProgressListener = async (progress) => {
+      if (progress.phase === "tool_completed" && progress.tool?.activity) {
+        completedToolActivity.push(progress.tool.activity);
+      }
+      await onProgress?.(progress);
+    };
     try {
       const response = await this.options.agentChat.respondWithExtension(
         { messages: conversation, voiceMode: false },
         extension,
-        undefined,
+        reportProgress,
         signal,
       );
       await this.applyAgentResponse(workspace, selectedNode, thread, response);
       return await this.save(workspace);
     } catch (error) {
-      await this.save(workspace);
-      throw error;
+      await this.applyAgentResponse(
+        workspace,
+        selectedNode,
+        thread,
+        failedSynapseResponse(error, completedToolActivity),
+      );
+      return await this.save(workspace);
     }
   }
 
@@ -1297,6 +1316,40 @@ function graphActivity(toolName: string, input: unknown, ok: boolean, output: un
     input: boundedData(input),
     output: boundedData(output),
   };
+}
+
+function failedSynapseResponse(error: unknown, toolActivity: AgentChatToolActivity[]): AgentChatResponse {
+  const normalized =
+    error instanceof AgentChatError
+      ? error
+      : new AgentChatError("agent_chat_failed", "The agent stopped unexpectedly before completing this request.", 503);
+  const connectorFailure = [...toolActivity].reverse().find((activity) => !activity.ok);
+  const connectorMessage = connectorFailure ? toolActivityErrorMessage(connectorFailure.output) : undefined;
+  const content = [
+    "I couldn't complete this request.",
+    `**What went wrong:** ${normalized.message}`,
+    connectorMessage ? `**Last connector error:** ${connectorMessage}` : undefined,
+    toolActivity.length > 0
+      ? "The completed tool calls are preserved above so you can inspect the inputs and results."
+      : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n\n");
+  return {
+    status: "failed",
+    message: {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content,
+      createdAt: new Date().toISOString(),
+    },
+    toolActivity,
+  };
+}
+
+function toolActivityErrorMessage(output: unknown): string | undefined {
+  if (!isRecord(output) || !isRecord(output.error)) return undefined;
+  return typeof output.error.message === "string" ? output.error.message : undefined;
 }
 
 function readPosition(value: unknown): SynapsePosition {

@@ -383,6 +383,19 @@ export interface AgentChatProgress {
   phase: "tool_started" | "tool_completed";
   message: string;
   speech: string;
+  tool?: AgentChatProgressTool;
+}
+
+export interface AgentChatProgressTool {
+  id: string;
+  name: string;
+  type: AgentChatToolActivity["type"];
+  label: string;
+  actionId?: string;
+  connectionId?: string;
+  connectionDisplayName?: string;
+  input: unknown;
+  activity?: AgentChatToolActivity;
 }
 
 export interface AgentChatResponse {
@@ -572,6 +585,11 @@ export interface SynapseSelectionResult {
   workspace: SynapseWorkspace;
   resultNodeId: string;
 }
+
+export type SynapseChatStreamEvent =
+  | { type: "progress"; progress: AgentChatProgress }
+  | { type: "workspace"; workspace: SynapseWorkspace }
+  | { type: "error"; error: { code: string; message: string } };
 
 export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }

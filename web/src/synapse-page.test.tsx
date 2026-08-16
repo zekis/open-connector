@@ -1,10 +1,17 @@
-import type { ProviderDefinition, SynapseArtifactNode, SynapseProviderNode, SynapseWorkspace } from "./model";
+import type {
+  AgentChatProgress,
+  ProviderDefinition,
+  SynapseArtifactNode,
+  SynapseProviderNode,
+  SynapseWorkspace,
+} from "./model";
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   fitCanvasView,
   appendSynapseUserMessage,
+  mergeSynapseProgress,
   panNodeIntoView,
   SynapseApprovalNodeCard,
   SynapseNodeCard,
@@ -12,6 +19,37 @@ import {
   synapseApprovalItems,
   zoomCanvasView,
 } from "./synapse-page";
+
+describe("mergeSynapseProgress", () => {
+  it("replaces a running tool call with its completed result without losing other calls", () => {
+    const first: AgentChatProgress = {
+      id: "call-1",
+      phase: "tool_started",
+      message: "Running query",
+      speech: "Running query",
+      tool: { id: "call-1", name: "run_connector_action", type: "action", label: "query", input: {} },
+    };
+    const second: AgentChatProgress = {
+      id: "call-2",
+      phase: "tool_started",
+      message: "Running another query",
+      speech: "Running another query",
+    };
+    const completed: AgentChatProgress = {
+      ...first,
+      phase: "tool_completed",
+      message: "Query complete",
+      tool: {
+        ...first.tool!,
+        activity: { id: "activity-1", type: "action", label: "query", ok: true, input: {}, output: {} },
+      },
+    };
+
+    const result = mergeSynapseProgress(mergeSynapseProgress([first], second), completed);
+
+    expect(result).toEqual([completed, second]);
+  });
+});
 
 const provider: ProviderDefinition = {
   service: "outlook",
