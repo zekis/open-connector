@@ -10,7 +10,7 @@ import {
   requiredString,
 } from "../../core/cast.ts";
 import { encodePathSegment } from "../../core/request.ts";
-import { ProviderRequestError } from "../provider-runtime.ts";
+import { ProviderRequestError, readTransitFileInput } from "../provider-runtime.ts";
 import {
   azureDevOpsJsonRequest,
   azureDevOpsProjectPath,
@@ -160,6 +160,55 @@ export const azureDevOpsWorkItemActionHandlers: Record<string, AzureDevOpsAction
       },
     );
     return { workItem: response.body };
+  },
+
+  async add_work_item_attachment(input, deps) {
+    const organization = resolveAzureDevOpsOrganization(input, deps);
+    const project = requiredString(input.project, "project");
+    const id = requiredPositiveInteger(input.id, "id");
+    const file = await readTransitFileInput(input.file, deps);
+    const upload = await azureDevOpsJsonRequest<Record<string, unknown>>(
+      organization,
+      azureDevOpsProjectPath(project, "_apis/wit/attachments"),
+      deps,
+      {
+        method: "POST",
+        contentType: "application/octet-stream",
+        query: { fileName: file.name },
+        rawBody: file.file,
+      },
+    );
+    const attachmentUrl = requiredString(upload.body.url, "attachment.url", providerResponseError);
+    const patch: JsonPatchOperation[] = [];
+    const revision = optionalInteger(input.revision);
+    if (revision !== undefined) {
+      patch.push({ op: "test", path: "/rev", value: revision });
+    }
+    const comment = optionalString(input.comment);
+    patch.push({
+      op: "add",
+      path: "/relations/-",
+      value: {
+        rel: "AttachedFile",
+        url: attachmentUrl,
+        attributes: comment === undefined ? {} : { comment },
+      },
+    });
+    const update = await azureDevOpsJsonRequest<Record<string, unknown>>(
+      organization,
+      azureDevOpsProjectPath(project, `_apis/wit/workitems/${id}`),
+      deps,
+      {
+        method: "PATCH",
+        contentType: "application/json-patch+json",
+        query: {
+          $expand: "All",
+          suppressNotifications: optionalBoolean(input.suppressNotifications),
+        },
+        body: patch,
+      },
+    );
+    return { attachment: upload.body, workItem: update.body };
   },
 
   async list_work_item_comments(input, deps) {

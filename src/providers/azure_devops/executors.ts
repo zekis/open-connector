@@ -25,12 +25,14 @@ export const executors: ProviderExecutors = defineProviderExecutors<AzureDevOpsR
     if (credential?.authType !== "api_key") {
       throw new ProviderRequestError(401, "Configure a personal access token for this provider first.");
     }
-    return {
+    const deps: AzureDevOpsRuntimeDeps = {
       authorization: createPatAuthorization(credential.apiKey),
       organization: requiredString(credential.values.organization, "organization"),
       fetcher,
       signal: context.signal,
     };
+    if (context.transitFiles) deps.transitFiles = context.transitFiles;
+    return deps;
   },
 });
 

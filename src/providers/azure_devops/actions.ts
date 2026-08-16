@@ -55,6 +55,55 @@ const repository = s.looseObject(
   { description: "Azure Repos Git repository." },
 );
 
+const gitRef = s.looseObject(
+  {
+    name: s.nonEmptyString("Full Git ref name, such as refs/heads/main."),
+    objectId: s.nonEmptyString("Commit or tag object ID at the ref tip."),
+    peeledObjectId: s.string("Commit object ID referenced by an annotated tag."),
+    isLocked: s.boolean("Whether the ref is locked."),
+    creator: rawObject,
+    url: s.url("Ref REST URL."),
+  },
+  { description: "Azure Repos branch or tag ref." },
+);
+
+const gitItem = s.looseObject(
+  {
+    objectId: s.nonEmptyString("Git object ID."),
+    commitId: s.nonEmptyString("Commit ID used to retrieve the item."),
+    path: s.nonEmptyString("Repository-relative item path."),
+    gitObjectType: s.string("Git object type, such as tree or blob."),
+    isFolder: s.boolean("Whether the item is a folder."),
+    isSymLink: s.boolean("Whether the item is a symbolic link."),
+    url: s.url("Item REST URL."),
+    contentMetadata: rawObject,
+    latestProcessedChange: rawObject,
+  },
+  { description: "Azure Repos file or folder metadata." },
+);
+
+const transitFile = s.object(
+  {
+    fileId: s.nonEmptyString("Local transit file identifier."),
+    downloadUrl: s.url("Local URL for downloading the repository archive."),
+    sizeBytes: s.nonNegativeInteger("Archive size in bytes."),
+    name: s.nonEmptyString("Archive filename."),
+    mimeType: s.nonEmptyString("Archive MIME type."),
+  },
+  {
+    required: ["fileId", "downloadUrl", "sizeBytes", "name", "mimeType"],
+    description: "Downloaded repository archive stored by the local transit file service.",
+  },
+);
+
+const workItemAttachment = s.looseObject(
+  {
+    id: s.nonEmptyString("Attachment ID."),
+    url: s.url("Azure DevOps attachment REST URL."),
+  },
+  { description: "Uploaded Azure DevOps work item attachment." },
+);
+
 const pullRequest = s.looseObject(
   {
     pullRequestId: s.positiveInteger("Pull request ID."),
@@ -116,6 +165,11 @@ const numericCursor = s.stringPattern("^\\d+$", {
   description: "Non-negative numeric cursor returned by the previous page.",
 });
 const opaqueCursor = s.nonEmptyString("Opaque continuation token returned by the previous page.");
+const gitVersion = s.nonEmptyString("Branch name, tag name, or commit SHA. Defaults to the repository default branch.");
+const gitVersionType = s.stringEnum(["branch", "tag", "commit"], {
+  description: "How Azure DevOps should interpret version. Used only when version is provided.",
+});
+const repositoryPath = s.nonEmptyString("Repository path beginning with /. Defaults to the repository root.");
 const expandWorkItem = s.stringEnum(["None", "Relations", "Fields", "Links", "All"], {
   description: "Additional work item data to expand.",
 });
@@ -151,6 +205,97 @@ const actions: AzureDevOpsActionSource[] = [
     [azureDevOpsPermissions.codeRead],
     actionInput({ organization, project: projectIdOrName, includeHidden: s.boolean("Include hidden repositories.") }),
     actionOutput({ repositories: s.array(repository, { description: "Azure Repos repositories." }) }),
+  ),
+  action(
+    "list_git_refs",
+    "List branches, tags, or other Git refs in an Azure Repos repository.",
+    [azureDevOpsPermissions.codeRead],
+    actionInput(
+      {
+        organization,
+        project: projectIdOrName,
+        repository: repositoryIdOrName,
+        filter: s.nonEmptyString("Ref prefix filter, such as heads/ or tags/. Azure DevOps prepends refs/."),
+        filterContains: s.nonEmptyString("Return refs whose names contain this text."),
+        top: s.integer("Maximum refs to return.", { minimum: 1, maximum: 1000 }),
+        cursor: opaqueCursor,
+      },
+      ["project", "repository"],
+    ),
+    collectionOutput("refs", gitRef, "Azure Repos Git refs."),
+  ),
+  action(
+    "list_repository_items",
+    "Browse files and folders in an Azure Repos repository at a branch, tag, or commit.",
+    [azureDevOpsPermissions.codeRead],
+    actionInput(
+      {
+        organization,
+        project: projectIdOrName,
+        repository: repositoryIdOrName,
+        scopePath: repositoryPath,
+        recursionLevel: s.stringEnum(["none", "oneLevel", "oneLevelPlusNestedEmptyFolders", "full"], {
+          description: "How deeply to enumerate repository items. Defaults to oneLevel.",
+        }),
+        version: gitVersion,
+        versionType: gitVersionType,
+        includeContentMetadata: s.boolean("Include file content type, extension, encoding, and binary metadata."),
+        latestProcessedChange: s.boolean("Include the latest commit known to have changed each item."),
+        maxItems: s.integer("Maximum items to return from the retrieved tree.", { minimum: 1, maximum: 2000 }),
+      },
+      ["project", "repository"],
+    ),
+    actionOutput({
+      items: s.array(gitItem, { description: "Repository files and folders." }),
+      totalCount: s.nonNegativeInteger("Total items returned by Azure DevOps before the local result limit."),
+      truncated: s.boolean("Whether more items existed than maxItems allowed in this result."),
+    }),
+  ),
+  action(
+    "read_repository_file",
+    "Read a bounded line range from a text file in an Azure Repos repository at a branch, tag, or commit.",
+    [azureDevOpsPermissions.codeRead],
+    actionInput(
+      {
+        organization,
+        project: projectIdOrName,
+        repository: repositoryIdOrName,
+        path: s.nonEmptyString("Repository file path beginning with /."),
+        version: gitVersion,
+        versionType: gitVersionType,
+        startLine: s.positiveInteger("One-based first line to return. Defaults to 1."),
+        lineCount: s.integer("Maximum lines to return. Defaults to 500.", { minimum: 1, maximum: 2000 }),
+        resolveLfs: s.boolean("Resolve a Git LFS pointer and return the referenced text content when possible."),
+      },
+      ["project", "repository", "path"],
+    ),
+    actionOutput({
+      item: gitItem,
+      content: s.string("Requested source-code text range."),
+      startLine: s.positiveInteger("One-based first returned line."),
+      endLine: s.nonNegativeInteger("One-based final returned line."),
+      totalLines: s.nonNegativeInteger("Total lines in the repository file."),
+      nextStartLine: s.nullableInteger("Next one-based line to request, or null when the end was reached."),
+      truncated: s.boolean("Whether additional lines remain after this response."),
+    }),
+  ),
+  action(
+    "download_repository_archive",
+    "Download a ZIP snapshot of an Azure Repos repository path at a branch, tag, or commit for checkout-like offline use.",
+    [azureDevOpsPermissions.codeRead],
+    actionInput(
+      {
+        organization,
+        project: projectIdOrName,
+        repository: repositoryIdOrName,
+        scopePath: repositoryPath,
+        version: gitVersion,
+        versionType: gitVersionType,
+        zipForUnix: s.boolean("Preserve POSIX executable and symbolic-link metadata in the ZIP archive."),
+      },
+      ["project", "repository"],
+    ),
+    actionOutput({ archive: transitFile }),
   ),
   action(
     "list_pull_requests",
@@ -287,6 +432,24 @@ const actions: AzureDevOpsActionSource[] = [
     [azureDevOpsPermissions.workWrite],
     updateWorkItemInput,
     actionOutput({ workItem }),
+  ),
+  action(
+    "add_work_item_attachment",
+    "Upload an image or other file and attach it to an existing Azure DevOps work item.",
+    [azureDevOpsPermissions.workWrite],
+    actionInput(
+      {
+        organization,
+        project: projectIdOrName,
+        id: workItemId,
+        file: s.transitFile("Image or other file uploaded through POST /api/files."),
+        comment: s.string("Optional comment shown with the work item attachment."),
+        revision: s.positiveInteger("Expected current work item revision for optimistic concurrency."),
+        suppressNotifications: s.boolean("Suppress work item notification delivery for this attachment."),
+      },
+      ["project", "id", "file"],
+    ),
+    actionOutput({ attachment: workItemAttachment, workItem }),
   ),
   action(
     "list_work_item_comments",

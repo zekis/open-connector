@@ -10,7 +10,8 @@ const service = "azure_devops";
 export const provider: ProviderDefinition = {
   service,
   displayName: "Azure DevOps",
-  description: "Work with Azure DevOps projects, repositories, pull requests, PBIs, bugs, and other work items.",
+  description:
+    "Work with Azure DevOps projects, repository source code, branches, pull requests, PBIs, bugs, and other work items.",
   categories: ["Developer Tools", "Productivity"],
   authTypes: ["api_key"],
   auth: [

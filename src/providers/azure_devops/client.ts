@@ -1,3 +1,4 @@
+import type { TransitFileWriter } from "../../core/types.ts";
 import type { ApiKeyProviderContext } from "../provider-runtime.ts";
 
 import { optionalString, requiredRecord } from "../../core/cast.ts";
@@ -11,6 +12,7 @@ const maxAzureDevOpsErrorBytes = 1024 * 1024;
 export interface AzureDevOpsRuntimeDeps extends Pick<ApiKeyProviderContext, "fetcher" | "signal"> {
   authorization: string;
   organization: string;
+  transitFiles?: TransitFileWriter;
 }
 
 export type AzureDevOpsActionHandler = (
@@ -22,7 +24,9 @@ export interface AzureDevOpsRequestOptions {
   method?: "GET" | "POST" | "PATCH";
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
+  rawBody?: BodyInit;
   contentType?: string;
+  accept?: string;
 }
 
 export interface AzureDevOpsJsonResponse<T> {
@@ -56,59 +60,7 @@ export async function azureDevOpsJsonRequest<T>(
   deps: AzureDevOpsRuntimeDeps,
   options: AzureDevOpsRequestOptions = {},
 ): Promise<AzureDevOpsJsonResponse<T>> {
-  const baseUrl = `${azureDevOpsOrigin}/${encodePathSegment(organization)}/`;
-  const url = new URL(path.replace(/^\/+/u, ""), baseUrl);
-  if (url.origin !== azureDevOpsOrigin || !url.pathname.startsWith(`/${encodePathSegment(organization)}/`)) {
-    throw new ProviderRequestError(400, "Azure DevOps request path is invalid.");
-  }
-  return azureDevOpsJsonUrlRequest<T>(url, deps, options);
-}
-
-/** Read and validate Azure DevOps' standard collection envelope. */
-export function readAzureDevOpsCollection(value: unknown, fieldName: string): Array<Record<string, unknown>> {
-  const payload = requiredRecord(value, `${fieldName} response`, (message) => new ProviderRequestError(502, message));
-  if (!Array.isArray(payload.value)) {
-    throw new ProviderRequestError(502, `${fieldName} response is missing its value array.`);
-  }
-  return payload.value.map((item) =>
-    requiredRecord(item, `${fieldName} item`, (message) => new ProviderRequestError(502, message)),
-  );
-}
-
-async function azureDevOpsJsonUrlRequest<T>(
-  url: URL,
-  deps: AzureDevOpsRuntimeDeps,
-  options: AzureDevOpsRequestOptions,
-): Promise<AzureDevOpsJsonResponse<T>> {
-  if (url.origin !== azureDevOpsOrigin) {
-    throw new ProviderRequestError(400, "Azure DevOps requests must target an official Azure DevOps Services host.");
-  }
-  if (!url.searchParams.has("api-version")) {
-    url.searchParams.set("api-version", "7.1");
-  }
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (value !== undefined) {
-      url.searchParams.set(key, String(value));
-    }
-  }
-
-  const headers = new Headers({
-    accept: "application/json",
-    authorization: deps.authorization,
-  });
-  if (options.body !== undefined) {
-    headers.set("content-type", options.contentType ?? "application/json");
-  }
-  const response = await deps.fetcher(url, {
-    method: options.method ?? (options.body === undefined ? "GET" : "POST"),
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    signal: deps.signal,
-  });
-  if (!response.ok) {
-    await throwAzureDevOpsResponseError(response);
-  }
-
+  const response = await azureDevOpsRequest(organization, path, deps, options);
   const bytes = await readBoundedResponseBytes(response, {
     maxBytes: maxAzureDevOpsJsonBytes,
     fieldName: "Azure DevOps JSON response",
@@ -126,6 +78,61 @@ async function azureDevOpsJsonUrlRequest<T>(
   } catch (error) {
     throw new ProviderRequestError(502, "Azure DevOps returned invalid JSON.", error);
   }
+}
+
+/** Request one resource from the Azure DevOps Services organization API. */
+export async function azureDevOpsRequest(
+  organization: string,
+  path: string,
+  deps: AzureDevOpsRuntimeDeps,
+  options: AzureDevOpsRequestOptions = {},
+): Promise<Response> {
+  if (options.body !== undefined && options.rawBody !== undefined) {
+    throw new ProviderRequestError(400, "Azure DevOps requests cannot include both JSON and raw bodies.");
+  }
+  const baseUrl = `${azureDevOpsOrigin}/${encodePathSegment(organization)}/`;
+  const url = new URL(path.replace(/^\/+/u, ""), baseUrl);
+  if (url.origin !== azureDevOpsOrigin || !url.pathname.startsWith(`/${encodePathSegment(organization)}/`)) {
+    throw new ProviderRequestError(400, "Azure DevOps request path is invalid.");
+  }
+  if (!url.searchParams.has("api-version")) {
+    url.searchParams.set("api-version", "7.1");
+  }
+  for (const [key, value] of Object.entries(options.query ?? {})) {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  const headers = new Headers({
+    accept: options.accept ?? "application/json",
+    authorization: deps.authorization,
+  });
+  const hasBody = options.body !== undefined || options.rawBody !== undefined;
+  if (hasBody) {
+    headers.set("content-type", options.contentType ?? "application/json");
+  }
+  const response = await deps.fetcher(url, {
+    method: options.method ?? (hasBody ? "POST" : "GET"),
+    headers,
+    body: options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
+    signal: deps.signal,
+  });
+  if (!response.ok) {
+    await throwAzureDevOpsResponseError(response);
+  }
+  return response;
+}
+
+/** Read and validate Azure DevOps' standard collection envelope. */
+export function readAzureDevOpsCollection(value: unknown, fieldName: string): Array<Record<string, unknown>> {
+  const payload = requiredRecord(value, `${fieldName} response`, (message) => new ProviderRequestError(502, message));
+  if (!Array.isArray(payload.value)) {
+    throw new ProviderRequestError(502, `${fieldName} response is missing its value array.`);
+  }
+  return payload.value.map((item) =>
+    requiredRecord(item, `${fieldName} item`, (message) => new ProviderRequestError(502, message)),
+  );
 }
 
 async function throwAzureDevOpsResponseError(response: Response): Promise<never> {
