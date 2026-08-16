@@ -292,6 +292,9 @@ export class ConnectServer {
       app.delete("/api/synapses/:id/nodes/:nodeId", (context) =>
         this.deleteSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
       );
+      app.post("/api/synapses/:id/nodes/:nodeId/continue", (context) =>
+        this.continueSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
       app.get("/api/synapses/:id/nodes/:nodeId/previews/:previewId", (context) =>
         this.getSynapsePreview(
           context,
@@ -1099,6 +1102,13 @@ export class ConnectServer {
 
   private async deleteSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
     return await this.writeSynapseResult(context, this.options.synapse!.deleteNode(id, nodeId));
+  }
+
+  private async continueSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(
+      context,
+      this.options.synapse!.continueNodeInNewWorkspace(id, nodeId, await readJsonBody(context)),
+    );
   }
 
   private async getSynapsePreview(context: Context, id: string, nodeId: string, previewId: string): Promise<Response> {

@@ -373,6 +373,53 @@ describe("SynapseService", () => {
     ]);
   });
 
+  it("continues one node and its conversation in a new independent canvas", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const source = await service.create({ name: "YardCraft operations" });
+    const seeded = await service.addNode(source.id, {
+      kind: "artifact",
+      artifactKind: "task",
+      title: "Close YardCraft tickets",
+      content: "Review the selected tickets before closing them.",
+      position: { x: 460, y: -120 },
+    });
+    const sourceNode = seeded.nodes[0]!;
+    await service.chat(source.id, sourceNode.id, { content: "Which tickets are safe to close?" });
+
+    const result = await service.continueNodeInNewWorkspace(source.id, sourceNode.id, {});
+
+    expect(result.workspace).toMatchObject({
+      name: "Close YardCraft tickets · continuation",
+      nodes: [
+        expect.objectContaining({
+          id: result.resultNodeId,
+          kind: "artifact",
+          title: "Close YardCraft tickets",
+          position: { x: 120, y: 120 },
+        }),
+      ],
+      edges: [],
+    });
+    expect(result.resultNodeId).not.toBe(sourceNode.id);
+    expect(result.workspace.threads[0]).toMatchObject({
+      nodeId: result.resultNodeId,
+      messages: [
+        expect.objectContaining({ role: "user", content: "Which tickets are safe to close?" }),
+        expect.objectContaining({ role: "assistant" }),
+      ],
+    });
+    expect(result.workspace.threads[0]).not.toHaveProperty("pendingApprovalId");
+    expect(result.workspace.threads[0]).not.toHaveProperty("pendingApprovalIds");
+    expect((await service.get(source.id)).nodes[0]).toMatchObject({
+      id: sourceNode.id,
+      position: { x: 460, y: -120 },
+    });
+    expect(await service.list()).toHaveLength(2);
+  });
+
   it("streams tool progress and preserves a readable assistant failure after an agent timeout", async () => {
     const completedActivity = {
       id: "azure-devops-activity",
@@ -808,6 +855,71 @@ describe("SynapseService", () => {
         expect.objectContaining({ sourceNodeId: approvedProvider.id, targetNodeId: resultArtifact.id }),
       ]),
     );
+  });
+
+  it("groups an approved action batch under one provider source node", async () => {
+    const approvalIds = ["approval-1", "approval-2"];
+    const waiting = waitingResponse(approvalIds[0]!, approvalIds);
+    waiting.toolActivity = approvalIds.map((approvalId, index) => ({
+      id: `pending-${index + 1}`,
+      type: "action" as const,
+      label: "azure_devops.update_work_item",
+      ok: false,
+      actionId: "azure_devops.update_work_item",
+      connectionId: "azure-devops-1",
+      approvalId,
+      input: { id: 194047 + index, state: "Done" },
+      output: { error: { code: "approval_pending" } },
+    }));
+    const completed = completedResponse(
+      approvalIds.map((approvalId, index) => ({
+        id: `completed-${index + 1}`,
+        type: "action" as const,
+        label: "azure_devops.update_work_item",
+        ok: true,
+        actionId: "azure_devops.update_work_item",
+        connectionId: "azure-devops-1",
+        approvalId,
+        input: { id: 194047 + index, state: "Done" },
+        output: { id: 194047 + index, title: `Ticket ${194047 + index}`, state: "Done" },
+      })),
+    );
+    let resolved = false;
+    const service = createService({
+      respondWithExtension: vi.fn(async () => waiting),
+      getApprovalResult: vi.fn(async (approvalId: string) =>
+        resolved ? { approvalId, status: "consumed" as const, response: completed } : pendingApproval(approvalId),
+      ),
+    });
+    const workspace = await service.create({ name: "Bulk ticket closure" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+    const source = seeded.nodes[0]!;
+    await service.chat(workspace.id, source.id, { content: "Close both tickets." });
+
+    resolved = true;
+    const result = await service.syncPendingApproval(workspace.id, source.id);
+
+    const providers = result.nodes.filter((node) => node.kind === "provider");
+    expect(providers).toHaveLength(2);
+    const batchProvider = providers.find((node) => node.id !== source.id)!;
+    expect(batchProvider).toMatchObject({
+      connectionId: "azure-devops-1",
+      instructions: "Completed 2 approved actions in this batch.",
+    });
+    const completedArtifacts = result.nodes.filter(
+      (node) => node.kind === "artifact" && node.sourceConnectionId === "azure-devops-1",
+    );
+    expect(completedArtifacts).toHaveLength(2);
+    expect(
+      result.edges.filter(
+        (edge) =>
+          edge.sourceNodeId === batchProvider.id && completedArtifacts.some((node) => node.id === edge.targetNodeId),
+      ),
+    ).toHaveLength(2);
   });
 
   it("stores every approval queued by one node conversation", async () => {

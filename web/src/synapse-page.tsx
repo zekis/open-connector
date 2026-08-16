@@ -25,6 +25,7 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  CopyPlus,
   ExternalLink,
   File,
   FileImage,
@@ -362,6 +363,26 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     setSelectedNodeIds((current) => current.filter((selectedId) => selectedId !== nodeId));
   }
 
+  async function continueNodeInNewCanvas(nodeId: string): Promise<void> {
+    if (!workspace) return;
+    setError(undefined);
+    try {
+      const result = await apiPost<SynapseSelectionResult>(
+        `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(nodeId)}/continue`,
+        {},
+      );
+      applyWorkspace(result.workspace);
+      setSelectedNodeId(result.resultNodeId);
+      setSelectedApprovalId(undefined);
+      setSelectedNodeIds([]);
+      setLinkingFrom(undefined);
+      setFitRequest((current) => current + 1);
+      props.onRefresh();
+    } catch (caught) {
+      setError(messageFrom(caught, "Could not continue this node in a new canvas."));
+    }
+  }
+
   async function saveWorkspace(): Promise<void> {
     if (!workspace || savingWorkspace) return;
     const name = workspaceNameDraft.trim();
@@ -656,6 +677,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
             node={selectedNode}
             provider={selectedNode.kind === "provider" ? providersByService.get(selectedNode.service) : undefined}
             onClose={() => setSelectedNodeId(undefined)}
+            onContinue={() => void continueNodeInNewCanvas(selectedNode.id)}
             onDelete={() => void deleteNode(selectedNode.id)}
             onLink={() => setLinkingFrom(selectedNode.id)}
             onWorkspaceChange={applyWorkspace}
@@ -721,6 +743,10 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
           onConnect={(nodeId) => {
             setLinkingFrom(nodeId);
             setContextMenu(undefined);
+          }}
+          onContinue={(nodeId) => {
+            setContextMenu(undefined);
+            void continueNodeInNewCanvas(nodeId);
           }}
           onAutoSize={(nodeId) => {
             setContextMenu(undefined);
@@ -1580,6 +1606,7 @@ function SynapseNodePanel(props: {
   provider?: ProviderDefinition;
   onWorkspaceChange(workspace: SynapseWorkspace): void;
   onClose(): void;
+  onContinue(): void;
   onDelete(): void;
   onLink(): void;
   onRefresh(): void;
@@ -1674,6 +1701,9 @@ function SynapseNodePanel(props: {
         </Button>
       </header>
       <div className="synapse-panel-actions">
+        <Button variant="ghost" size="sm" onClick={props.onContinue}>
+          <CopyPlus size={14} /> Continue in new canvas
+        </Button>
         <Button variant="ghost" size="sm" onClick={props.onLink}>
           <GitBranch size={14} /> Connect
         </Button>
@@ -1816,6 +1846,7 @@ function SynapseContextMenu(props: {
   onAddProvider(placement: NewNodePlacement): void;
   onAddArtifact(placement: NewNodePlacement): void;
   onConnect(nodeId: string): void;
+  onContinue(nodeId: string): void;
   onAutoSize(nodeId: string): void;
   onAutoArrange(): void;
   onDelete(nodeId: string): void;
@@ -1839,7 +1870,7 @@ function SynapseContextMenu(props: {
   }, [props.onClose]);
 
   const menuWidth = 236;
-  const menuHeight = props.targetNode ? 332 : props.selectedNode ? 252 : 154;
+  const menuHeight = props.targetNode ? 368 : props.selectedNode ? 288 : 154;
   const left = Math.max(8, Math.min(props.request.clientX, window.innerWidth - menuWidth - 8));
   const top = Math.max(8, Math.min(props.request.clientY, window.innerHeight - menuHeight - 8));
   const placement = {
@@ -1862,6 +1893,9 @@ function SynapseContextMenu(props: {
           <button type="button" role="menuitem" onClick={() => props.onConnect(props.targetNode!.id)}>
             <GitBranch size={15} /> Connect to another node
           </button>
+          <button type="button" role="menuitem" onClick={() => props.onContinue(props.targetNode!.id)}>
+            <CopyPlus size={15} /> Continue in new canvas
+          </button>
           <button type="button" role="menuitem" onClick={() => props.onAutoSize(props.targetNode!.id)}>
             <Sparkles size={15} /> Auto-size node
           </button>
@@ -1882,9 +1916,14 @@ function SynapseContextMenu(props: {
       </button>
       {props.targetNode || props.selectedNode ? <div className="synapse-context-separator" /> : null}
       {!props.targetNode && props.selectedNode ? (
-        <button type="button" role="menuitem" onClick={() => props.onAutoSize(props.selectedNode!.id)}>
-          <Sparkles size={15} /> Auto-size selected node
-        </button>
+        <>
+          <button type="button" role="menuitem" onClick={() => props.onContinue(props.selectedNode!.id)}>
+            <CopyPlus size={15} /> Continue in new canvas
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onAutoSize(props.selectedNode!.id)}>
+            <Sparkles size={15} /> Auto-size selected node
+          </button>
+        </>
       ) : null}
       {props.targetNode || props.selectedNode ? (
         <button

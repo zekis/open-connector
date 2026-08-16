@@ -230,6 +230,52 @@ export class SynapseService {
     return await this.save(workspace);
   }
 
+  async continueNodeInNewWorkspace(
+    workspaceId: string,
+    nodeId: string,
+    input: unknown,
+  ): Promise<SynapseSelectionResult> {
+    const sourceWorkspace = await this.requiredWorkspace(workspaceId);
+    const sourceNode = requiredNode(sourceWorkspace, nodeId);
+    const sourceThread = sourceWorkspace.threads.find((thread) => thread.nodeId === nodeId);
+    if (sourceThread && pendingApprovalIds(sourceThread).length > 0) {
+      throw new SynapseError(
+        "synapse_waiting_for_approval",
+        "Resolve this node's queued approvals before continuing it in a new canvas.",
+        409,
+      );
+    }
+    const body = readObject(input, "Synapse continuation");
+    const now = new Date().toISOString();
+    const continuedNodeId = crypto.randomUUID();
+    const continuedNode: SynapseNode = {
+      ...structuredClone(sourceNode),
+      id: continuedNodeId,
+      position: { x: 120, y: 120 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace: SynapseWorkspace = {
+      id: crypto.randomUUID(),
+      name: optionalText(body.name, "name", maximumWorkspaceNameCharacters) ?? continuationName(sourceNode.title),
+      nodes: [continuedNode],
+      edges: [],
+      threads: sourceThread
+        ? [
+            {
+              nodeId: continuedNodeId,
+              messages: structuredClone(sourceThread.messages),
+              updatedAt: now,
+            },
+          ]
+        : [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.options.store.setWorkspace(workspace);
+    return { workspace: this.presentWorkspace(workspace), resultNodeId: continuedNodeId };
+  }
+
   async addEdge(workspaceId: string, input: unknown): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse connection");
@@ -631,7 +677,13 @@ export class SynapseService {
     const hasCuratedArtifacts = activities.some(
       (activity) => activity.ok && activity.actionId === "synapse_add_artifacts",
     );
-    let approvedProvider: SynapseProviderNode | undefined;
+    const approvedProviders = new Map<string, SynapseProviderNode>();
+    const approvedActionCounts = new Map<string, number>();
+    for (const activity of activities) {
+      if (isResolvedApprovalAction(activity, resolvedApprovalIds, legacyApprovedActions) && activity.connectionId) {
+        approvedActionCounts.set(activity.connectionId, (approvedActionCounts.get(activity.connectionId) ?? 0) + 1);
+      }
+    }
     for (const activity of activities) {
       if (
         activity.type !== "action" ||
@@ -642,14 +694,7 @@ export class SynapseService {
       ) {
         continue;
       }
-      const isApprovedAction = Boolean(
-        activity.ok &&
-        ((activity.approvalId && resolvedApprovalIds.has(activity.approvalId)) ||
-          (!activity.approvalId &&
-            legacyApprovedActions.some(
-              (pending) => pending.actionId === activity.actionId && pending.connectionId === activity.connectionId,
-            ))),
-      );
+      const isApprovedAction = isResolvedApprovalAction(activity, resolvedApprovalIds, legacyApprovedActions);
       if (activity.approvalId && !isApprovedAction) continue;
       if (
         !isApprovedAction &&
@@ -659,17 +704,25 @@ export class SynapseService {
       }
       if (hasCuratedArtifacts && !isApprovedAction) continue;
       let connection = isApprovedAction
-        ? approvedProvider
+        ? approvedProviders.get(activity.connectionId)
         : providerNodeForBranch(workspace, selectedNode, activity.connectionId);
       if (!connection) {
+        const approvedActionCount = approvedActionCounts.get(activity.connectionId) ?? 1;
         connection = await this.addProviderNode(
           workspace,
           activity.connectionId,
           nextFanPosition(workspace, selectedNode, "provider", automaticProviderSize(undefined, undefined)),
-          isApprovedAction ? { instructions: `Completed ${humanize(activity.actionId)}.` } : {},
+          isApprovedAction
+            ? {
+                instructions:
+                  approvedActionCount === 1
+                    ? `Completed ${humanize(activity.actionId)}.`
+                    : `Completed ${approvedActionCount} approved actions in this batch.`,
+              }
+            : {},
         );
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
-        if (isApprovedAction) approvedProvider = connection;
+        if (isApprovedAction) approvedProviders.set(activity.connectionId, connection);
       }
       if (hasCuratedArtifacts) continue;
       const parent = connection;
@@ -978,6 +1031,21 @@ function previewDescriptors(workspaceId: string, node: SynapseArtifactNode): Pro
     contentUrl: (previewId) =>
       `/api/synapses/${encodeURIComponent(workspaceId)}/nodes/${encodeURIComponent(node.id)}/previews/${encodeURIComponent(previewId)}`,
   });
+}
+
+function isResolvedApprovalAction(
+  activity: AgentChatToolActivity,
+  resolvedApprovalIds: Set<string>,
+  legacyApprovedActions: AgentChatToolActivity[],
+): boolean {
+  return Boolean(
+    activity.ok &&
+    ((activity.approvalId && resolvedApprovalIds.has(activity.approvalId)) ||
+      (!activity.approvalId &&
+        legacyApprovedActions.some(
+          (pending) => pending.actionId === activity.actionId && pending.connectionId === activity.connectionId,
+        ))),
+  );
 }
 
 function artifactCandidates(
@@ -1522,6 +1590,11 @@ function pendingApprovalIds(thread: SynapseThread): string[] {
 
 function responseApprovalIds(response: AgentChatResponse): string[] {
   return [...new Set([...(response.approvalIds ?? []), ...(response.approvalId ? [response.approvalId] : [])])];
+}
+
+function continuationName(nodeTitle: string): string {
+  const suffix = " · continuation";
+  return `${nodeTitle.slice(0, maximumWorkspaceNameCharacters - suffix.length).trim()}${suffix}`;
 }
 
 function requiredNode(workspace: SynapseWorkspace, nodeId: string): SynapseNode {
