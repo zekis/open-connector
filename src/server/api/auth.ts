@@ -8,9 +8,11 @@ import { jsonError } from "./http-utils.ts";
 
 const bearerScheme = "bearer";
 const authCookieName = "oomol_connect_admin_session";
+const mobileAuthCookieName = "oomol_connect_mobile_session";
 const authCookieVersion = "v1";
 const authCookieMaxAgeSeconds = 2_592_000;
 const authCookieMaxAgeMs = authCookieMaxAgeSeconds * 1000;
+const mobileAuthCookieMaxAgeSeconds = 34_560_000;
 
 /**
  * Optional API authentication for HTTP, web console, and MCP callers.
@@ -20,6 +22,7 @@ export interface LocalAuthOptions {
   runtimeToken?: string;
   hasRuntimeTokens?(): Promise<boolean>;
   resolveRuntimeToken?(token: string): Promise<RuntimeGrant | undefined>;
+  resolveMobileToken?(token: string): Promise<unknown | undefined>;
   verifyRuntimeJwt?: RuntimeJwtVerifier;
 }
 
@@ -44,6 +47,7 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
     !runtimeToken &&
     !options.hasRuntimeTokens &&
     !options.resolveRuntimeToken &&
+    !options.resolveMobileToken &&
     !options.verifyRuntimeJwt
   ) {
     return async (_context, next) => {
@@ -105,6 +109,7 @@ function isPublicPath(path: string, method: string): boolean {
     path.startsWith("/oauth/callback/") ||
     (method === "GET" && path === "/api/auth/session") ||
     (method === "POST" && path === "/api/auth/logout") ||
+    (method === "POST" && path === "/api/mobile-auth/exchange") ||
     (method === "GET" && path.startsWith("/api/files/")) ||
     isConsoleShellRequest(path, method)
   );
@@ -116,7 +121,8 @@ export async function readLocalAuthSession(context: Context, options: LocalAuthO
     return { adminAuthConfigured: false, authenticated: true };
   }
 
-  const authenticated = await hasRequestToken(context, adminToken);
+  const authenticated =
+    (await hasRequestToken(context, adminToken)) || (await hasValidMobileSession(context, options, true));
   if (authenticated) {
     await installAdminCookieForBearer(context, options);
   }
@@ -134,6 +140,23 @@ export function clearLocalAuthCookie(context: Context): void {
     secure: context.req.url.startsWith("https://"),
     path: "/",
   });
+  deleteCookie(context, mobileAuthCookieName, {
+    httpOnly: true,
+    sameSite: "Strict",
+    secure: context.req.url.startsWith("https://"),
+    path: "/",
+  });
+}
+
+/** Installs the revocable, persistent browser credential issued by a mobile pairing. */
+export function installMobileAuthCookie(context: Context, token: string): void {
+  setCookie(context, mobileAuthCookieName, token, {
+    httpOnly: true,
+    maxAge: mobileAuthCookieMaxAgeSeconds,
+    sameSite: "Strict",
+    secure: context.req.url.startsWith("https://"),
+    path: "/",
+  });
 }
 
 async function installAdminCookieForBearer(context: Context, options: LocalAuthOptions): Promise<void> {
@@ -144,6 +167,9 @@ async function installAdminCookieForBearer(context: Context, options: LocalAuthO
 }
 
 async function hasValidToken(context: Context, options: LocalAuthOptions, scope: AuthScope): Promise<boolean> {
+  if (scope === "admin" && (await hasValidMobileSession(context, options))) {
+    return true;
+  }
   const token = tokenForScope(options, scope);
   if (!token) {
     if (scope === "admin") {
@@ -163,6 +189,17 @@ async function hasValidToken(context: Context, options: LocalAuthOptions, scope:
   }
 
   return scope === "runtime" ? await hasValidRuntimeToken(context, options) : false;
+}
+
+async function hasValidMobileSession(
+  context: Context,
+  options: LocalAuthOptions,
+  renewCookie = false,
+): Promise<boolean> {
+  const token = normalizeToken(getCookie(context, mobileAuthCookieName));
+  if (!token || !(await options.resolveMobileToken?.(token))) return false;
+  if (renewCookie) installMobileAuthCookie(context, token);
+  return true;
 }
 
 async function hasRequestToken(context: Context, token: string): Promise<boolean> {

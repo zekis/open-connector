@@ -17,5 +17,6 @@
 @import "./styles/triggers.css";
 @import "./styles/approvals.css";
 @import "./styles/access.css";
+@import "./styles/mobile.css";
 @import "./styles/resources.css";
 @import "./styles/unlock.css";

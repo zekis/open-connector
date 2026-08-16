@@ -1,0 +1,294 @@
+.mobile-page {
+  display: grid;
+  gap: 22px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.mobile-hero {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--brand) 18%, transparent), transparent 46%), var(--card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.mobile-kicker {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mobile-hero h2,
+.mobile-section-heading h3,
+.mobile-connect-panel h1 {
+  margin: 0;
+}
+
+.mobile-hero p,
+.mobile-section-heading p,
+.mobile-connect-panel p {
+  margin: 8px 0 0;
+  color: var(--muted-foreground);
+}
+
+.mobile-hero p {
+  max-width: 650px;
+  line-height: 1.65;
+}
+
+.mobile-security-note {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklab, var(--success) 34%, var(--border));
+  border-radius: 13px;
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 7%, var(--card));
+}
+
+.mobile-security-note div {
+  display: grid;
+  gap: 2px;
+}
+
+.mobile-security-note span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.mobile-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding-top: 4px;
+}
+
+.mobile-section-heading > span {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted-foreground);
+  background: var(--card);
+  font-size: 12px;
+}
+
+.mobile-device-list {
+  display: grid;
+  gap: 10px;
+}
+
+.mobile-device-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.mobile-device-icon {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid color-mix(in oklab, var(--brand) 35%, var(--border));
+  border-radius: 13px;
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 10%, var(--card));
+}
+
+.mobile-device-icon span {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.mobile-device-copy {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mobile-device-copy span,
+.mobile-device-copy small {
+  color: var(--muted-foreground);
+}
+
+.mobile-device-copy span {
+  font-size: 12px;
+}
+
+.mobile-device-copy small {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.mobile-empty {
+  display: grid;
+  place-items: center;
+  min-height: 190px;
+  padding: 32px;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.mobile-empty strong {
+  margin-top: 9px;
+  color: var(--foreground);
+}
+
+.mobile-empty span {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.mobile-pairing-dialog {
+  max-width: 480px;
+}
+
+.mobile-pairing-form {
+  display: grid;
+  gap: 22px;
+  padding-top: 8px;
+}
+
+.mobile-qr-stage {
+  display: grid;
+  gap: 13px;
+  justify-items: center;
+  padding-top: 8px;
+}
+
+.mobile-qr-frame {
+  display: grid;
+  place-items: center;
+  width: 258px;
+  height: 258px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 19px;
+  background: white;
+  box-shadow: 0 16px 42px color-mix(in oklab, black 16%, transparent);
+}
+
+.mobile-qr-frame.connected {
+  border-color: color-mix(in oklab, var(--success) 45%, var(--border));
+  background: color-mix(in oklab, var(--success) 7%, var(--card));
+}
+
+.mobile-qr-success {
+  display: grid;
+  gap: 10px;
+  place-items: center;
+  color: var(--success);
+  text-align: center;
+}
+
+.mobile-qr-success span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mobile-pairing-expiry {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.mobile-connect-screen {
+  display: grid;
+  min-height: 100dvh;
+  padding: 24px;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 25%, color-mix(in oklab, var(--brand) 17%, transparent), transparent 38%),
+    var(--background);
+}
+
+.mobile-connect-panel {
+  display: grid;
+  width: min(100%, 420px);
+  justify-items: center;
+  padding: 34px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 24px 70px color-mix(in oklab, black 20%, transparent);
+  text-align: center;
+}
+
+.mobile-connect-state {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  margin: 24px 0 16px;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 12%, var(--card));
+}
+
+.mobile-connect-panel.connected .mobile-connect-state {
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 12%, var(--card));
+}
+
+.mobile-connect-panel.failed .mobile-connect-state {
+  color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 12%, var(--card));
+}
+
+.mobile-connect-panel p {
+  margin-bottom: 20px;
+  line-height: 1.55;
+}
+
+@media (max-width: 700px) {
+  .mobile-hero {
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .mobile-hero > button {
+    width: 100%;
+  }
+
+  .mobile-device-card {
+    align-items: flex-start;
+  }
+
+  .mobile-device-copy small {
+    line-height: 1.45;
+  }
+}

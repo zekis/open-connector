@@ -50,6 +50,7 @@
     "approvals": "Approvals",
     "runs": "Runs",
     "access": "API Key",
+    "mobile": "Mobile",
     "docs": "Docs"
   },
   "shell": {
@@ -113,6 +114,10 @@
       "access": {
         "title": "API Key",
         "subtitle": "Manage runtime API tokens for agents and clients."
+      },
+      "mobile": {
+        "title": "Mobile",
+        "subtitle": "Connect and revoke trusted mobile browsers."
       },
       "resources": {
         "title": "Resources",

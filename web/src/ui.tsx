@@ -35,6 +35,7 @@ import {
   Moon,
   Newspaper,
   RefreshCw,
+  Smartphone,
   Sun,
   TerminalSquare,
   Zap,
@@ -53,6 +54,7 @@ import { FeedPageView } from "./feed-page";
 import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
+import { MobileConnectionPage, MobileConnectLanding } from "./mobile-connection-page";
 import { emptyData } from "./model";
 import { OverviewPage } from "./overview-page";
 import { ProvidersPage } from "./providers-page";
@@ -80,6 +82,7 @@ const navItems = [
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
   { path: "/runs", labelKey: "nav.runs", icon: Activity },
   { path: "/access", labelKey: "nav.access", icon: KeyRound },
+  { path: "/mobile", labelKey: "nav.mobile", icon: Smartphone },
   { path: "/resources", labelKey: "nav.docs", icon: BookOpen },
 ] as const;
 
@@ -232,6 +235,8 @@ export async function loadRuntimeData(
 
 export function App(): ReactNode {
   const t = useTranslate();
+  const location = useLocation();
+  const isMobileConnectLanding = location.pathname === "/mobile-connect";
   const { theme, setTheme } = useThemeMode();
   const [data, setData] = useState<AppData>(emptyData);
   const [authSession, setAuthSession] = useState<AuthSession>({
@@ -260,6 +265,11 @@ export function App(): ReactNode {
   );
 
   useEffect(() => {
+    if (isMobileConnectLanding) {
+      setLoading(false);
+      setRuntimeChecked(true);
+      return;
+    }
     let cancelled = false;
     const requestUnlockToken = pendingUnlockToken.current;
     setLoading(true);
@@ -307,7 +317,7 @@ export function App(): ReactNode {
     return () => {
       cancelled = true;
     };
-  }, [refreshToken, t]);
+  }, [isMobileConnectLanding, refreshToken, t]);
 
   function unlock(token: string): void {
     pendingUnlockToken.current = token;
@@ -326,6 +336,10 @@ export function App(): ReactNode {
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : t("shell.logoutFailed"));
       });
+  }
+
+  if (isMobileConnectLanding) {
+    return <MobileConnectLanding />;
   }
 
   if (locked) {
@@ -489,6 +503,7 @@ function AppShell(props: {
             <Route path="/flows" element={<FlowsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/triggers" element={<TriggersPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/approvals" element={<ApprovalsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/mobile" element={<MobileConnectionPage />} />
             <Route path="/flows/new" element={<FlowBuilderPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/flows/:flowId/edit"
@@ -675,6 +690,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "access") {
     return "access";
+  }
+  if (section === "mobile") {
+    return "mobile";
   }
   if (section === "resources") {
     return "resources";

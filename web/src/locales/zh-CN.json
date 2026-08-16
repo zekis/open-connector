@@ -50,6 +50,7 @@
     "approvals": "审批",
     "runs": "运行记录",
     "access": "API Key",
+    "mobile": "移动设备",
     "docs": "文档"
   },
   "shell": {
@@ -113,6 +114,10 @@
       "access": {
         "title": "API Key",
         "subtitle": "管理 agent 和客户端使用的运行时 API token。"
+      },
+      "mobile": {
+        "title": "移动设备",
+        "subtitle": "连接和撤销受信任的移动浏览器。"
       },
       "resources": {
         "title": "资源",

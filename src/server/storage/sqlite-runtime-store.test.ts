@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { MobileAuthService } from "../auth/mobile-auth-service.ts";
 import { AesGcmSecretCodec } from "../secrets/secret-codec.ts";
 import { RuntimeTokenService } from "./runtime-token-service.ts";
 import { SqliteRunLogStore, SqliteRuntimeDatabase } from "./sqlite-runtime-store.ts";
@@ -55,6 +56,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0013_connection_approvals.sql",
       "0014_feed.sql",
       "0015_synapse.sql",
+      "0016_mobile_auth.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -862,6 +864,28 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(tokens.listTokens()).resolves.toEqual([]);
     await expect(tokens.verifyToken(created.token)).resolves.toBe(false);
     await expect(tokens.revokeToken(created.record.id)).resolves.toBe(false);
+    database.close();
+  });
+
+  it("persists hashed mobile credentials and revokes connected devices", async () => {
+    const databasePath = await createDatabasePath();
+    const database = new SqliteRuntimeDatabase(databasePath);
+    const mobileAuth = new MobileAuthService(database.mobileAuthStore);
+    const pairing = await mobileAuth.createPairing("Work phone");
+    const exchanged = await mobileAuth.exchangePairing(pairing.code, "Mobile test browser");
+
+    expect(exchanged).toBeDefined();
+    await expectDatabaseDirectoryNotToContain(databasePath, pairing.code);
+    await expectDatabaseDirectoryNotToContain(databasePath, exchanged!.token);
+    await expect(mobileAuth.resolveDeviceToken(exchanged!.token)).resolves.toMatchObject({
+      id: exchanged!.device.id,
+      name: "Work phone",
+    });
+    await expect(mobileAuth.listDevices()).resolves.toMatchObject([
+      { id: exchanged!.device.id, lastUsedAt: expect.any(String) },
+    ]);
+    await expect(mobileAuth.revokeDevice(exchanged!.device.id)).resolves.toBe(true);
+    await expect(mobileAuth.resolveDeviceToken(exchanged!.token)).resolves.toBeUndefined();
     database.close();
   });
 

@@ -11,6 +11,8 @@ import { describe, expect, it } from "vitest";
 import {
   fitCanvasView,
   appendSynapseUserMessage,
+  isSynapseCardTarget,
+  isSynapseNodeControlTarget,
   mergeSynapseProgress,
   panNodeIntoView,
   SynapseApprovalNodeCard,
@@ -19,6 +21,34 @@ import {
   synapseApprovalItems,
   zoomCanvasView,
 } from "./synapse-page";
+
+describe("Synapse canvas pointer routing", () => {
+  it("keeps wheel input over a card out of canvas zoom", () => {
+    const cardContent = {
+      closest: (selector: string) => (selector === ".synapse-node" ? { id: "card" } : null),
+    };
+    const canvasBackground = { closest: () => null };
+
+    expect(isSynapseCardTarget(cardContent)).toBe(true);
+    expect(isSynapseCardTarget(canvasBackground)).toBe(false);
+  });
+
+  it("allows node content to drag while preserving independent controls", () => {
+    const markdownContent = {
+      closest: (selector: string) => (selector.includes(".synapse-node-markdown") ? { id: "markdown" } : null),
+    };
+    const button = {
+      closest: (selector: string) => (selector.includes("button") ? { id: "button" } : null),
+    };
+    const resizeHandle = {
+      closest: (selector: string) => (selector.includes(".synapse-node-resize") ? { id: "resize" } : null),
+    };
+
+    expect(isSynapseNodeControlTarget(markdownContent)).toBe(false);
+    expect(isSynapseNodeControlTarget(button)).toBe(true);
+    expect(isSynapseNodeControlTarget(resizeHandle)).toBe(true);
+  });
+});
 
 describe("mergeSynapseProgress", () => {
   it("replaces a running tool call with its completed result without losing other calls", () => {

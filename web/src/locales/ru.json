@@ -50,6 +50,7 @@
     "approvals": "Одобрения",
     "runs": "Запуски",
     "access": "API Key",
+    "mobile": "Мобильные",
     "docs": "Документы"
   },
   "shell": {
@@ -113,6 +114,10 @@
       "access": {
         "title": "API Key",
         "subtitle": "Управляйте runtime API token для агентов и клиентов."
+      },
+      "mobile": {
+        "title": "Мобильные",
+        "subtitle": "Подключение и отзыв доступа доверенных мобильных браузеров."
       },
       "resources": {
         "title": "Ресурсы",

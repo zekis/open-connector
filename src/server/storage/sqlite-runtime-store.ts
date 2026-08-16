@@ -9,6 +9,7 @@ import type {
   ConnectionActionPermission,
   IConnectionApprovalStore,
 } from "../approvals/connection-approval-types.ts";
+import type { IMobileAuthStore, MobileDeviceRecord, MobilePairingRecord } from "../auth/mobile-auth-service.ts";
 import type { FeedThread, IFeedStore } from "../feed/feed-types.ts";
 import type {
   FlowApproval,
@@ -100,6 +101,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly oauthClientConfigStore: SqliteOAuthClientConfigStore;
   readonly oauthStateStore: SqliteOAuthStateStore;
   readonly runtimeTokenStore: SqliteRuntimeTokenStore;
+  readonly mobileAuthStore: SqliteMobileAuthStore;
   readonly runtimePolicyStore: SqliteRuntimePolicyStore;
   readonly runLogStore: SqliteRunLogStore;
   readonly idempotencyStore: SqliteIdempotencyStore;
@@ -119,6 +121,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.oauthClientConfigStore = new SqliteOAuthClientConfigStore(this.database, this.secretCodec);
     this.oauthStateStore = new SqliteOAuthStateStore(this.database);
     this.runtimeTokenStore = new SqliteRuntimeTokenStore(this.database);
+    this.mobileAuthStore = new SqliteMobileAuthStore(this.database);
     this.runtimePolicyStore = new SqliteRuntimePolicyStore(this.database);
     this.runLogStore = new SqliteRunLogStore(this.database, options.runLimit ?? DEFAULT_RUN_LIMIT);
     this.idempotencyStore = new SqliteIdempotencyStore(this.database, this.secretCodec);
@@ -184,6 +187,8 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from oauth_client_configs;
       delete from oauth_states;
       delete from runtime_tokens;
+      delete from mobile_pairings;
+      delete from mobile_devices;
       delete from runtime_policy;
       delete from runs;
       delete from idempotency_records;
@@ -203,6 +208,118 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.database.exec("pragma journal_mode = wal;");
     runSqliteMigrations(this.database, logger);
   }
+}
+
+export class SqliteMobileAuthStore implements IMobileAuthStore {
+  private readonly database: DatabaseSync;
+
+  constructor(database: DatabaseSync) {
+    this.database = database;
+  }
+
+  async addPairing(record: MobilePairingRecord): Promise<void> {
+    this.database.prepare("delete from mobile_pairings where expires_at <= ?").run(record.createdAt);
+    this.database
+      .prepare(
+        `
+        insert into mobile_pairings (id, name, code_hash, created_at, expires_at)
+        values (?, ?, ?, ?, ?)
+      `,
+      )
+      .run(record.id, record.name, record.codeHash, record.createdAt, record.expiresAt);
+  }
+
+  async takePairing(codeHash: string, now: string): Promise<MobilePairingRecord | undefined> {
+    const row = this.database
+      .prepare(
+        `
+        delete from mobile_pairings
+        where code_hash = ? and expires_at > ?
+        returning id, name, code_hash, created_at, expires_at
+      `,
+      )
+      .get(codeHash, now);
+    return row ? readMobilePairingRow(row) : undefined;
+  }
+
+  async deletePairing(id: string): Promise<boolean> {
+    return this.database.prepare("delete from mobile_pairings where id = ?").run(id).changes > 0;
+  }
+
+  async addDevice(record: MobileDeviceRecord): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into mobile_devices (id, pairing_id, name, token_hash, user_agent, created_at, last_used_at)
+        values (?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        record.id,
+        record.pairingId,
+        record.name,
+        record.tokenHash,
+        record.userAgent ?? null,
+        record.createdAt,
+        record.lastUsedAt ?? null,
+      );
+  }
+
+  async listDevices(): Promise<MobileDeviceRecord[]> {
+    return this.database
+      .prepare(
+        `
+        select id, pairing_id, name, token_hash, user_agent, created_at, last_used_at
+        from mobile_devices
+        order by created_at desc, id desc
+      `,
+      )
+      .all()
+      .map(readMobileDeviceRow);
+  }
+
+  async findDeviceByTokenHash(tokenHash: string): Promise<MobileDeviceRecord | undefined> {
+    const row = this.database
+      .prepare(
+        `
+        select id, pairing_id, name, token_hash, user_agent, created_at, last_used_at
+        from mobile_devices
+        where token_hash = ?
+      `,
+      )
+      .get(tokenHash);
+    return row ? readMobileDeviceRow(row) : undefined;
+  }
+
+  async deleteDevice(id: string): Promise<boolean> {
+    return this.database.prepare("delete from mobile_devices where id = ?").run(id).changes > 0;
+  }
+
+  async markDeviceUsed(id: string, usedAt: string): Promise<void> {
+    this.database.prepare("update mobile_devices set last_used_at = ? where id = ?").run(usedAt, id);
+  }
+}
+
+function readMobilePairingRow(row: unknown): MobilePairingRecord {
+  return {
+    id: readString(row, "id"),
+    name: readString(row, "name"),
+    codeHash: readString(row, "code_hash"),
+    createdAt: readString(row, "created_at"),
+    expiresAt: readString(row, "expires_at"),
+  };
+}
+
+function readMobileDeviceRow(row: unknown): MobileDeviceRecord {
+  return {
+    id: readString(row, "id"),
+    pairingId: readString(row, "pairing_id"),
+    name: readString(row, "name"),
+    tokenHash: readString(row, "token_hash"),
+    userAgent: readOptionalString(row, "user_agent"),
+    createdAt: readString(row, "created_at"),
+    lastUsedAt: readOptionalString(row, "last_used_at"),
+  };
 }
 
 export class SqliteConnectionStore implements IConnectionStore {

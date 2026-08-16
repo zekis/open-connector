@@ -21,6 +21,7 @@ import type {
   ConnectionActionPermission,
   IConnectionApprovalStore,
 } from "./approvals/connection-approval-types.ts";
+import type { IMobileAuthStore, MobileDeviceRecord, MobilePairingRecord } from "./auth/mobile-auth-service.ts";
 import type { AgentChatProgressListener, AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { FlowRunDetail } from "./flows/flow-runner.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
@@ -60,6 +61,7 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
+import { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { FlowService } from "./flows/flow-service.ts";
@@ -1337,6 +1339,61 @@ describe("ConnectServer", () => {
       adminAuthConfigured: true,
       authenticated: true,
     });
+  });
+
+  it("pairs and immediately revokes a persistent mobile browser session", async () => {
+    const mobileAuth = new MobileAuthService(new MemoryMobileAuthStore());
+    const app = createTestServer([apiKeyProvider], {
+      auth: { adminToken: "local-token" },
+      mobileAuth,
+    }).createApp();
+    const adminHeaders = { authorization: "Bearer local-token", "content-type": "application/json" };
+
+    const pairingResponse = await app.request("/api/mobile-pairings", {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ name: "Zeke's phone" }),
+    });
+    expect(pairingResponse.status).toBe(200);
+    const pairing = (await pairingResponse.json()) as {
+      code: string;
+      pairing: { id: string; name: string };
+    };
+    expect(pairing.code).toMatch(/^ocmp_/);
+
+    const exchangeResponse = await app.request("/api/mobile-auth/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": "Mobile integration browser" },
+      body: JSON.stringify({ code: pairing.code }),
+    });
+    expect(exchangeResponse.status).toBe(200);
+    const cookie = exchangeResponse.headers.get("set-cookie")?.split(";")[0] ?? "";
+    expect(cookie).toMatch(/^oomol_connect_mobile_session=ocmd_/);
+    expect(exchangeResponse.headers.get("set-cookie")).toContain("HttpOnly");
+
+    const session = await app.request("/api/auth/session", { headers: { cookie } });
+    await expect(session.json()).resolves.toEqual({ adminAuthConfigured: true, authenticated: true });
+    expect(session.headers.get("set-cookie")).toContain("oomol_connect_mobile_session=");
+    expect(session.headers.get("set-cookie")).toContain("Max-Age=34560000");
+    const devicesResponse = await app.request("/api/mobile-devices", { headers: { cookie } });
+    const devices = (await devicesResponse.json()) as Array<{ id: string; name: string }>;
+    expect(devices).toMatchObject([{ name: "Zeke's phone" }]);
+
+    const revokeResponse = await app.request(`/api/mobile-devices/${devices[0]!.id}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+    });
+    expect(revokeResponse.status).toBe(200);
+    expect((await app.request("/api/providers", { headers: { cookie } })).status).toBe(401);
+    expect(
+      (
+        await app.request("/api/mobile-auth/exchange", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code: pairing.code }),
+        })
+      ).status,
+    ).toBe(401);
   });
 
   it("expires local admin auth sessions", async () => {
@@ -3512,6 +3569,7 @@ interface CreateTestServerOptions {
   staticRoot?: string | false;
   transitFiles?: TransitFileService;
   connectionApprovalStore?: IConnectionApprovalStore;
+  mobileAuth?: MobileAuthService;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -3576,12 +3634,14 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     idempotency,
     transitFiles,
     runtimeTokens,
+    mobileAuth: options.mobileAuth,
     runtimePolicyStore: options.runtimePolicyStore ?? new MemoryRuntimePolicyStore(),
     registerStaticRoutes: staticRoot ? (app) => registerStaticRoutes(app, staticRoot) : undefined,
     auth: {
       ...options.auth,
       hasRuntimeTokens: async () => (await runtimeTokens.listTokens()).length > 0,
       resolveRuntimeToken: (token) => runtimeTokens.resolveToken(token),
+      resolveMobileToken: options.mobileAuth ? (token) => options.mobileAuth!.resolveDeviceToken(token) : undefined,
       verifyRuntimeJwt: options.auth?.verifyRuntimeJwt,
     },
     actionPolicy: options.actionPolicy,
@@ -4135,6 +4195,50 @@ type MemoryIdempotencyRecord =
       response: RuntimeActionHttpResult;
       expiresAt: string;
     };
+
+class MemoryMobileAuthStore implements IMobileAuthStore {
+  private readonly pairings = new Map<string, MobilePairingRecord>();
+  private readonly devices = new Map<string, MobileDeviceRecord>();
+
+  async addPairing(record: MobilePairingRecord): Promise<void> {
+    this.pairings.set(record.id, structuredClone(record));
+  }
+
+  async takePairing(codeHash: string, now: string): Promise<MobilePairingRecord | undefined> {
+    const pairing = [...this.pairings.values()].find(
+      (record) => record.codeHash === codeHash && record.expiresAt > now,
+    );
+    if (!pairing) return undefined;
+    this.pairings.delete(pairing.id);
+    return structuredClone(pairing);
+  }
+
+  async deletePairing(id: string): Promise<boolean> {
+    return this.pairings.delete(id);
+  }
+
+  async addDevice(record: MobileDeviceRecord): Promise<void> {
+    this.devices.set(record.id, structuredClone(record));
+  }
+
+  async listDevices(): Promise<MobileDeviceRecord[]> {
+    return structuredClone([...this.devices.values()]);
+  }
+
+  async findDeviceByTokenHash(tokenHash: string): Promise<MobileDeviceRecord | undefined> {
+    const device = [...this.devices.values()].find((record) => record.tokenHash === tokenHash);
+    return device ? structuredClone(device) : undefined;
+  }
+
+  async deleteDevice(id: string): Promise<boolean> {
+    return this.devices.delete(id);
+  }
+
+  async markDeviceUsed(id: string, usedAt: string): Promise<void> {
+    const device = this.devices.get(id);
+    if (device) this.devices.set(id, { ...device, lastUsedAt: usedAt });
+  }
+}
 
 class MemoryIdempotencyStore implements IIdempotencyStore {
   private readonly records = new Map<string, MemoryIdempotencyRecord>();

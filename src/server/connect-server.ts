@@ -9,6 +9,7 @@ import type { LocalAuthOptions } from "./api/auth.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import type { ActionApproval, ActionApprovalExecution } from "./approvals/connection-approval-types.ts";
+import type { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import type { IAgentChatService } from "./chat/agent-chat-service.ts";
 import type { AgentChatStreamEvent } from "./chat/agent-chat-types.ts";
 import type { FeedService } from "./feed/feed-service.ts";
@@ -48,7 +49,13 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentCredentialError } from "./agents/agent-credential-service.ts";
 import { AgentSettingsError } from "./agents/agent-settings-service.ts";
 import { renderActionMarkdown } from "./api/action-markdown.ts";
-import { clearLocalAuthCookie, createLocalAuthMiddleware, readLocalAuthSession, readRuntimeGrant } from "./api/auth.ts";
+import {
+  clearLocalAuthCookie,
+  createLocalAuthMiddleware,
+  installMobileAuthCookie,
+  readLocalAuthSession,
+  readRuntimeGrant,
+} from "./api/auth.ts";
 import { getResponseCachePolicy } from "./api/cache-policy.ts";
 import { HttpRequestError, internalError, jsonError, notFound, readJsonBody } from "./api/http-utils.ts";
 import { renderOAuthCompletionPage } from "./api/oauth-completion-page.ts";
@@ -90,6 +97,7 @@ export interface IConnectServerOptions {
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
+  mobileAuth?: MobileAuthService;
   actions: ActionRunner;
   flows?: FlowService;
   flowRunner?: FlowRunner;
@@ -215,6 +223,13 @@ export class ConnectServer {
       clearLocalAuthCookie(context);
       return context.json({ ok: true });
     });
+    if (this.options.mobileAuth) {
+      app.post("/api/mobile-auth/exchange", (context) => this.exchangeMobilePairing(context));
+      app.get("/api/mobile-devices", (context) => this.listMobileDevices(context));
+      app.post("/api/mobile-pairings", (context) => this.createMobilePairing(context));
+      app.delete("/api/mobile-pairings/:id", (context) => this.cancelMobilePairing(context, context.req.param("id")));
+      app.delete("/api/mobile-devices/:id", (context) => this.revokeMobileDevice(context, context.req.param("id")));
+    }
 
     app.get("/api/connections", (context) => this.listConnections(context));
     app.put("/api/connections/:service", (context) => this.upsertConnection(context, context.req.param("service")));
@@ -1555,6 +1570,44 @@ export class ConnectServer {
 
   private async listRuntimeTokens(context: Context): Promise<Response> {
     return context.json(await this.options.runtimeTokens.listTokens());
+  }
+
+  private async listMobileDevices(context: Context): Promise<Response> {
+    return context.json(await this.options.mobileAuth!.listDevices());
+  }
+
+  private async createMobilePairing(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    const name = optionalString(body.name) ?? "Mobile browser";
+    return context.json(await this.options.mobileAuth!.createPairing(name));
+  }
+
+  private async exchangeMobilePairing(context: Context): Promise<Response> {
+    const body = await readJsonBody(context);
+    const code = optionalString(body.code);
+    if (!code) {
+      return jsonError(context, 400, "invalid_input", "code is required.");
+    }
+    const exchanged = await this.options.mobileAuth!.exchangePairing(code, context.req.header("user-agent"));
+    if (!exchanged) {
+      return jsonError(context, 401, "invalid_mobile_pairing", "The mobile pairing link is invalid, expired, or used.");
+    }
+    installMobileAuthCookie(context, exchanged.token);
+    return context.json({ device: exchanged.device, connected: true });
+  }
+
+  private async cancelMobilePairing(context: Context, id: string): Promise<Response> {
+    if (!(await this.options.mobileAuth!.cancelPairing(id))) {
+      return jsonError(context, 404, "mobile_pairing_not_found", `Mobile pairing not found: ${id}.`);
+    }
+    return context.json({ id, cancelled: true });
+  }
+
+  private async revokeMobileDevice(context: Context, id: string): Promise<Response> {
+    if (!(await this.options.mobileAuth!.revokeDevice(id))) {
+      return jsonError(context, 404, "mobile_device_not_found", `Mobile device not found: ${id}.`);
+    }
+    return context.json({ id, revoked: true });
   }
 
   private async createRuntimeToken(context: Context): Promise<Response> {

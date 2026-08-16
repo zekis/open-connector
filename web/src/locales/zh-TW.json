@@ -50,6 +50,7 @@
     "approvals": "核准",
     "runs": "執行記錄",
     "access": "API 金鑰",
+    "mobile": "行動裝置",
     "docs": "文件"
   },
   "shell": {
@@ -113,6 +114,10 @@
       "access": {
         "title": "API 金鑰",
         "subtitle": "管理供 Agent 與用戶端使用的執行階段 API 權杖。"
+      },
+      "mobile": {
+        "title": "行動裝置",
+        "subtitle": "連線或撤銷受信任的行動瀏覽器。"
       },
       "resources": {
         "title": "資源",

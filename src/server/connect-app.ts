@@ -17,6 +17,7 @@ import { AgentCredentialService } from "./agents/agent-credential-service.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
+import { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import { AgentChatService } from "./chat/agent-chat-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { FeedService } from "./feed/feed-service.ts";
@@ -52,6 +53,7 @@ export interface ConnectApp {
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
   const runtimeTokens = new RuntimeTokenService(options.runtimeDatabase.runtimeTokenStore, options.logger);
+  const mobileAuth = new MobileAuthService(options.runtimeDatabase.mobileAuthStore, { logger: options.logger });
   const hasStoredRuntimeTokens = async (): Promise<boolean> => (await runtimeTokens.listTokens()).length > 0;
   const oauthClientConfigs = new OAuthClientConfigService({
     catalog: options.catalog,
@@ -168,6 +170,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       idempotency: options.runtimeDatabase.idempotencyStore,
       transitFiles: options.transitFiles,
       runtimeTokens,
+      mobileAuth,
       runtimePolicyStore: options.runtimeDatabase.runtimePolicyStore,
       registerStaticRoutes: options.registerStaticRoutes,
       auth: {
@@ -175,6 +178,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
         runtimeToken: options.runtimeToken,
         hasRuntimeTokens: hasStoredRuntimeTokens,
         resolveRuntimeToken: (token) => runtimeTokens.resolveToken(token),
+        resolveMobileToken: (token) => mobileAuth.resolveDeviceToken(token),
         verifyRuntimeJwt: options.verifyRuntimeJwt,
       },
       actionPolicy,

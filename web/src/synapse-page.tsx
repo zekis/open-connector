@@ -150,6 +150,25 @@ interface NewNodePlacement {
   parentNodeId?: string;
 }
 
+const synapseNodeControlSelector =
+  "button,a,input,textarea,select,[contenteditable='true'],.synapse-node-select,.synapse-node-resize";
+
+function closestMatchingTarget(target: unknown, selector: string): unknown {
+  if ((typeof target !== "object" && typeof target !== "function") || target === null) return undefined;
+  const closest = Reflect.get(target, "closest");
+  return typeof closest === "function" ? Reflect.apply(closest, target, [selector]) : undefined;
+}
+
+/** Returns whether a pointer target is inside a Synapse card. */
+export function isSynapseCardTarget(target: unknown): boolean {
+  return Boolean(closestMatchingTarget(target, ".synapse-node"));
+}
+
+/** Returns whether a node pointer event belongs to a control that must remain independently interactive. */
+export function isSynapseNodeControlTarget(target: unknown): boolean {
+  return Boolean(closestMatchingTarget(target, synapseNodeControlSelector));
+}
+
 export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactNode {
   const [summaries, setSummaries] = useState<SynapseWorkspaceSummary[]>([]);
   const [workspace, setWorkspace] = useState<SynapseWorkspace>();
@@ -795,6 +814,19 @@ function SynapseCanvas(props: {
     const canvas = scrollRef.current;
     if (!canvas) return;
     const zoom = (event: WheelEvent): void => {
+      const card = closestMatchingTarget(event.target, ".synapse-node");
+      if (card) {
+        event.preventDefault();
+        if (card instanceof HTMLElement) {
+          const scroller = card.querySelector<HTMLElement>(".synapse-node-markdown");
+          if (scroller) {
+            const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
+            scroller.scrollTop += event.deltaY * multiplier;
+            scroller.scrollLeft += event.deltaX * multiplier;
+          }
+        }
+        return;
+      }
       event.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const deltaY = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1);
@@ -841,7 +873,8 @@ function SynapseCanvas(props: {
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
-    if ((event.target as HTMLElement).closest("button,a,.synapse-node-markdown,.synapse-node-resize")) return;
+    if (event.button !== 0 || isSynapseNodeControlTarget(event.target)) return;
+    event.preventDefault();
     if (props.linkingFrom) {
       props.onNodeSelect(node.id);
       return;

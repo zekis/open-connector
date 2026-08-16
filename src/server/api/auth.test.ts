@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { createLocalAuthMiddleware } from "./auth.ts";
+import { createLocalAuthMiddleware, installMobileAuthCookie } from "./auth.ts";
 
 describe("createLocalAuthMiddleware", () => {
   it("fails closed when a runtime token resolver is configured without a token-count callback", async () => {
@@ -166,6 +166,47 @@ describe("createLocalAuthMiddleware", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  it("accepts a revocable mobile cookie for admin APIs and action elevation", async () => {
+    let active = true;
+    const resolveMobileToken = vi.fn(async (token: string) =>
+      active && token === "ocmd_phone" ? { id: "device-1" } : undefined,
+    );
+    const app = new Hono();
+    app.use(
+      "*",
+      createLocalAuthMiddleware({
+        adminToken: "admin-secret",
+        hasRuntimeTokens: async () => true,
+        resolveRuntimeToken: async () => undefined,
+        resolveMobileToken,
+      }),
+    );
+    app.get("/api/connections", (context) => context.json({ ok: true }));
+    app.post("/v1/actions/:actionId", (context) => context.json({ ok: true }));
+    const headers = { cookie: "oomol_connect_mobile_session=ocmd_phone" };
+
+    expect((await app.request("/api/connections", { headers })).status).toBe(200);
+    expect((await app.request("/v1/actions/example.echo", { method: "POST", headers })).status).toBe(200);
+    active = false;
+    expect((await app.request("/api/connections", { headers })).status).toBe(401);
+    expect(resolveMobileToken).toHaveBeenCalledWith("ocmd_phone");
+  });
+
+  it("keeps the one-time mobile pairing exchange public", async () => {
+    const app = new Hono();
+    app.use("*", createLocalAuthMiddleware({ adminToken: "admin-secret", resolveMobileToken: async () => undefined }));
+    app.post("/api/mobile-auth/exchange", (context) => {
+      installMobileAuthCookie(context, "ocmd_phone");
+      return context.json({ connected: true });
+    });
+
+    const response = await app.request("/api/mobile-auth/exchange", { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("oomol_connect_mobile_session=ocmd_phone");
+    expect(response.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=34560000");
   });
 
   it("matches configured tokens byte-for-byte after the bearer scheme", async () => {
