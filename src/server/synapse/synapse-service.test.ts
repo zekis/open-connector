@@ -342,10 +342,60 @@ describe("SynapseService", () => {
     expect(second.nodes[1]?.position).not.toEqual(second.nodes[0]?.position);
     expect(
       cardsOverlap(second.nodes[0]!.position, second.nodes[0]!.size!, second.nodes[1]!.position, {
-        width: 264,
-        height: 164,
+        width: second.nodes[1]!.size!.width,
+        height: second.nodes[1]!.size!.height,
       }),
     ).toBe(false);
+  });
+
+  it("auto-sizes content and arranges connected cards into readable layers", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Arranged graph" });
+    const root = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: -4_000, y: 8_000 },
+    });
+    const short = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Short note",
+      content: "One useful line.",
+      parentNodeId: root.nodes[0]!.id,
+      position: { x: 200, y: 200 },
+    });
+    const long = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "document",
+      title: "Detailed report",
+      content: Array.from(
+        { length: 30 },
+        (_, index) => `## Section ${index + 1}\nDetailed evidence for this section.`,
+      ).join("\n\n"),
+      parentNodeId: root.nodes[0]!.id,
+      position: { x: 500, y: 200 },
+    });
+    const manuallySized = await service.updateNode(workspace.id, short.nodes[1]!.id, {
+      size: { width: 240, height: 120 },
+    });
+    expect(manuallySized.nodes[1]).toMatchObject({ autoSize: false, size: { width: 240, height: 120 } });
+
+    const arranged = await service.arrange(workspace.id);
+    const arrangedRoot = arranged.nodes.find((node) => node.id === root.nodes[0]!.id)!;
+    const arrangedShort = arranged.nodes.find((node) => node.id === short.nodes[1]!.id)!;
+    const arrangedLong = arranged.nodes.find((node) => node.id === long.nodes[2]!.id)!;
+
+    expect(arranged.edges).toHaveLength(2);
+    expect(arranged.nodes.every((node) => node.autoSize === true)).toBe(true);
+    expect(arrangedRoot.position.x).toBeLessThan(arrangedShort.position.x);
+    expect(arrangedShort.position.x).toBe(arrangedLong.position.x);
+    expect(arrangedLong.size!.height).toBeGreaterThan(arrangedShort.size!.height);
+    expect(cardsOverlap(arrangedShort.position, arrangedShort.size!, arrangedLong.position, arrangedLong.size!)).toBe(
+      false,
+    );
   });
 
   it("keeps a node conversation paused for approval and applies the resumed result once", async () => {

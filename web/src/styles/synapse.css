@@ -454,143 +454,86 @@
   padding: 0 8px 18px 0;
 }
 
-.synapse-artifact-preview {
-  display: grid;
-  grid-template-rows: minmax(42px, 1fr) auto;
-  flex: 1 1 52%;
-  min-height: 48px;
-  max-height: 240px;
-  margin: 0 0 8px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--muted) 48%, var(--background));
-}
-
-.synapse-preview-media {
-  position: relative;
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  place-items: center;
-}
-
-.synapse-preview-media > img,
-.synapse-preview-media > iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  object-fit: cover;
-  background: white;
-  pointer-events: none;
-}
-
-.synapse-preview-media.pdf > iframe,
-.synapse-preview-media.document > iframe,
-.synapse-preview-media.email > iframe {
-  object-fit: contain;
-}
-
-.synapse-preview-media > button {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.synapse-preview-media:hover > button,
-.synapse-node.selected .synapse-preview-media > button {
-  opacity: 1;
-}
-
-.synapse-preview-placeholder {
+.synapse-artifact-shortcuts {
   display: flex;
-  gap: 7px;
-  align-items: center;
-  max-width: calc(100% - 18px);
-  color: var(--muted-foreground);
-  font-size: 10px;
+  gap: 5px;
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  overflow-x: auto;
 }
 
-.synapse-preview-placeholder span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.synapse-artifact-shortcuts a,
+.synapse-shortcut-overflow {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  max-width: 132px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--muted) 42%, transparent);
+  font-size: 9px;
+  text-decoration: none;
   white-space: nowrap;
 }
 
-.synapse-preview-tabs {
-  display: flex;
-  gap: 4px;
-  min-height: 25px;
-  padding: 4px 5px;
-  overflow-x: auto;
-  border-top: 1px solid var(--border);
+.synapse-artifact-shortcuts a:hover {
+  border-color: color-mix(in oklab, var(--brand) 55%, var(--border));
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--brand) 9%, transparent);
 }
 
-.synapse-preview-tabs button {
-  display: inline-grid;
-  width: 24px;
-  height: 24px;
+.synapse-artifact-shortcuts a span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.synapse-shortcut-overflow {
   flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--muted-foreground);
+}
+
+.synapse-context-menu {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  width: 236px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in oklab, var(--popover) 97%, transparent);
+  box-shadow: 0 18px 52px color-mix(in oklab, black 28%, transparent);
+}
+
+.synapse-context-menu button {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--foreground);
   background: transparent;
+  font-size: 12px;
+  text-align: left;
   cursor: pointer;
 }
 
-.synapse-preview-tabs button:hover,
-.synapse-preview-tabs button.active {
-  border-color: color-mix(in oklab, var(--brand) 45%, var(--border));
-  color: var(--foreground);
-  background: color-mix(in oklab, var(--brand) 10%, transparent);
+.synapse-context-menu button:hover,
+.synapse-context-menu button:focus-visible {
+  background: var(--accent);
+  outline: none;
 }
 
-.synapse-preview-dialog {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(1120px, calc(100vw - 32px));
-  height: min(840px, calc(100svh - 32px));
-  overflow: hidden;
-  padding: 16px;
+.synapse-context-menu button.destructive {
+  color: var(--destructive);
 }
 
-.synapse-preview-full {
-  display: grid;
-  min-height: 0;
-  overflow: hidden;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--muted) 45%, var(--background));
-}
-
-.synapse-preview-full img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.synapse-preview-full iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: white;
-}
-
-.synapse-preview-unavailable {
-  display: grid;
-  gap: 12px;
-  place-items: center;
-  color: var(--muted-foreground);
-  text-align: center;
-}
-
-.synapse-preview-unavailable svg {
-  width: 42px;
-  height: 42px;
+.synapse-context-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
 }
 
 .synapse-node-markdown::-webkit-scrollbar-button {

@@ -267,6 +267,7 @@ export class ConnectServer {
       app.post("/api/synapses", (context) => this.createSynapse(context));
       app.get("/api/synapses/:id", (context) => this.getSynapse(context, context.req.param("id")));
       app.put("/api/synapses/:id", (context) => this.updateSynapse(context, context.req.param("id")));
+      app.post("/api/synapses/:id/arrange", (context) => this.arrangeSynapse(context, context.req.param("id")));
       app.delete("/api/synapses/:id", (context) => this.deleteSynapse(context, context.req.param("id")));
       app.post("/api/synapses/:id/nodes", (context) => this.addSynapseNode(context, context.req.param("id")));
       app.put("/api/synapses/:id/nodes/:nodeId", (context) =>
@@ -1053,6 +1054,10 @@ export class ConnectServer {
 
   private async updateSynapse(context: Context, id: string): Promise<Response> {
     return await this.writeSynapseResult(context, this.options.synapse!.update(id, await readJsonBody(context)));
+  }
+
+  private async arrangeSynapse(context: Context, id: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.arrange(id));
   }
 
   private async deleteSynapse(context: Context, id: string): Promise<Response> {

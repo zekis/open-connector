@@ -20,6 +20,7 @@ interface SynapseNodeBase {
   title: string;
   position: SynapsePosition;
   size?: SynapseSize;
+  autoSize?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -3,6 +3,7 @@ import type { ProviderDefinition, SynapseArtifactNode, SynapseProviderNode, Syna
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  fitCanvasView,
   panNodeIntoView,
   SynapseApprovalNodeCard,
   SynapseNodeCard,
@@ -72,6 +73,7 @@ describe("SynapseNodeCard", () => {
         onPointerMove={() => {}}
         onPointerUp={() => {}}
         onPointerCancel={() => {}}
+        onContextMenu={() => {}}
         onResizePointerDown={() => {}}
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
@@ -95,6 +97,7 @@ describe("SynapseNodeCard", () => {
         onPointerMove={() => {}}
         onPointerUp={() => {}}
         onPointerCancel={() => {}}
+        onContextMenu={() => {}}
         onResizePointerDown={() => {}}
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
@@ -111,9 +114,9 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain('class="synapse-node-title" title="New mining opportunity"');
     expect(html).toContain("width:420px;height:280px");
     expect(html).toContain("Resize New mining opportunity");
-    expect(html).toContain("Artifact preview");
-    expect(html).toContain("Available previews");
+    expect(html).toContain("Open artifact resources");
     expect(html).toContain("Sales brief.pdf");
+    expect(html).not.toContain("<iframe");
   });
 
   it("projects a pending connector approval onto the canvas", () => {
@@ -196,5 +199,22 @@ describe("panNodeIntoView", () => {
     expect(
       panNodeIntoView(current, { x: 720, y: 440 }, { width: 240, height: 140 }, { width: 800, height: 500 }),
     ).toEqual({ x: -192, y: -112, scale: 1 });
+  });
+});
+
+describe("fitCanvasView", () => {
+  it("centres an arranged graph and scales it to the viewport", () => {
+    const view = fitCanvasView(
+      [
+        { ...providerNode, position: { x: 80, y: 80 }, size: { width: 320, height: 140 } },
+        { ...artifactNode, position: { x: 700, y: 400 }, size: { width: 420, height: 360 } },
+      ],
+      { width: 900, height: 600 },
+    );
+
+    expect(view.scale).toBeLessThan(1);
+    expect(view.scale).toBeGreaterThanOrEqual(0.3);
+    expect(80 * view.scale + view.x).toBeGreaterThan(0);
+    expect(760 * view.scale + view.y).toBeLessThan(600);
   });
 });

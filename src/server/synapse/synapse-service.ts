@@ -134,6 +134,12 @@ export class SynapseService {
     return await this.save(workspace);
   }
 
+  async arrange(id: string): Promise<SynapseWorkspace> {
+    const workspace = await this.requiredWorkspace(id);
+    arrangeWorkspace(workspace);
+    return await this.save(workspace);
+  }
+
   async delete(id: string): Promise<{ deleted: true }> {
     if (!(await this.options.store.deleteWorkspace(id))) {
       throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
@@ -146,19 +152,35 @@ export class SynapseService {
     const body = readObject(input, "Synapse node");
     const requestedPosition = readPosition(body.position);
     const requestedSize = body.size === undefined ? undefined : readSize(body.size);
+    const parentNodeId = optionalText(body.parentNodeId, "parentNodeId", 200);
+    let addedNode: SynapseNode;
     if (body.kind === "provider") {
-      const position = findOpenPosition(workspace, requestedPosition, "provider", requestedSize);
-      await this.addProviderNode(workspace, readText(body.connectionId, "connectionId", 200), position, {
-        title: optionalText(body.title, "title", maximumNodeTitleCharacters),
-        instructions: optionalText(body.instructions, "instructions", maximumNodeTextCharacters),
+      const title = optionalText(body.title, "title", maximumNodeTitleCharacters);
+      const instructions = optionalText(body.instructions, "instructions", maximumNodeTextCharacters);
+      const position = findOpenPosition(
+        workspace,
+        requestedPosition,
+        "provider",
+        requestedSize ?? automaticProviderSize(title, instructions),
+      );
+      addedNode = await this.addProviderNode(workspace, readText(body.connectionId, "connectionId", 200), position, {
+        title,
+        instructions,
         size: requestedSize,
       });
     } else if (body.kind === "artifact") {
-      const position = findOpenPosition(workspace, requestedPosition, "artifact", requestedSize);
-      this.addArtifactNode(workspace, position, readArtifactInput(body), requestedSize);
+      const artifact = readArtifactInput(body);
+      const position = findOpenPosition(
+        workspace,
+        requestedPosition,
+        "artifact",
+        requestedSize ?? automaticArtifactSize(artifact),
+      );
+      addedNode = this.addArtifactNode(workspace, position, artifact, requestedSize);
     } else {
       throw new SynapseError("invalid_synapse_node", "kind must be provider or artifact.");
     }
+    if (parentNodeId) this.connectNodes(workspace, parentNodeId, addedNode.id);
     return await this.save(workspace);
   }
 
@@ -167,7 +189,14 @@ export class SynapseService {
     const node = requiredNode(workspace, nodeId);
     const body = readObject(input, "Synapse node update");
     if (body.position !== undefined) node.position = readPosition(body.position);
-    if (body.size !== undefined) node.size = readSize(body.size);
+    if (body.size !== undefined) {
+      node.size = readSize(body.size);
+      node.autoSize = body.autoSize === true;
+    } else if (body.autoSize === true) {
+      node.autoSize = true;
+    } else if (body.autoSize === false) {
+      node.autoSize = false;
+    }
     if (body.title !== undefined) node.title = readText(body.title, "title", maximumNodeTitleCharacters);
     if (node.kind === "provider" && body.instructions !== undefined) {
       node.instructions = optionalText(body.instructions, "instructions", maximumNodeTextCharacters);
@@ -177,6 +206,10 @@ export class SynapseService {
       if (body.content !== undefined) node.content = optionalText(body.content, "content", maximumNodeTextCharacters);
       if (body.externalUrl !== undefined) node.externalUrl = optionalHttpsUrl(body.externalUrl, "externalUrl");
       if (body.artifactKind !== undefined) node.artifactKind = readArtifactKind(body.artifactKind);
+    }
+    if (node.autoSize !== false) {
+      node.autoSize = true;
+      node.size = automaticNodeSize(node);
     }
     node.updatedAt = new Date().toISOString();
     return await this.save(workspace);
@@ -314,10 +347,14 @@ export class SynapseService {
       }
       const parentNodeId = optionalText(input.parentNodeId, "parentNodeId", 200) ?? selectedNode.id;
       const parent = requiredNode(workspace, parentNodeId);
-      const node = await this.addProviderNode(workspace, connectionId, nextFanPosition(workspace, parent, "provider"), {
-        title: optionalText(input.title, "title", maximumNodeTitleCharacters),
-        instructions: optionalText(input.instructions, "instructions", maximumNodeTextCharacters),
-      });
+      const title = optionalText(input.title, "title", maximumNodeTitleCharacters);
+      const instructions = optionalText(input.instructions, "instructions", maximumNodeTextCharacters);
+      const node = await this.addProviderNode(
+        workspace,
+        connectionId,
+        nextFanPosition(workspace, parent, "provider", automaticProviderSize(title, instructions)),
+        { title, instructions },
+      );
       if (node.id !== parent.id) this.connectNodes(workspace, parent.id, node.id);
       return graphActivity(toolName, input, true, { node });
     }
@@ -336,10 +373,11 @@ export class SynapseService {
       const sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
       const nodes = input.artifacts.map((item, index) => {
         const artifact = readArtifactInput(readObject(item, `artifacts[${index}]`));
-        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), {
-          ...artifact,
-          sourceActivityId,
-        });
+        const node = this.addArtifactNode(
+          workspace,
+          nextFanPosition(workspace, parent, "artifact", automaticArtifactSize(artifact)),
+          { ...artifact, sourceActivityId },
+        );
         this.connectNodes(workspace, parent.id, node.id);
         return node;
       });
@@ -364,6 +402,10 @@ export class SynapseService {
       if (input.summary !== undefined) node.summary = optionalText(input.summary, "summary", maximumNodeTextCharacters);
       if (input.content !== undefined) node.content = optionalText(input.content, "content", maximumNodeTextCharacters);
       if (input.artifactKind !== undefined) node.artifactKind = readArtifactKind(input.artifactKind);
+      if (node.autoSize !== false) {
+        node.autoSize = true;
+        node.size = automaticNodeSize(node);
+      }
       node.updatedAt = new Date().toISOString();
       return graphActivity(toolName, input, true, { node });
     }
@@ -394,7 +436,8 @@ export class SynapseService {
       title: overrides.title ?? providerName,
       instructions: overrides.instructions,
       position,
-      size: overrides.size,
+      size: overrides.size ?? automaticProviderSize(overrides.title ?? providerName, overrides.instructions),
+      autoSize: overrides.size === undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -424,7 +467,8 @@ export class SynapseService {
       itemIdentity: input.itemIdentity,
       data: input.data,
       position,
-      size,
+      size: size ?? automaticArtifactSize(input),
+      autoSize: size === undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -501,7 +545,7 @@ export class SynapseService {
         connection = await this.addProviderNode(
           workspace,
           activity.connectionId,
-          nextFanPosition(workspace, selectedNode, "provider"),
+          nextFanPosition(workspace, selectedNode, "provider", automaticProviderSize(undefined, undefined)),
           {},
         );
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
@@ -530,7 +574,12 @@ export class SynapseService {
             )
           : undefined;
         const node =
-          existing ?? this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), artifact);
+          existing ??
+          this.addArtifactNode(
+            workspace,
+            nextFanPosition(workspace, parent, "artifact", automaticArtifactSize(artifact)),
+            artifact,
+          );
         if (existing) {
           existing.itemIdentity ??= artifact.itemIdentity;
           existing.sourceActionId = artifact.sourceActionId;
@@ -563,8 +612,12 @@ export class SynapseService {
       ...workspace,
       nodes: workspace.nodes.map((node) =>
         node.kind === "artifact"
-          ? { ...node, previews: previewDescriptors(workspace.id, node).map((descriptor) => descriptor.preview) }
-          : node,
+          ? {
+              ...node,
+              size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node),
+              previews: previewDescriptors(workspace.id, node).map((descriptor) => descriptor.preview),
+            }
+          : { ...node, size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node) },
       ),
     };
   }
@@ -901,10 +954,110 @@ function inferArtifactKind(actionId: string): SynapseArtifactKind {
   return "generic";
 }
 
+function automaticNodeSize(node: SynapseNode): SynapseSize {
+  return node.kind === "provider"
+    ? automaticProviderSize(node.title, node.instructions)
+    : automaticArtifactSize({
+        title: node.title,
+        summary: node.summary,
+        content: node.content,
+      });
+}
+
+function automaticProviderSize(title: string | undefined, instructions: string | undefined): SynapseSize {
+  return automaticTextSize([title, instructions].filter(Boolean).join("\n"), "provider");
+}
+
+function automaticArtifactSize(input: Pick<ArtifactInput, "title" | "summary" | "content">): SynapseSize {
+  return automaticTextSize([input.title, input.summary, input.content].filter(Boolean).join("\n"), "artifact");
+}
+
+function automaticTextSize(text: string, kind: SynapseNode["kind"]): SynapseSize {
+  const lines = text.split(/\r?\n/u);
+  const longestLine = Math.max(0, ...lines.map((line) => line.length));
+  const width = clampNumber(320 + Math.max(0, longestLine - 48) * 3, 320, kind === "provider" ? 480 : 560);
+  const charactersPerLine = Math.max(28, Math.floor((width - 42) / 6.6));
+  const visualLines = Math.max(
+    1,
+    lines.reduce((total, line) => total + Math.max(1, Math.ceil(Math.max(1, line.length) / charactersPerLine)), 0),
+  );
+  const baseHeight = kind === "provider" ? 82 : 92;
+  const minimumHeight = kind === "provider" ? providerNodeHeight : artifactNodeHeight;
+  return {
+    width: Math.round(width),
+    height: Math.round(clampNumber(baseHeight + visualLines * 17, minimumHeight, maximumNodeHeight)),
+  };
+}
+
+function arrangeWorkspace(workspace: SynapseWorkspace): void {
+  const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, string[]>();
+  const indegree = new Map(workspace.nodes.map((node) => [node.id, 0]));
+  for (const edge of workspace.edges) {
+    if (!nodesById.has(edge.sourceNodeId) || !nodesById.has(edge.targetNodeId)) continue;
+    outgoing.set(edge.sourceNodeId, [...(outgoing.get(edge.sourceNodeId) ?? []), edge.targetNodeId]);
+    indegree.set(edge.targetNodeId, (indegree.get(edge.targetNodeId) ?? 0) + 1);
+  }
+
+  const layerByNodeId = new Map<string, number>();
+  const remainingIndegree = new Map(indegree);
+  const queue = workspace.nodes.filter((node) => remainingIndegree.get(node.id) === 0).map((node) => node.id);
+  for (const nodeId of queue) layerByNodeId.set(nodeId, 0);
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    const nextLayer = (layerByNodeId.get(nodeId) ?? 0) + 1;
+    for (const targetId of outgoing.get(nodeId) ?? []) {
+      layerByNodeId.set(targetId, Math.max(layerByNodeId.get(targetId) ?? 0, nextLayer));
+      const nextIndegree = (remainingIndegree.get(targetId) ?? 1) - 1;
+      remainingIndegree.set(targetId, nextIndegree);
+      if (nextIndegree === 0) queue.push(targetId);
+    }
+  }
+
+  let fallbackLayer = Math.max(0, ...layerByNodeId.values());
+  for (const node of workspace.nodes) {
+    if (!layerByNodeId.has(node.id)) layerByNodeId.set(node.id, fallbackLayer++);
+    node.size = automaticNodeSize(node);
+    node.autoSize = true;
+    node.updatedAt = new Date().toISOString();
+  }
+
+  const layers = new Map<number, SynapseNode[]>();
+  for (const node of workspace.nodes) {
+    const layer = layerByNodeId.get(node.id) ?? 0;
+    layers.set(layer, [...(layers.get(layer) ?? []), node]);
+  }
+  const orderedLayers = [...layers.entries()].sort(([left], [right]) => left - right);
+  const totalHeights = new Map(
+    orderedLayers.map(([layer, nodes]) => [
+      layer,
+      nodes.reduce((height, node) => height + sizeForNode(node).height, 0) + Math.max(0, nodes.length - 1) * 48,
+    ]),
+  );
+  const maximumLayerHeight = Math.max(0, ...totalHeights.values());
+  let x = 80;
+  for (const [layer, nodes] of orderedLayers) {
+    let y = 80 + (maximumLayerHeight - (totalHeights.get(layer) ?? 0)) / 2;
+    let maximumLayerWidth = 0;
+    for (const node of nodes) {
+      const size = sizeForNode(node);
+      node.position = { x: Math.round(x), y: Math.round(y) };
+      y += size.height + 48;
+      maximumLayerWidth = Math.max(maximumLayerWidth, size.width);
+    }
+    x += maximumLayerWidth + 96;
+  }
+}
+
+function clampNumber(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
 function nextFanPosition(
   workspace: SynapseWorkspace,
   parent: SynapseNode,
   nodeKind: SynapseNode["kind"],
+  requestedSize?: SynapseSize,
 ): SynapsePosition {
   const siblings = workspace.edges
     .filter((edge) => edge.sourceNodeId === parent.id)
@@ -914,7 +1067,7 @@ function nextFanPosition(
   const column = Math.floor(siblings.length / 5);
   const verticalOffset = lane === 0 ? 0 : Math.ceil(lane / 2) * (lane % 2 === 1 ? 1 : -1);
   const parentSize = sizeForNode(parent);
-  const newSize = defaultSizeForKind(nodeKind);
+  const newSize = requestedSize ?? defaultSizeForKind(nodeKind);
   const preferred = {
     x: parent.position.x + parentSize.width + nodeHorizontalGap + column * (newSize.width + nodeHorizontalGap),
     y: parent.position.y + verticalOffset * (newSize.height + nodeVerticalGap),
@@ -976,7 +1129,7 @@ function positionIsOpen(workspace: SynapseWorkspace, position: SynapsePosition, 
 }
 
 function sizeForNode(node: SynapseNode): SynapseSize {
-  return node.size ?? defaultSizeForKind(node.kind);
+  return node.autoSize === false && node.size ? node.size : automaticNodeSize(node);
 }
 
 function defaultSizeForKind(kind: SynapseNode["kind"]): SynapseSize {

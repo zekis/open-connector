@@ -10,10 +10,9 @@ import type {
   SynapseWorkspace,
   SynapseWorkspaceSummary,
 } from "./model";
-import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { FormEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
-  ArrowUpRight,
   Bot,
   BrainCircuit,
   Cable,
@@ -28,7 +27,6 @@ import {
   Link2,
   Loader2,
   Mail,
-  Maximize2,
   MessageSquareText,
   Network,
   Plus,
@@ -129,6 +127,18 @@ interface ProviderOption {
   label: string;
 }
 
+interface SynapseContextRequest {
+  clientX: number;
+  clientY: number;
+  position: { x: number; y: number };
+  nodeId?: string;
+}
+
+interface NewNodePlacement {
+  position: { x: number; y: number };
+  parentNodeId?: string;
+}
+
 export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactNode {
   const [summaries, setSummaries] = useState<SynapseWorkspaceSummary[]>([]);
   const [workspace, setWorkspace] = useState<SynapseWorkspace>();
@@ -139,6 +149,10 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   const [createOpen, setCreateOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [artifactOpen, setArtifactOpen] = useState(false);
+  const [newNodePlacement, setNewNodePlacement] = useState<NewNodePlacement>();
+  const [contextMenu, setContextMenu] = useState<SynapseContextRequest>();
+  const [arranging, setArranging] = useState(false);
+  const [fitRequest, setFitRequest] = useState(0);
   const [linkingFrom, setLinkingFrom] = useState<string>();
   const providersByService = useMemo(
     () => new Map(props.data.providers.map((provider) => [provider.service, provider])),
@@ -248,12 +262,49 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
 
   async function deleteNode(nodeId: string): Promise<void> {
     if (!workspace) return;
+    const node = workspace.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || !window.confirm(`Delete “${node.title}” and its connections?`)) return;
     const next = await apiDelete<SynapseWorkspace>(
       `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(nodeId)}`,
     );
     applyWorkspace(next);
     setSelectedNodeId(next.nodes[0]?.id);
     setSelectedApprovalId(undefined);
+  }
+
+  async function autoArrange(): Promise<void> {
+    if (!workspace || arranging) return;
+    setArranging(true);
+    setError(undefined);
+    try {
+      const next = await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(workspace.id)}/arrange`, {});
+      applyWorkspace(next);
+      setFitRequest((current) => current + 1);
+    } catch (caught) {
+      setError(messageFrom(caught, "Could not auto-arrange this Synapse."));
+    } finally {
+      setArranging(false);
+    }
+  }
+
+  async function autoSizeNode(nodeId: string): Promise<void> {
+    if (!workspace) return;
+    try {
+      const next = await apiPut<SynapseWorkspace>(
+        `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(nodeId)}`,
+        { autoSize: true },
+      );
+      applyWorkspace(next);
+    } catch (caught) {
+      setError(messageFrom(caught, "Could not auto-size this node."));
+    }
+  }
+
+  function openNodeDialog(kind: "provider" | "artifact", placement?: NewNodePlacement): void {
+    setContextMenu(undefined);
+    setNewNodePlacement(placement);
+    if (kind === "provider") setSourceOpen(true);
+    else setArtifactOpen(true);
   }
 
   async function connectTo(nodeId: string): Promise<void> {
@@ -313,11 +364,14 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
           <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
             <Plus size={14} /> New canvas
           </Button>
-          <Button variant="outline" size="sm" disabled={!workspace} onClick={() => setSourceOpen(true)}>
+          <Button variant="outline" size="sm" disabled={!workspace} onClick={() => openNodeDialog("provider")}>
             <Cable size={14} /> Add source
           </Button>
-          <Button variant="outline" size="sm" disabled={!workspace} onClick={() => setArtifactOpen(true)}>
+          <Button variant="outline" size="sm" disabled={!workspace} onClick={() => openNodeDialog("artifact")}>
             <StickyNote size={14} /> Add artifact
+          </Button>
+          <Button variant="outline" size="sm" disabled={!workspace || arranging} onClick={() => void autoArrange()}>
+            {arranging ? <Loader2 className="spin" size={14} /> : <Network size={14} />} Auto arrange
           </Button>
           <Button
             variant="ghost"
@@ -345,6 +399,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
             selectedNodeId={selectedNodeId}
             selectedApprovalId={selectedApprovalId}
             linkingFrom={linkingFrom}
+            fitRequest={fitRequest}
             providersByService={providersByService}
             onWorkspaceChange={setWorkspace}
             onWorkspaceSaved={applyWorkspace}
@@ -359,6 +414,13 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
               if (linkingFrom) return;
               setSelectedNodeId(undefined);
               setSelectedApprovalId(approvalId);
+            }}
+            onContextRequest={(request) => {
+              setContextMenu(request);
+              if (request.nodeId) {
+                setSelectedNodeId(request.nodeId);
+                setSelectedApprovalId(undefined);
+              }
             }}
           />
         ) : (
@@ -394,7 +456,11 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
           open={sourceOpen}
           workspace={workspace}
           data={props.data}
-          onOpenChange={setSourceOpen}
+          placement={newNodePlacement}
+          onOpenChange={(open) => {
+            setSourceOpen(open);
+            if (!open) setNewNodePlacement(undefined);
+          }}
           onCreated={(next) => {
             applyWorkspace(next);
             setSelectedNodeId(next.nodes.at(-1)?.id);
@@ -405,10 +471,45 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
         <AddArtifactDialog
           open={artifactOpen}
           workspace={workspace}
-          onOpenChange={setArtifactOpen}
+          placement={newNodePlacement}
+          onOpenChange={(open) => {
+            setArtifactOpen(open);
+            if (!open) setNewNodePlacement(undefined);
+          }}
           onCreated={(next) => {
             applyWorkspace(next);
             setSelectedNodeId(next.nodes.at(-1)?.id);
+          }}
+        />
+      ) : null}
+      {workspace && contextMenu ? (
+        <SynapseContextMenu
+          request={contextMenu}
+          targetNode={workspace.nodes.find((node) => node.id === contextMenu.nodeId)}
+          selectedNode={workspace.nodes.find((node) => node.id === selectedNodeId)}
+          onClose={() => setContextMenu(undefined)}
+          onOpenNode={(nodeId) => {
+            setSelectedNodeId(nodeId);
+            setSelectedApprovalId(undefined);
+            setContextMenu(undefined);
+          }}
+          onAddProvider={(placement) => openNodeDialog("provider", placement)}
+          onAddArtifact={(placement) => openNodeDialog("artifact", placement)}
+          onConnect={(nodeId) => {
+            setLinkingFrom(nodeId);
+            setContextMenu(undefined);
+          }}
+          onAutoSize={(nodeId) => {
+            setContextMenu(undefined);
+            void autoSizeNode(nodeId);
+          }}
+          onAutoArrange={() => {
+            setContextMenu(undefined);
+            void autoArrange();
+          }}
+          onDelete={(nodeId) => {
+            setContextMenu(undefined);
+            void deleteNode(nodeId);
           }}
         />
       ) : null}
@@ -422,11 +523,13 @@ function SynapseCanvas(props: {
   selectedNodeId?: string;
   selectedApprovalId?: string;
   linkingFrom?: string;
+  fitRequest: number;
   providersByService: Map<string, ProviderDefinition>;
   onWorkspaceChange(workspace: SynapseWorkspace): void;
   onWorkspaceSaved(workspace: SynapseWorkspace): void;
   onNodeSelect(nodeId: string): void;
   onApprovalSelect(approvalId: string): void;
+  onContextRequest(request: SynapseContextRequest): void;
 }): ReactNode {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | undefined>(undefined);
@@ -466,6 +569,17 @@ function SynapseCanvas(props: {
       window.cancelAnimationFrame(frame);
     };
   }, [props.selectedNodeId, revealSelectedNode]);
+
+  useEffect(() => {
+    if (props.fitRequest === 0) return;
+    const canvas = scrollRef.current;
+    if (!canvas) return;
+    const frame = window.requestAnimationFrame(() => {
+      const rect = canvas.getBoundingClientRect();
+      setCanvasView(fitCanvasView(workspaceRef.current.nodes, { width: rect.width, height: rect.height }));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.fitRequest]);
 
   useEffect(() => {
     const canvas = scrollRef.current;
@@ -604,11 +718,33 @@ function SynapseCanvas(props: {
     }
     void apiPut<SynapseWorkspace>(
       `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(resize.nodeId)}`,
-      { size },
+      { size, autoSize: false },
     ).then((workspace) => {
       props.onWorkspaceSaved(workspace);
       props.onNodeSelect(resize.nodeId);
       window.requestAnimationFrame(revealSelectedNode);
+    });
+  }
+
+  function requestContext(event: ReactMouseEvent<HTMLElement>, node?: SynapseNode): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const canvas = scrollRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    props.onContextRequest({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      position: node
+        ? {
+            x: node.position.x + sizeForCanvasNode(node).width + nodeHorizontalGap,
+            y: node.position.y,
+          }
+        : {
+            x: Math.round((event.clientX - rect.left - canvasView.x) / canvasView.scale),
+            y: Math.round((event.clientY - rect.top - canvasView.y) / canvasView.scale),
+          },
+      nodeId: node?.id,
     });
   }
 
@@ -624,6 +760,7 @@ function SynapseCanvas(props: {
       onPointerMove={movePan}
       onPointerUp={finishPan}
       onPointerCancel={finishPan}
+      onContextMenu={(event) => requestContext(event)}
     >
       <div
         className="synapse-canvas"
@@ -687,6 +824,7 @@ function SynapseCanvas(props: {
             onPointerMove={moveDrag}
             onPointerUp={finishDrag}
             onPointerCancel={finishDrag}
+            onContextMenu={(event) => requestContext(event, node)}
             onResizePointerDown={(event) => beginResize(event, node)}
             onResizePointerMove={moveResize}
             onResizePointerUp={finishResize}
@@ -723,13 +861,12 @@ export function SynapseNodeCard(props: {
   onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
   onPointerCancel(event: ReactPointerEvent<HTMLElement>): void;
+  onContextMenu(event: ReactMouseEvent<HTMLElement>): void;
   onResizePointerDown(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerUp(event: ReactPointerEvent<HTMLElement>): void;
   onSelect(): void;
 }): ReactNode {
-  const [activePreviewId, setActivePreviewId] = useState<string>();
-  const [previewOpen, setPreviewOpen] = useState(false);
   const size = sizeForCanvasNode(props.node);
   const style = {
     transform: `translate(${props.node.position.x}px, ${props.node.position.y}px)`,
@@ -745,6 +882,7 @@ export function SynapseNodeCard(props: {
         onPointerMove={props.onPointerMove}
         onPointerUp={props.onPointerUp}
         onPointerCancel={props.onPointerCancel}
+        onContextMenu={props.onContextMenu}
         onDoubleClick={props.onSelect}
       >
         <div className="synapse-node-icon provider">
@@ -776,171 +914,67 @@ export function SynapseNodeCard(props: {
   const Icon = artifactIcon(props.node.artifactKind);
   const markdown = props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.";
   const previews = props.node.previews ?? [];
-  const activePreview = previews.find((preview) => preview.id === activePreviewId) ?? previews[0];
   return (
-    <>
-      <article
-        className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.linking ? " link-target" : ""}`}
-        style={style}
-        onPointerDown={props.onPointerDown}
-        onPointerMove={props.onPointerMove}
-        onPointerUp={props.onPointerUp}
-        onPointerCancel={props.onPointerCancel}
-        onDoubleClick={props.onSelect}
-      >
-        <header>
-          <span className="synapse-node-icon artifact">
-            <Icon size={18} />
-          </span>
-          <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
-          {props.node.externalUrl ? (
-            <a href={props.node.externalUrl} target="_blank" rel="noreferrer" aria-label="Open source">
-              <ArrowUpRight size={14} />
-            </a>
-          ) : null}
-        </header>
-        <strong className="synapse-node-title" title={props.node.title}>
-          {props.node.title}
-        </strong>
-        {activePreview ? (
-          <SynapseArtifactPreview
-            preview={activePreview}
-            previews={previews}
-            selected={props.selected}
-            onPreviewSelect={setActivePreviewId}
-            onOpen={() => setPreviewOpen(true)}
-          />
-        ) : null}
-        <div className="synapse-node-markdown">
-          <ChatMarkdown>{markdown}</ChatMarkdown>
-        </div>
-        <span className="synapse-port input" />
-        <span className="synapse-port output" />
-        <span
-          className="synapse-node-resize"
-          role="separator"
-          aria-label={`Resize ${props.node.title}`}
-          onPointerDown={props.onResizePointerDown}
-          onPointerMove={props.onResizePointerMove}
-          onPointerUp={props.onResizePointerUp}
-          onPointerCancel={props.onResizePointerUp}
-        />
-      </article>
-      <SynapsePreviewDialog preview={previewOpen ? activePreview : undefined} onClose={() => setPreviewOpen(false)} />
-    </>
-  );
-}
-
-function SynapseArtifactPreview(props: {
-  preview: FeedPreview;
-  previews: FeedPreview[];
-  selected: boolean;
-  onPreviewSelect(previewId: string): void;
-  onOpen(): void;
-}): ReactNode {
-  const inlineUrl = props.selected ? inlinePreviewUrl(props.preview) : undefined;
-  return (
-    <section className="synapse-artifact-preview" aria-label="Artifact preview">
-      <div className={`synapse-preview-media ${props.preview.kind}`}>
-        {props.preview.kind === "image" && inlineUrl ? (
-          <img src={inlineUrl} alt={props.preview.name} loading="lazy" />
-        ) : inlineUrl ? (
-          <iframe
-            src={inlineUrl}
-            title={`Preview of ${props.preview.name}`}
-            loading="lazy"
-            tabIndex={-1}
-            sandbox={
-              props.preview.kind === "web"
-                ? "allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
-                : undefined
-            }
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <span className="synapse-preview-placeholder">
-            <PreviewIcon preview={props.preview} />
-            <span>{props.preview.name}</span>
-          </span>
-        )}
-        {(props.preview.contentUrl || props.preview.externalUrl) && props.selected ? (
-          <Button variant="secondary" size="icon-sm" aria-label={`Open ${props.preview.name}`} onClick={props.onOpen}>
-            <Maximize2 size={14} />
-          </Button>
-        ) : null}
+    <article
+      className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.linking ? " link-target" : ""}`}
+      style={style}
+      onPointerDown={props.onPointerDown}
+      onPointerMove={props.onPointerMove}
+      onPointerUp={props.onPointerUp}
+      onPointerCancel={props.onPointerCancel}
+      onContextMenu={props.onContextMenu}
+      onDoubleClick={props.onSelect}
+    >
+      <header>
+        <span className="synapse-node-icon artifact">
+          <Icon size={18} />
+        </span>
+        <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
+      </header>
+      <strong className="synapse-node-title" title={props.node.title}>
+        {props.node.title}
+      </strong>
+      <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
+      <div className="synapse-node-markdown">
+        <ChatMarkdown>{markdown}</ChatMarkdown>
       </div>
-      {props.previews.length > 1 ? (
-        <div className="synapse-preview-tabs" aria-label="Available previews">
-          {props.previews.map((preview) => (
-            <button
-              className={preview.id === props.preview.id ? "active" : undefined}
-              type="button"
-              title={preview.name}
-              aria-label={`Show ${preview.name}`}
-              onClick={() => props.onPreviewSelect(preview.id)}
-              key={preview.id}
-            >
-              <PreviewIcon preview={preview} />
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </section>
+      <span className="synapse-port input" />
+      <span className="synapse-port output" />
+      <span
+        className="synapse-node-resize"
+        role="separator"
+        aria-label={`Resize ${props.node.title}`}
+        onPointerDown={props.onResizePointerDown}
+        onPointerMove={props.onResizePointerMove}
+        onPointerUp={props.onResizePointerUp}
+        onPointerCancel={props.onResizePointerUp}
+      />
+    </article>
   );
 }
 
-function SynapsePreviewDialog(props: { preview: FeedPreview | undefined; onClose(): void }): ReactNode {
-  const embeddedUrl = props.preview ? inlinePreviewUrl(props.preview) : undefined;
+function SynapseArtifactShortcuts(props: { previews: FeedPreview[]; externalUrl?: string }): ReactNode {
+  const links = props.previews
+    .map((preview) => ({ preview, url: preview.contentUrl ?? preview.externalUrl }))
+    .filter((entry): entry is { preview: FeedPreview; url: string } => Boolean(entry.url));
+  const externalAlreadyListed = links.some(({ url }) => url === props.externalUrl);
+  if (links.length === 0 && (!props.externalUrl || externalAlreadyListed)) return null;
   return (
-    <Dialog open={Boolean(props.preview)} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="synapse-preview-dialog sm:max-w-[min(1120px,calc(100vw-2rem))]">
-        {props.preview ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>{props.preview.name}</DialogTitle>
-              <DialogDescription>{previewMeta(props.preview)}</DialogDescription>
-            </DialogHeader>
-            <div className={`synapse-preview-full ${props.preview.kind}`}>
-              {props.preview.kind === "image" && embeddedUrl ? (
-                <img src={embeddedUrl} alt={props.preview.name} />
-              ) : embeddedUrl ? (
-                <iframe
-                  src={embeddedUrl}
-                  title={props.preview.name}
-                  sandbox={
-                    props.preview.kind === "web"
-                      ? "allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
-                      : undefined
-                  }
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="synapse-preview-unavailable">
-                  <PreviewIcon preview={props.preview} />
-                  <span>This file type opens in its connected application.</span>
-                </div>
-              )}
-            </div>
-            <DialogFooter>
-              {props.preview.contentUrl ? (
-                <Button asChild variant="outline" size="sm">
-                  <a href={props.preview.contentUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={14} /> Open raw file
-                  </a>
-                </Button>
-              ) : null}
-              {props.preview.externalUrl ? (
-                <Button asChild size="sm">
-                  <a href={props.preview.externalUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink size={14} /> Open source
-                  </a>
-                </Button>
-              ) : null}
-            </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    <div className="synapse-artifact-shortcuts" aria-label="Open artifact resources">
+      {links.slice(0, 8).map(({ preview, url }) => (
+        <a href={url} target="_blank" rel="noreferrer" title={`Open ${preview.name}`} key={preview.id}>
+          <PreviewIcon preview={preview} />
+          <span>{preview.name}</span>
+        </a>
+      ))}
+      {props.externalUrl && !externalAlreadyListed ? (
+        <a href={props.externalUrl} target="_blank" rel="noreferrer" title="Open source">
+          <ExternalLink size={14} />
+          <span>Source</span>
+        </a>
+      ) : null}
+      {links.length > 8 ? <span className="synapse-shortcut-overflow">+{links.length - 8}</span> : null}
+    </div>
   );
 }
 
@@ -950,27 +984,6 @@ function PreviewIcon({ preview }: { preview: FeedPreview }): ReactNode {
   if (preview.kind === "pdf" || preview.kind === "document") return <FileText size={16} />;
   if (preview.kind === "web") return <ExternalLink size={16} />;
   return <File size={16} />;
-}
-
-function inlinePreviewUrl(preview: FeedPreview): string | undefined {
-  const url = preview.contentUrl ?? preview.externalUrl;
-  if (!url) return undefined;
-  if (preview.kind === "pdf") return `${url}#page=1&view=FitH&toolbar=0&navpanes=0`;
-  if (preview.kind === "document" && preview.contentUrl && !preview.mimeType?.startsWith("text/")) return undefined;
-  if (preview.kind === "file") return undefined;
-  return url;
-}
-
-function previewMeta(preview: FeedPreview): string {
-  const type = preview.kind === "pdf" ? "PDF" : (preview.mimeType ?? artifactLabelForPreview(preview.kind));
-  if (preview.sizeBytes === undefined) return type;
-  if (preview.sizeBytes < 1_024) return `${type} · ${preview.sizeBytes} B`;
-  if (preview.sizeBytes < 1_024 * 1_024) return `${type} · ${Math.round(preview.sizeBytes / 1_024)} KB`;
-  return `${type} · ${(preview.sizeBytes / (1_024 * 1_024)).toFixed(1)} MB`;
-}
-
-function artifactLabelForPreview(kind: FeedPreview["kind"]): string {
-  return kind.replaceAll("_", " ").replace(/^./u, (character) => character.toUpperCase());
 }
 
 export function SynapseApprovalNodeCard(props: {
@@ -1251,6 +1264,99 @@ function SynapseNodePanel(props: {
   );
 }
 
+function SynapseContextMenu(props: {
+  request: SynapseContextRequest;
+  targetNode?: SynapseNode;
+  selectedNode?: SynapseNode;
+  onClose(): void;
+  onOpenNode(nodeId: string): void;
+  onAddProvider(placement: NewNodePlacement): void;
+  onAddArtifact(placement: NewNodePlacement): void;
+  onConnect(nodeId: string): void;
+  onAutoSize(nodeId: string): void;
+  onAutoArrange(): void;
+  onDelete(nodeId: string): void;
+}): ReactNode {
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (event: PointerEvent): void => {
+      if (!menuRef.current?.contains(event.target as Node)) props.onClose();
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") props.onClose();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", props.onClose);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", props.onClose);
+    };
+  }, [props.onClose]);
+
+  const menuWidth = 236;
+  const menuHeight = props.targetNode ? 332 : props.selectedNode ? 252 : 154;
+  const left = Math.max(8, Math.min(props.request.clientX, window.innerWidth - menuWidth - 8));
+  const top = Math.max(8, Math.min(props.request.clientY, window.innerHeight - menuHeight - 8));
+  const placement = {
+    position: props.request.position,
+    parentNodeId: props.request.nodeId,
+  };
+  return (
+    <div className="synapse-context-menu" style={{ left, top }} role="menu" ref={menuRef}>
+      {props.targetNode ? (
+        <>
+          <button type="button" role="menuitem" onClick={() => props.onOpenNode(props.targetNode!.id)}>
+            <MessageSquareText size={15} /> Open node chat
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onAddProvider(placement)}>
+            <Cable size={15} /> Add connected connector
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onAddArtifact(placement)}>
+            <StickyNote size={15} /> Add connected artifact
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onConnect(props.targetNode!.id)}>
+            <GitBranch size={15} /> Connect to another node
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onAutoSize(props.targetNode!.id)}>
+            <Sparkles size={15} /> Auto-size node
+          </button>
+          <div className="synapse-context-separator" />
+        </>
+      ) : (
+        <>
+          <button type="button" role="menuitem" onClick={() => props.onAddProvider(placement)}>
+            <Cable size={15} /> Add connector here
+          </button>
+          <button type="button" role="menuitem" onClick={() => props.onAddArtifact(placement)}>
+            <StickyNote size={15} /> Add artifact here
+          </button>
+        </>
+      )}
+      <button type="button" role="menuitem" onClick={props.onAutoArrange}>
+        <Network size={15} /> Auto arrange canvas
+      </button>
+      {props.targetNode || props.selectedNode ? <div className="synapse-context-separator" /> : null}
+      {!props.targetNode && props.selectedNode ? (
+        <button type="button" role="menuitem" onClick={() => props.onAutoSize(props.selectedNode!.id)}>
+          <Sparkles size={15} /> Auto-size selected node
+        </button>
+      ) : null}
+      {props.targetNode || props.selectedNode ? (
+        <button
+          className="destructive"
+          type="button"
+          role="menuitem"
+          onClick={() => props.onDelete((props.targetNode ?? props.selectedNode)!.id)}
+        >
+          <Trash2 size={15} /> Delete selected node
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function CreateWorkspaceDialog(props: {
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -1308,6 +1414,7 @@ function AddSourceDialog(props: {
   open: boolean;
   workspace: SynapseWorkspace;
   data: AppData;
+  placement?: NewNodePlacement;
   onOpenChange(open: boolean): void;
   onCreated(workspace: SynapseWorkspace): void;
 }): ReactNode {
@@ -1328,7 +1435,8 @@ function AddSourceDialog(props: {
       const next = await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes`, {
         kind: "provider",
         connectionId: option.connection.id,
-        position: initialNodePosition(props.workspace, "provider"),
+        position: props.placement?.position ?? initialNodePosition(props.workspace, "provider"),
+        parentNodeId: props.placement?.parentNodeId,
       });
       props.onCreated(next);
       props.onOpenChange(false);
@@ -1381,6 +1489,7 @@ function AddSourceDialog(props: {
 function AddArtifactDialog(props: {
   open: boolean;
   workspace: SynapseWorkspace;
+  placement?: NewNodePlacement;
   onOpenChange(open: boolean): void;
   onCreated(workspace: SynapseWorkspace): void;
 }): ReactNode {
@@ -1399,7 +1508,8 @@ function AddArtifactDialog(props: {
         artifactKind: kind,
         title: title.trim(),
         content: markdown.trim() || undefined,
-        position: initialNodePosition(props.workspace, "artifact"),
+        position: props.placement?.position ?? initialNodePosition(props.workspace, "artifact"),
+        parentNodeId: props.placement?.parentNodeId,
       });
       props.onCreated(next);
       props.onOpenChange(false);
@@ -1542,7 +1652,7 @@ function moveNode(workspace: SynapseWorkspace, nodeId: string, position: { x: nu
 function resizeNode(workspace: SynapseWorkspace, nodeId: string, size: SynapseSize): SynapseWorkspace {
   return {
     ...workspace,
-    nodes: workspace.nodes.map((node) => (node.id === nodeId ? { ...node, size } : node)),
+    nodes: workspace.nodes.map((node) => (node.id === nodeId ? { ...node, size, autoSize: false } : node)),
   };
 }
 
@@ -1609,6 +1719,40 @@ export function panNodeIntoView(
   else if (bottom > viewport.height - padding) y -= bottom - (viewport.height - padding);
 
   return x === current.x && y === current.y ? current : { ...current, x, y };
+}
+
+export function fitCanvasView(
+  nodes: SynapseNode[],
+  viewport: { width: number; height: number },
+  padding = 56,
+): CanvasView {
+  if (nodes.length === 0) return { x: padding, y: padding, scale: 1 };
+  const bounds = nodes.reduce(
+    (current, node) => {
+      const size = sizeForCanvasNode(node);
+      return {
+        left: Math.min(current.left, node.position.x),
+        top: Math.min(current.top, node.position.y),
+        right: Math.max(current.right, node.position.x + size.width),
+        bottom: Math.max(current.bottom, node.position.y + size.height),
+      };
+    },
+    { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity },
+  );
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const scale = Math.min(
+    1,
+    Math.max(
+      minimumCanvasScale,
+      Math.min(Math.max(1, viewport.width - padding * 2) / width, Math.max(1, viewport.height - padding * 2) / height),
+    ),
+  );
+  return {
+    x: (viewport.width - width * scale) / 2 - bounds.left * scale,
+    y: (viewport.height - height * scale) / 2 - bounds.top * scale,
+    scale,
+  };
 }
 
 function initialNodePosition(workspace: SynapseWorkspace, nodeKind: SynapseNode["kind"]): { x: number; y: number } {
