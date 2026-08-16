@@ -17,6 +17,7 @@ import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type { Logger } from "./logger.ts";
+import type { ProviderPreviewContent } from "./previews/provider-preview.ts";
 import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
 import type { RunLogCaller, RunLogListInput } from "./storage/runtime-store.ts";
@@ -273,6 +274,14 @@ export class ConnectServer {
       );
       app.delete("/api/synapses/:id/nodes/:nodeId", (context) =>
         this.deleteSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
+      );
+      app.get("/api/synapses/:id/nodes/:nodeId/previews/:previewId", (context) =>
+        this.getSynapsePreview(
+          context,
+          context.req.param("id"),
+          context.req.param("nodeId"),
+          context.req.param("previewId"),
+        ),
       );
       app.post("/api/synapses/:id/edges", (context) => this.addSynapseEdge(context, context.req.param("id")));
       app.delete("/api/synapses/:id/edges/:edgeId", (context) =>
@@ -993,12 +1002,20 @@ export class ConnectServer {
   }
 
   private async getFeedPreview(context: Context, itemId: string, previewId: string): Promise<Response> {
+    return await this.writeProviderPreview(context, this.options.feed!.getPreview(itemId, previewId), "feed");
+  }
+
+  private async writeProviderPreview(
+    context: Context,
+    operation: Promise<ProviderPreviewContent>,
+    owner: "feed" | "synapse",
+  ): Promise<Response> {
     try {
-      const content = await this.options.feed!.getPreview(itemId, previewId);
+      const content = await operation;
       const stored = content.fileId ? await this.options.transitFiles.read(content.fileId) : undefined;
       const bytes = stored ? undefined : content.bytes;
       if (!stored && !bytes) {
-        return jsonError(context, 404, "feed_preview_unavailable", "Feed preview content is unavailable.");
+        return jsonError(context, 404, `${owner}_preview_unavailable`, "Preview content is unavailable.");
       }
       const name = stored?.name ?? content.name;
       const mimeType = stored?.mimeType ?? content.mimeType;
@@ -1015,6 +1032,7 @@ export class ConnectServer {
       });
     } catch (error) {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
+      if (error instanceof SynapseError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof FlowError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof TransitFileError) return jsonError(context, error.status, error.code, error.message);
       throw error;
@@ -1054,6 +1072,10 @@ export class ConnectServer {
 
   private async deleteSynapseNode(context: Context, id: string, nodeId: string): Promise<Response> {
     return await this.writeSynapseResult(context, this.options.synapse!.deleteNode(id, nodeId));
+  }
+
+  private async getSynapsePreview(context: Context, id: string, nodeId: string, previewId: string): Promise<Response> {
+    return await this.writeProviderPreview(context, this.options.synapse!.getPreview(id, nodeId, previewId), "synapse");
   }
 
   private async addSynapseEdge(context: Context, id: string): Promise<Response> {

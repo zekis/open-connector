@@ -2,7 +2,13 @@ import type { ProviderDefinition, SynapseArtifactNode, SynapseProviderNode, Syna
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SynapseApprovalNodeCard, SynapseNodeCard, synapseApprovalItems, zoomCanvasView } from "./synapse-page";
+import {
+  panNodeIntoView,
+  SynapseApprovalNodeCard,
+  SynapseNodeCard,
+  synapseApprovalItems,
+  zoomCanvasView,
+} from "./synapse-page";
 
 const provider: ProviderDefinition = {
   service: "outlook",
@@ -35,6 +41,21 @@ const artifactNode: SynapseArtifactNode = {
   externalUrl: "https://outlook.office.com/mail/message-1",
   position: { x: 430, y: 120 },
   size: { width: 420, height: 280 },
+  previews: [
+    {
+      id: "email",
+      kind: "email",
+      name: "New mining opportunity",
+      contentUrl: "/api/synapses/synapse-1/nodes/artifact-1/previews/email",
+    },
+    {
+      id: "attachment-0",
+      kind: "pdf",
+      name: "Sales brief.pdf",
+      mimeType: "application/pdf",
+      contentUrl: "/api/synapses/synapse-1/nodes/artifact-1/previews/attachment-0",
+    },
+  ],
   createdAt: "2026-08-15T01:01:00.000Z",
   updatedAt: "2026-08-15T01:01:00.000Z",
 };
@@ -50,6 +71,7 @@ describe("SynapseNodeCard", () => {
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
+        onPointerCancel={() => {}}
         onResizePointerDown={() => {}}
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
@@ -72,6 +94,7 @@ describe("SynapseNodeCard", () => {
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
+        onPointerCancel={() => {}}
         onResizePointerDown={() => {}}
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
@@ -88,6 +111,9 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain('class="synapse-node-title" title="New mining opportunity"');
     expect(html).toContain("width:420px;height:280px");
     expect(html).toContain("Resize New mining opportunity");
+    expect(html).toContain("Artifact preview");
+    expect(html).toContain("Available previews");
+    expect(html).toContain("Sales brief.pdf");
   });
 
   it("projects a pending connector approval onto the canvas", () => {
@@ -158,5 +184,17 @@ describe("zoomCanvasView", () => {
   it("clamps zoom to the supported viewing range", () => {
     expect(zoomCanvasView({ x: 0, y: 0, scale: 1 }, { x: 0, y: 0 }, 100_000).scale).toBe(0.3);
     expect(zoomCanvasView({ x: 0, y: 0, scale: 1 }, { x: 0, y: 0 }, -100_000).scale).toBe(2.5);
+  });
+});
+
+describe("panNodeIntoView", () => {
+  it("keeps visible nodes fixed and reveals clipped nodes with padding", () => {
+    const current = { x: 20, y: 30, scale: 1 };
+    expect(panNodeIntoView(current, { x: 80, y: 70 }, { width: 240, height: 140 }, { width: 800, height: 500 })).toBe(
+      current,
+    );
+    expect(
+      panNodeIntoView(current, { x: 720, y: 440 }, { width: 240, height: 140 }, { width: 800, height: 500 }),
+    ).toEqual({ x: -192, y: -112, scale: 1 });
   });
 });

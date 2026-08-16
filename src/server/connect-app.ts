@@ -129,6 +129,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     catalog: options.catalog,
     connections,
     agentChat,
+    actions,
+    getPolicySnapshot,
     store: options.runtimeDatabase.synapseStore,
   });
   const flowTriggers = new FlowTriggerEngine({

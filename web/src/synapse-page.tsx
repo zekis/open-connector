@@ -2,6 +2,7 @@ import type {
   AgentChatToolActivity,
   AppData,
   ConnectionRecord,
+  FeedPreview,
   ProviderDefinition,
   SynapseArtifactKind,
   SynapseNode,
@@ -19,11 +20,15 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  ExternalLink,
+  File,
+  FileImage,
   FileText,
   GitBranch,
   Link2,
   Loader2,
   Mail,
+  Maximize2,
   MessageSquareText,
   Network,
   Plus,
@@ -74,6 +79,7 @@ const maximumNodeHeight = 1_200;
 
 interface DragState {
   nodeId: string;
+  pointerId: number;
   offsetX: number;
   offsetY: number;
 }
@@ -426,8 +432,40 @@ function SynapseCanvas(props: {
   const dragRef = useRef<DragState | undefined>(undefined);
   const resizeRef = useRef<ResizeState | undefined>(undefined);
   const panRef = useRef<PanState | undefined>(undefined);
+  const workspaceRef = useRef(props.workspace);
   const [panning, setPanning] = useState(false);
   const [canvasView, setCanvasView] = useState<CanvasView>({ x: 0, y: 0, scale: 1 });
+  workspaceRef.current = props.workspace;
+
+  const revealSelectedNode = useCallback((): void => {
+    if (dragRef.current || resizeRef.current || panRef.current) return;
+    const canvas = scrollRef.current;
+    const selectedNode = workspaceRef.current.nodes.find((node) => node.id === props.selectedNodeId);
+    if (!canvas || !selectedNode) return;
+    const rect = canvas.getBoundingClientRect();
+    setCanvasView((current) =>
+      panNodeIntoView(current, selectedNode.position, sizeForCanvasNode(selectedNode), {
+        width: rect.width,
+        height: rect.height,
+      }),
+    );
+  }, [props.selectedNodeId]);
+
+  useEffect(() => {
+    if (!props.selectedNodeId) return;
+    const canvas = scrollRef.current;
+    if (!canvas) return;
+    let frame = window.requestAnimationFrame(revealSelectedNode);
+    const observer = new ResizeObserver(() => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(revealSelectedNode);
+    });
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
+  }, [props.selectedNodeId, revealSelectedNode]);
 
   useEffect(() => {
     const canvas = scrollRef.current;
@@ -489,6 +527,7 @@ function SynapseCanvas(props: {
     const rect = scroll.getBoundingClientRect();
     dragRef.current = {
       nodeId: node.id,
+      pointerId: event.pointerId,
       offsetX: (event.clientX - rect.left - canvasView.x) / canvasView.scale - node.position.x,
       offsetY: (event.clientY - rect.top - canvasView.y) / canvasView.scale - node.position.y,
     };
@@ -499,7 +538,7 @@ function SynapseCanvas(props: {
   function moveDrag(event: ReactPointerEvent<HTMLElement>): void {
     const drag = dragRef.current;
     const scroll = scrollRef.current;
-    if (!drag || !scroll) return;
+    if (!drag || drag.pointerId !== event.pointerId || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
       x: (event.clientX - rect.left - canvasView.x) / canvasView.scale - drag.offsetX,
@@ -511,18 +550,24 @@ function SynapseCanvas(props: {
   function finishDrag(event: ReactPointerEvent<HTMLElement>): void {
     const drag = dragRef.current;
     const scroll = scrollRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !scroll) return;
     dragRef.current = undefined;
-    if (!drag || !scroll) return;
     const rect = scroll.getBoundingClientRect();
     const position = {
       x: Math.round((event.clientX - rect.left - canvasView.x) / canvasView.scale - drag.offsetX),
       y: Math.round((event.clientY - rect.top - canvasView.y) / canvasView.scale - drag.offsetY),
     };
     props.onWorkspaceChange(moveNode(props.workspace, drag.nodeId, position));
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     void apiPut<SynapseWorkspace>(
       `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(drag.nodeId)}`,
       { position },
-    ).then(props.onWorkspaceSaved);
+    ).then((workspace) => {
+      props.onWorkspaceSaved(workspace);
+      window.requestAnimationFrame(revealSelectedNode);
+    });
   }
 
   function beginResize(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
@@ -539,7 +584,6 @@ function SynapseCanvas(props: {
     event.currentTarget.setPointerCapture(event.pointerId);
     event.stopPropagation();
     event.preventDefault();
-    props.onNodeSelect(node.id);
   }
 
   function moveResize(event: ReactPointerEvent<HTMLElement>): void {
@@ -561,7 +605,11 @@ function SynapseCanvas(props: {
     void apiPut<SynapseWorkspace>(
       `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(resize.nodeId)}`,
       { size },
-    ).then(props.onWorkspaceSaved);
+    ).then((workspace) => {
+      props.onWorkspaceSaved(workspace);
+      props.onNodeSelect(resize.nodeId);
+      window.requestAnimationFrame(revealSelectedNode);
+    });
   }
 
   return (
@@ -638,6 +686,7 @@ function SynapseCanvas(props: {
             onPointerDown={(event) => beginDrag(event, node)}
             onPointerMove={moveDrag}
             onPointerUp={finishDrag}
+            onPointerCancel={finishDrag}
             onResizePointerDown={(event) => beginResize(event, node)}
             onResizePointerMove={moveResize}
             onResizePointerUp={finishResize}
@@ -673,11 +722,14 @@ export function SynapseNodeCard(props: {
   onPointerDown(event: ReactPointerEvent<HTMLElement>): void;
   onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerCancel(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerDown(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerUp(event: ReactPointerEvent<HTMLElement>): void;
   onSelect(): void;
 }): ReactNode {
+  const [activePreviewId, setActivePreviewId] = useState<string>();
+  const [previewOpen, setPreviewOpen] = useState(false);
   const size = sizeForCanvasNode(props.node);
   const style = {
     transform: `translate(${props.node.position.x}px, ${props.node.position.y}px)`,
@@ -692,6 +744,7 @@ export function SynapseNodeCard(props: {
         onPointerDown={props.onPointerDown}
         onPointerMove={props.onPointerMove}
         onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
         onDoubleClick={props.onSelect}
       >
         <div className="synapse-node-icon provider">
@@ -722,45 +775,202 @@ export function SynapseNodeCard(props: {
   }
   const Icon = artifactIcon(props.node.artifactKind);
   const markdown = props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.";
+  const previews = props.node.previews ?? [];
+  const activePreview = previews.find((preview) => preview.id === activePreviewId) ?? previews[0];
   return (
-    <article
-      className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.linking ? " link-target" : ""}`}
-      style={style}
-      onPointerDown={props.onPointerDown}
-      onPointerMove={props.onPointerMove}
-      onPointerUp={props.onPointerUp}
-      onDoubleClick={props.onSelect}
-    >
-      <header>
-        <span className="synapse-node-icon artifact">
-          <Icon size={18} />
-        </span>
-        <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
-        {props.node.externalUrl ? (
-          <a href={props.node.externalUrl} target="_blank" rel="noreferrer" aria-label="Open source">
-            <ArrowUpRight size={14} />
-          </a>
+    <>
+      <article
+        className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.linking ? " link-target" : ""}`}
+        style={style}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+        onDoubleClick={props.onSelect}
+      >
+        <header>
+          <span className="synapse-node-icon artifact">
+            <Icon size={18} />
+          </span>
+          <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
+          {props.node.externalUrl ? (
+            <a href={props.node.externalUrl} target="_blank" rel="noreferrer" aria-label="Open source">
+              <ArrowUpRight size={14} />
+            </a>
+          ) : null}
+        </header>
+        <strong className="synapse-node-title" title={props.node.title}>
+          {props.node.title}
+        </strong>
+        {activePreview ? (
+          <SynapseArtifactPreview
+            preview={activePreview}
+            previews={previews}
+            selected={props.selected}
+            onPreviewSelect={setActivePreviewId}
+            onOpen={() => setPreviewOpen(true)}
+          />
         ) : null}
-      </header>
-      <strong className="synapse-node-title" title={props.node.title}>
-        {props.node.title}
-      </strong>
-      <div className="synapse-node-markdown">
-        <ChatMarkdown>{markdown}</ChatMarkdown>
-      </div>
-      <span className="synapse-port input" />
-      <span className="synapse-port output" />
-      <span
-        className="synapse-node-resize"
-        role="separator"
-        aria-label={`Resize ${props.node.title}`}
-        onPointerDown={props.onResizePointerDown}
-        onPointerMove={props.onResizePointerMove}
-        onPointerUp={props.onResizePointerUp}
-        onPointerCancel={props.onResizePointerUp}
-      />
-    </article>
+        <div className="synapse-node-markdown">
+          <ChatMarkdown>{markdown}</ChatMarkdown>
+        </div>
+        <span className="synapse-port input" />
+        <span className="synapse-port output" />
+        <span
+          className="synapse-node-resize"
+          role="separator"
+          aria-label={`Resize ${props.node.title}`}
+          onPointerDown={props.onResizePointerDown}
+          onPointerMove={props.onResizePointerMove}
+          onPointerUp={props.onResizePointerUp}
+          onPointerCancel={props.onResizePointerUp}
+        />
+      </article>
+      <SynapsePreviewDialog preview={previewOpen ? activePreview : undefined} onClose={() => setPreviewOpen(false)} />
+    </>
   );
+}
+
+function SynapseArtifactPreview(props: {
+  preview: FeedPreview;
+  previews: FeedPreview[];
+  selected: boolean;
+  onPreviewSelect(previewId: string): void;
+  onOpen(): void;
+}): ReactNode {
+  const inlineUrl = props.selected ? inlinePreviewUrl(props.preview) : undefined;
+  return (
+    <section className="synapse-artifact-preview" aria-label="Artifact preview">
+      <div className={`synapse-preview-media ${props.preview.kind}`}>
+        {props.preview.kind === "image" && inlineUrl ? (
+          <img src={inlineUrl} alt={props.preview.name} loading="lazy" />
+        ) : inlineUrl ? (
+          <iframe
+            src={inlineUrl}
+            title={`Preview of ${props.preview.name}`}
+            loading="lazy"
+            tabIndex={-1}
+            sandbox={
+              props.preview.kind === "web"
+                ? "allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+                : undefined
+            }
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <span className="synapse-preview-placeholder">
+            <PreviewIcon preview={props.preview} />
+            <span>{props.preview.name}</span>
+          </span>
+        )}
+        {(props.preview.contentUrl || props.preview.externalUrl) && props.selected ? (
+          <Button variant="secondary" size="icon-sm" aria-label={`Open ${props.preview.name}`} onClick={props.onOpen}>
+            <Maximize2 size={14} />
+          </Button>
+        ) : null}
+      </div>
+      {props.previews.length > 1 ? (
+        <div className="synapse-preview-tabs" aria-label="Available previews">
+          {props.previews.map((preview) => (
+            <button
+              className={preview.id === props.preview.id ? "active" : undefined}
+              type="button"
+              title={preview.name}
+              aria-label={`Show ${preview.name}`}
+              onClick={() => props.onPreviewSelect(preview.id)}
+              key={preview.id}
+            >
+              <PreviewIcon preview={preview} />
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SynapsePreviewDialog(props: { preview: FeedPreview | undefined; onClose(): void }): ReactNode {
+  const embeddedUrl = props.preview ? inlinePreviewUrl(props.preview) : undefined;
+  return (
+    <Dialog open={Boolean(props.preview)} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogContent className="synapse-preview-dialog sm:max-w-[min(1120px,calc(100vw-2rem))]">
+        {props.preview ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{props.preview.name}</DialogTitle>
+              <DialogDescription>{previewMeta(props.preview)}</DialogDescription>
+            </DialogHeader>
+            <div className={`synapse-preview-full ${props.preview.kind}`}>
+              {props.preview.kind === "image" && embeddedUrl ? (
+                <img src={embeddedUrl} alt={props.preview.name} />
+              ) : embeddedUrl ? (
+                <iframe
+                  src={embeddedUrl}
+                  title={props.preview.name}
+                  sandbox={
+                    props.preview.kind === "web"
+                      ? "allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+                      : undefined
+                  }
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="synapse-preview-unavailable">
+                  <PreviewIcon preview={props.preview} />
+                  <span>This file type opens in its connected application.</span>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              {props.preview.contentUrl ? (
+                <Button asChild variant="outline" size="sm">
+                  <a href={props.preview.contentUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} /> Open raw file
+                  </a>
+                </Button>
+              ) : null}
+              {props.preview.externalUrl ? (
+                <Button asChild size="sm">
+                  <a href={props.preview.externalUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink size={14} /> Open source
+                  </a>
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewIcon({ preview }: { preview: FeedPreview }): ReactNode {
+  if (preview.kind === "email") return <Mail size={16} />;
+  if (preview.kind === "image") return <FileImage size={16} />;
+  if (preview.kind === "pdf" || preview.kind === "document") return <FileText size={16} />;
+  if (preview.kind === "web") return <ExternalLink size={16} />;
+  return <File size={16} />;
+}
+
+function inlinePreviewUrl(preview: FeedPreview): string | undefined {
+  const url = preview.contentUrl ?? preview.externalUrl;
+  if (!url) return undefined;
+  if (preview.kind === "pdf") return `${url}#page=1&view=FitH&toolbar=0&navpanes=0`;
+  if (preview.kind === "document" && preview.contentUrl && !preview.mimeType?.startsWith("text/")) return undefined;
+  if (preview.kind === "file") return undefined;
+  return url;
+}
+
+function previewMeta(preview: FeedPreview): string {
+  const type = preview.kind === "pdf" ? "PDF" : (preview.mimeType ?? artifactLabelForPreview(preview.kind));
+  if (preview.sizeBytes === undefined) return type;
+  if (preview.sizeBytes < 1_024) return `${type} · ${preview.sizeBytes} B`;
+  if (preview.sizeBytes < 1_024 * 1_024) return `${type} · ${Math.round(preview.sizeBytes / 1_024)} KB`;
+  return `${type} · ${(preview.sizeBytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
+function artifactLabelForPreview(kind: FeedPreview["kind"]): string {
+  return kind.replaceAll("_", " ").replace(/^./u, (character) => character.toUpperCase());
 }
 
 export function SynapseApprovalNodeCard(props: {
@@ -1370,6 +1580,35 @@ export function zoomCanvasView(current: CanvasView, pointer: { x: number; y: num
     y: pointer.y - worldY * scale,
     scale,
   };
+}
+
+export function panNodeIntoView(
+  current: CanvasView,
+  position: { x: number; y: number },
+  size: SynapseSize,
+  viewport: { width: number; height: number },
+  padding = 32,
+): CanvasView {
+  const availableWidth = Math.max(0, viewport.width - padding * 2);
+  const availableHeight = Math.max(0, viewport.height - padding * 2);
+  const scaledWidth = size.width * current.scale;
+  const scaledHeight = size.height * current.scale;
+  const left = position.x * current.scale + current.x;
+  const top = position.y * current.scale + current.y;
+  const right = left + scaledWidth;
+  const bottom = top + scaledHeight;
+  let x = current.x;
+  let y = current.y;
+
+  if (scaledWidth > availableWidth) x = padding - position.x * current.scale;
+  else if (left < padding) x += padding - left;
+  else if (right > viewport.width - padding) x -= right - (viewport.width - padding);
+
+  if (scaledHeight > availableHeight) y = padding - position.y * current.scale;
+  else if (top < padding) y += padding - top;
+  else if (bottom > viewport.height - padding) y -= bottom - (viewport.height - padding);
+
+  return x === current.x && y === current.y ? current : { ...current, x, y };
 }
 
 function initialNodePosition(workspace: SynapseWorkspace, nodeKind: SynapseNode["kind"]): { x: number; y: number } {

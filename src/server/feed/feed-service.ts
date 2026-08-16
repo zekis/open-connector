@@ -10,14 +10,16 @@ import type {
   FeedComment,
   FeedItem,
   FeedPage,
-  FeedPreview,
   FeedPreviewContent,
-  FeedPreviewKind,
   FeedThread,
   IFeedStore,
 } from "./feed-types.ts";
 
-import { base64Bytes } from "../../core/cast.ts";
+import {
+  createProviderPreviews,
+  ProviderPreviewError,
+  readProviderPreviewContent,
+} from "../previews/provider-preview.ts";
 
 const feedItemPrefix = "flow:";
 const defaultFeedLimit = 40;
@@ -25,7 +27,6 @@ const maximumFeedLimit = 100;
 const maximumCommentCharacters = 20_000;
 const maximumContextCharacters = 30_000;
 const maximumStoredComments = 100;
-const maximumFeedPreviewBytes = 20 * 1024 * 1024;
 
 export interface FeedServiceOptions {
   flows: Pick<FlowRunner, "listRuns" | "getRunDetail" | "listApprovals">;
@@ -140,7 +141,12 @@ export class FeedService {
         503,
       );
     }
-    return readPreviewContent(descriptor, result.result.output);
+    try {
+      return readProviderPreviewContent(descriptor, result.result.output);
+    } catch (error) {
+      if (error instanceof ProviderPreviewError) throw new FeedError(error.code, error.message, error.status);
+      throw error;
+    }
   }
 
   async recordApprovalResponse(approvalId: string, response: AgentChatResponse): Promise<void> {
@@ -323,19 +329,7 @@ function inferFlowProviderService(run: FlowRun): string | undefined {
   return sourceTool?.actionId.split(".")[0];
 }
 
-type FeedPreviewOutputKind = "outlook_message" | "downloaded_file" | "one_drive" | "dropbox" | "text";
-
-interface FeedPreviewSource {
-  actionId: string;
-  connectionId: string;
-  input: Record<string, unknown>;
-  outputKind: FeedPreviewOutputKind;
-}
-
-interface FeedPreviewDescriptor {
-  preview: FeedPreview;
-  source?: FeedPreviewSource;
-}
+type FeedPreviewDescriptor = ReturnType<typeof createProviderPreviews>[number];
 
 function createPreviewDescriptors(
   run: FlowRun,
@@ -345,296 +339,18 @@ function createPreviewDescriptors(
   summary: string | undefined,
 ): FeedPreviewDescriptor[] {
   if (!item) return [];
-  const service = typeof payload?.service === "string" ? payload.service : undefined;
-  const connectionId = typeof payload?.connectionId === "string" ? payload.connectionId : undefined;
-  if (service === "outlook") {
-    return createOutlookPreviews(run, item, connectionId, title, summary);
-  }
-
-  const file = createFilePreview(run, service, item, connectionId);
-  return file ? [file] : [];
-}
-
-function createOutlookPreviews(
-  run: FlowRun,
-  item: Record<string, unknown>,
-  connectionId: string | undefined,
-  title: string,
-  summary: string | undefined,
-): FeedPreviewDescriptor[] {
-  const messageId = typeof item.id === "string" ? item.id : undefined;
-  const externalUrl = safeExternalUrl(item.webLink);
-  const emailSource =
-    connectionId && messageId
-      ? {
-          actionId: "outlook.get_message",
-          connectionId,
-          input: {
-            messageId,
-            select: ["id", "subject", "body", "from", "sender", "receivedDateTime", "sentDateTime", "webLink"],
-            bodyContentType: "text",
-          },
-          outputKind: "outlook_message" as const,
-        }
-      : undefined;
-  const previews: FeedPreviewDescriptor[] = [
-    previewDescriptor(run, {
-      id: "email",
-      kind: "email",
-      name: title,
-      summary,
-      externalUrl,
-      source: emailSource,
-    }),
-  ];
-
-  const attachments = Array.isArray(item.attachments) ? item.attachments : [];
-  for (const [index, value] of attachments.entries()) {
-    const attachment = record(value);
-    if (!attachment || attachment.isInline === true || typeof attachment.id !== "string") continue;
-    const name = firstText(attachment, ["name"]) ?? `Attachment ${index + 1}`;
-    const mimeType = firstText(attachment, ["contentType"]) ?? inferMimeType(name);
-    const sizeBytes = nonNegativeNumber(attachment.size);
-    const attachmentType = firstText(attachment, ["@odata.type"]);
-    const isReference = attachmentType?.toLowerCase().endsWith("referenceattachment") === true;
-    const source =
-      !isReference && connectionId && messageId && (sizeBytes === undefined || sizeBytes <= maximumFeedPreviewBytes)
-        ? {
-            actionId: "outlook.download_attachment",
-            connectionId,
-            input: { messageId, attachmentId: attachment.id },
-            outputKind: "downloaded_file" as const,
-          }
-        : undefined;
-    previews.push(
-      previewDescriptor(run, {
-        id: `attachment-${index}`,
-        kind: previewKind(name, mimeType),
-        name,
-        mimeType,
-        sizeBytes,
-        externalUrl: safeExternalUrl(attachment.sourceUrl),
-        source,
-      }),
-    );
-  }
-  return previews;
-}
-
-function createFilePreview(
-  run: FlowRun,
-  service: string | undefined,
-  item: Record<string, unknown>,
-  connectionId: string | undefined,
-): FeedPreviewDescriptor | undefined {
-  const name = firstText(item, ["name", "fileName", "path", "pathDisplay", "pathLower"]);
-  if (!name) return undefined;
-  const file = record(item.file);
-  const parentReference = record(item.parentReference);
-  const mimeType = firstText(file, ["mimeType"]) ?? firstText(item, ["mimeType", "contentType"]) ?? inferMimeType(name);
-  const sizeBytes = nonNegativeNumber(item.size) ?? nonNegativeNumber(item.sizeBytes);
-  const canLoad = sizeBytes === undefined || sizeBytes <= maximumFeedPreviewBytes;
-  let source: FeedPreviewSource | undefined;
-  if (canLoad && connectionId && service === "one_drive" && typeof item.id === "string") {
-    source = {
-      actionId: "one_drive.download_file",
-      connectionId,
-      input: {
-        itemId: item.id,
-        ...(typeof parentReference?.driveId === "string" ? { driveId: parentReference.driveId } : {}),
-      },
-      outputKind: "one_drive",
-    };
-  } else if (canLoad && connectionId && service === "dropbox") {
-    const path = firstText(item, ["pathDisplay", "pathLower", "path"]);
-    if (path) {
-      source = {
-        actionId: "dropbox.download_file",
-        connectionId,
-        input: { path },
-        outputKind: "dropbox",
-      };
-    }
-  } else if (canLoad && connectionId && service === "obsidian" && isTextPreview(name, mimeType)) {
-    source = {
-      actionId: "obsidian.read_note",
-      connectionId,
-      input: { path: name },
-      outputKind: "text",
-    };
-  } else if (canLoad && connectionId && service === "sharepoint" && typeof item.id === "string") {
-    const driveId = firstText(parentReference, ["driveId"]);
-    if (driveId) {
-      source = {
-        actionId: "sharepoint.download_file",
-        connectionId,
-        input: { driveId, itemId: item.id },
-        outputKind: "downloaded_file",
-      };
-    }
-  }
-
-  return previewDescriptor(run, {
-    id: "file",
-    kind: previewKind(name, mimeType),
-    name,
-    mimeType,
-    sizeBytes,
-    externalUrl: safeExternalUrl(item.webUrl) ?? safeExternalUrl(item.webLink) ?? safeExternalUrl(item.url),
-    source,
+  return createProviderPreviews({
+    service: typeof payload?.service === "string" ? payload.service : undefined,
+    connectionId: typeof payload?.connectionId === "string" ? payload.connectionId : undefined,
+    item,
+    title,
+    summary,
+    contentUrl: (previewId) => feedPreviewUrl(run.id, previewId),
   });
-}
-
-function previewDescriptor(
-  run: FlowRun,
-  input: Omit<FeedPreview, "contentUrl"> & { source?: FeedPreviewSource },
-): FeedPreviewDescriptor {
-  const { source, ...preview } = input;
-  return {
-    preview: {
-      ...preview,
-      ...(source ? { contentUrl: feedPreviewUrl(run.id, preview.id) } : {}),
-    },
-    source,
-  };
 }
 
 function feedPreviewUrl(runId: string, previewId: string): string {
   return `/api/feed/${encodeURIComponent(`${feedItemPrefix}${runId}`)}/previews/${encodeURIComponent(previewId)}`;
-}
-
-function previewKind(name: string, mimeType: string | undefined): FeedPreviewKind {
-  const mime = mimeType?.toLowerCase() ?? "";
-  const extension = fileExtension(name);
-  if (mime.startsWith("image/") || ["gif", "jpeg", "jpg", "png", "webp"].includes(extension)) return "image";
-  if (mime === "application/pdf" || extension === "pdf") return "pdf";
-  if (
-    mime.startsWith("text/") ||
-    ["csv", "doc", "docx", "html", "md", "ppt", "pptx", "rtf", "txt", "xls", "xlsx"].includes(extension)
-  ) {
-    return "document";
-  }
-  return "file";
-}
-
-function inferMimeType(name: string): string | undefined {
-  switch (fileExtension(name)) {
-    case "gif":
-      return "image/gif";
-    case "jpeg":
-    case "jpg":
-      return "image/jpeg";
-    case "png":
-      return "image/png";
-    case "webp":
-      return "image/webp";
-    case "pdf":
-      return "application/pdf";
-    case "csv":
-      return "text/csv";
-    case "html":
-      return "text/html";
-    case "md":
-      return "text/markdown";
-    case "txt":
-      return "text/plain";
-    default:
-      return undefined;
-  }
-}
-
-function isTextPreview(name: string, mimeType: string | undefined): boolean {
-  return mimeType?.startsWith("text/") === true || ["md", "txt"].includes(fileExtension(name));
-}
-
-function fileExtension(name: string): string {
-  const basename = name.split(/[\\/]/u).at(-1) ?? name;
-  const index = basename.lastIndexOf(".");
-  return index >= 0 ? basename.slice(index + 1).toLowerCase() : "";
-}
-
-function safeExternalUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function nonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function readPreviewContent(descriptor: FeedPreviewDescriptor, output: unknown): FeedPreviewContent {
-  const value = record(output);
-  if (!value) throw new FeedError("feed_preview_unavailable", "Feed preview returned an invalid response.", 503);
-  switch (descriptor.source?.outputKind) {
-    case "outlook_message": {
-      const body = record(value.body);
-      const content = firstText(body, ["content"]);
-      if (!content) throw new FeedError("feed_preview_unavailable", "The email body is unavailable.", 404);
-      const bytes = new TextEncoder().encode(content);
-      return {
-        name: descriptor.preview.name,
-        mimeType: "text/plain; charset=utf-8",
-        sizeBytes: bytes.byteLength,
-        bytes,
-      };
-    }
-    case "text": {
-      const content = typeof value.content === "string" ? value.content : undefined;
-      if (content === undefined)
-        throw new FeedError("feed_preview_unavailable", "The document body is unavailable.", 404);
-      const bytes = new TextEncoder().encode(content);
-      return {
-        name: descriptor.preview.name,
-        mimeType: descriptor.preview.mimeType ?? "text/plain; charset=utf-8",
-        sizeBytes: bytes.byteLength,
-        bytes,
-      };
-    }
-    case "one_drive": {
-      const content = record(value.content);
-      if (!content) throw new FeedError("feed_preview_unavailable", "The file content is unavailable.", 404);
-      return base64PreviewContent(descriptor.preview, content);
-    }
-    case "dropbox":
-      return base64PreviewContent(descriptor.preview, value);
-    case "downloaded_file": {
-      const file = record(value.file);
-      if (typeof file?.fileId === "string") {
-        return {
-          name: firstText(value, ["name"]) ?? descriptor.preview.name,
-          mimeType: firstText(value, ["mimeType"]) ?? descriptor.preview.mimeType ?? "application/octet-stream",
-          sizeBytes: nonNegativeNumber(value.sizeBytes),
-          fileId: file.fileId,
-        };
-      }
-      return base64PreviewContent(descriptor.preview, value);
-    }
-    default:
-      throw new FeedError("feed_preview_unavailable", "Feed preview content is unavailable.", 404);
-  }
-}
-
-function base64PreviewContent(preview: FeedPreview, value: Record<string, unknown>): FeedPreviewContent {
-  try {
-    const bytes = base64Bytes(value.contentBase64, "preview content");
-    if (bytes.byteLength > maximumFeedPreviewBytes) {
-      throw new FeedError("feed_preview_too_large", "This file is too large to preview inline.", 413);
-    }
-    return {
-      name: firstText(value, ["name"]) ?? preview.name,
-      mimeType: firstText(value, ["mimeType"]) ?? preview.mimeType ?? "application/octet-stream",
-      sizeBytes: bytes.byteLength,
-      bytes,
-    };
-  } catch (error) {
-    if (error instanceof FeedError) throw error;
-    throw new FeedError("feed_preview_unavailable", "Feed preview returned invalid file content.", 503);
-  }
 }
 
 function actionApprovalItem(approval: ActionApproval): FeedItem {

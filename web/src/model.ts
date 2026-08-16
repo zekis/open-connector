@@ -442,7 +442,7 @@ export interface FeedActionSummary {
   status: "pending" | "completed" | "failed" | "denied";
 }
 
-export type FeedPreviewKind = "email" | "image" | "pdf" | "document" | "file";
+export type FeedPreviewKind = "email" | "web" | "image" | "pdf" | "document" | "file";
 
 export interface FeedPreview {
   id: string;
@@ -520,6 +520,9 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   sourceActionId?: string;
   sourceConnectionId?: string;
   sourceActivityId?: string;
+  sourceInput?: Record<string, unknown>;
+  itemIdentity?: string;
+  previews?: FeedPreview[];
   data?: unknown;
 }
 

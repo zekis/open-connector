@@ -1,4 +1,5 @@
 import type { AgentChatToolActivity } from "../chat/agent-chat-types.ts";
+import type { ProviderPreview } from "../previews/provider-preview.ts";
 
 export type SynapseNodeKind = "provider" | "artifact";
 export type SynapseArtifactKind = "email" | "draft" | "document" | "search_result" | "note" | "task" | "generic";
@@ -39,6 +40,9 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   sourceActionId?: string;
   sourceConnectionId?: string;
   sourceActivityId?: string;
+  sourceInput?: Record<string, unknown>;
+  itemIdentity?: string;
+  previews?: ProviderPreview[];
   data?: unknown;
 }
 

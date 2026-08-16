@@ -1,7 +1,10 @@
 import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionService, ConnectionSummary } from "../../connection-service.ts";
+import type { ActionPolicySnapshot } from "../../core/action-policy.ts";
+import type { IActionRunner } from "../actions/action-runner.ts";
 import type { AgentChatExtension, AgentChatExtensionTool, AgentChatService } from "../chat/agent-chat-service.ts";
 import type { AgentChatResponse, AgentChatToolActivity } from "../chat/agent-chat-types.ts";
+import type { ProviderPreviewContent, ProviderPreviewDescriptor } from "../previews/provider-preview.ts";
 import type {
   ISynapseStore,
   SynapseArtifactKind,
@@ -16,6 +19,12 @@ import type {
   SynapseWorkspace,
   SynapseWorkspaceSummary,
 } from "./synapse-types.ts";
+
+import {
+  createProviderPreviews,
+  ProviderPreviewError,
+  readProviderPreviewContent,
+} from "../previews/provider-preview.ts";
 
 const maximumWorkspaceNameCharacters = 120;
 const maximumNodeTitleCharacters = 240;
@@ -39,6 +48,8 @@ export interface SynapseServiceOptions {
   catalog: CatalogStore;
   connections: Pick<ConnectionService, "listConnections">;
   agentChat: Pick<AgentChatService, "respondWithExtension" | "getApprovalResult">;
+  actions?: Pick<IActionRunner, "run">;
+  getPolicySnapshot?(): Promise<ActionPolicySnapshot>;
   store: ISynapseStore;
 }
 
@@ -76,7 +87,44 @@ export class SynapseService {
   }
 
   async get(id: string): Promise<SynapseWorkspace> {
-    return await this.requiredWorkspace(id);
+    return this.presentWorkspace(await this.requiredWorkspace(id));
+  }
+
+  async getPreview(workspaceId: string, nodeId: string, previewId: string): Promise<ProviderPreviewContent> {
+    const workspace = await this.requiredWorkspace(workspaceId);
+    const node = requiredNode(workspace, nodeId);
+    if (node.kind !== "artifact") {
+      throw new SynapseError("synapse_preview_not_found", "Only artifact nodes have previews.", 404);
+    }
+    const descriptor = previewDescriptors(workspace.id, node).find((candidate) => candidate.preview.id === previewId);
+    if (!descriptor?.source) {
+      throw new SynapseError("synapse_preview_not_found", "Synapse preview content is unavailable.", 404);
+    }
+    if (!this.options.actions) {
+      throw new SynapseError("synapse_preview_unavailable", "Synapse preview content is unavailable.", 404);
+    }
+    const policy = await this.options.getPolicySnapshot?.();
+    const result = await this.options.actions.run({
+      actionId: descriptor.source.actionId,
+      connectionId: descriptor.source.connectionId,
+      input: descriptor.source.input,
+      caller: "web",
+      policy,
+      approvalPolicy: "bypass",
+    });
+    if (!result?.result.ok) {
+      throw new SynapseError(
+        "synapse_preview_unavailable",
+        result?.result.error?.message ?? "Synapse preview content could not be loaded.",
+        503,
+      );
+    }
+    try {
+      return readProviderPreviewContent(descriptor, result.result.output);
+    } catch (error) {
+      if (error instanceof ProviderPreviewError) throw new SynapseError(error.code, error.message, error.status);
+      throw error;
+    }
   }
 
   async update(id: string, input: unknown): Promise<SynapseWorkspace> {
@@ -212,7 +260,7 @@ export class SynapseService {
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
     const thread = threadFor(workspace, nodeId);
-    if (!thread.pendingApprovalId) return workspace;
+    if (!thread.pendingApprovalId) return this.presentWorkspace(workspace);
     const result = await this.options.agentChat.getApprovalResult(thread.pendingApprovalId);
     if (result.response) {
       await this.applyAgentResponse(workspace, selectedNode, thread, result.response, thread.pendingMessageId);
@@ -231,7 +279,7 @@ export class SynapseService {
       thread.updatedAt = new Date().toISOString();
       return await this.save(workspace);
     }
-    return workspace;
+    return this.presentWorkspace(workspace);
   }
 
   private async createExtension(workspace: SynapseWorkspace, selectedNode: SynapseNode): Promise<AgentChatExtension> {
@@ -328,14 +376,6 @@ export class SynapseService {
     position: SynapsePosition,
     overrides: { title?: string; instructions?: string; size?: SynapseSize },
   ): Promise<SynapseProviderNode> {
-    const existing = workspace.nodes.find(
-      (node): node is SynapseProviderNode => node.kind === "provider" && node.connectionId === connectionId,
-    );
-    if (existing) {
-      if (overrides.instructions) existing.instructions = overrides.instructions;
-      if (overrides.size) existing.size = overrides.size;
-      return existing;
-    }
     const connection = (await this.options.connections.listConnections()).find(
       (candidate) => candidate.id === connectionId,
     );
@@ -380,6 +420,8 @@ export class SynapseService {
       sourceActionId: input.sourceActionId,
       sourceConnectionId: input.sourceConnectionId,
       sourceActivityId: input.sourceActivityId,
+      sourceInput: input.sourceInput,
+      itemIdentity: input.itemIdentity,
       data: input.data,
       position,
       size,
@@ -454,9 +496,7 @@ export class SynapseService {
       ) {
         continue;
       }
-      let connection = workspace.nodes.find(
-        (node): node is SynapseProviderNode => node.kind === "provider" && node.connectionId === activity.connectionId,
-      );
+      let connection = providerNodeForBranch(workspace, selectedNode, activity.connectionId);
       if (!connection) {
         connection = await this.addProviderNode(
           workspace,
@@ -467,14 +507,40 @@ export class SynapseService {
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
       }
       const parent = connection;
-      const candidates = artifactCandidates(activity.output, activity.actionId).slice(0, maximumProjectedArtifacts);
+      const boundedSourceInput = boundedData(activity.input, 4_000);
+      const sourceInput = isRecord(boundedSourceInput) ? boundedSourceInput : undefined;
+      const candidates = artifactCandidates(
+        activity.output,
+        activity.actionId,
+        activity.connectionId,
+        sourceInput,
+      ).slice(0, maximumProjectedArtifacts);
       for (const candidate of candidates) {
-        const node = this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), {
+        const artifact: ArtifactInput = {
           ...candidate,
           sourceActionId: activity.actionId,
           sourceConnectionId: activity.connectionId,
           sourceActivityId: activity.id,
-        });
+          sourceInput,
+        };
+        const existing = artifact.itemIdentity
+          ? workspace.nodes.find(
+              (node): node is SynapseArtifactNode =>
+                node.kind === "artifact" && artifactIdentity(node) === artifact.itemIdentity,
+            )
+          : undefined;
+        const node =
+          existing ?? this.addArtifactNode(workspace, nextFanPosition(workspace, parent, "artifact"), artifact);
+        if (existing) {
+          existing.itemIdentity ??= artifact.itemIdentity;
+          existing.sourceActionId = artifact.sourceActionId;
+          existing.sourceConnectionId = artifact.sourceConnectionId;
+          existing.sourceActivityId = artifact.sourceActivityId;
+          existing.sourceInput = artifact.sourceInput;
+          existing.data = artifact.data;
+          existing.externalUrl ??= artifact.externalUrl;
+          existing.updatedAt = new Date().toISOString();
+        }
         this.connectNodes(workspace, parent.id, node.id);
       }
     }
@@ -489,15 +555,26 @@ export class SynapseService {
   private async save(workspace: SynapseWorkspace): Promise<SynapseWorkspace> {
     workspace.updatedAt = new Date().toISOString();
     await this.options.store.setWorkspace(workspace);
-    return workspace;
+    return this.presentWorkspace(workspace);
+  }
+
+  private presentWorkspace(workspace: SynapseWorkspace): SynapseWorkspace {
+    return {
+      ...workspace,
+      nodes: workspace.nodes.map((node) =>
+        node.kind === "artifact"
+          ? { ...node, previews: previewDescriptors(workspace.id, node).map((descriptor) => descriptor.preview) }
+          : node,
+      ),
+    };
   }
 }
 
 export class SynapseError extends Error {
   readonly code: string;
-  readonly status: 400 | 404 | 409;
+  readonly status: 400 | 404 | 409 | 413 | 503;
 
-  constructor(code: string, message: string, status: 400 | 404 | 409 = 400) {
+  constructor(code: string, message: string, status: 400 | 404 | 409 | 413 | 503 = 400) {
     super(message);
     this.code = code;
     this.status = status;
@@ -513,6 +590,8 @@ interface ArtifactInput {
   sourceActionId?: string;
   sourceConnectionId?: string;
   sourceActivityId?: string;
+  sourceInput?: Record<string, unknown>;
+  itemIdentity?: string;
   data?: unknown;
 }
 
@@ -616,6 +695,7 @@ Rules:
 - use connector tools whenever current external data or a side effect is needed
 - add a provider node with synapse_add_provider when you use a connection that is not already represented in the visible context
 - after retrieving useful results, call synapse_add_artifacts and create one concise artifact per useful result; fan-outs are preferred over burying results in chat
+- retrieve attachment metadata for useful emails that report attachments so the canvas can render those files
 - put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
 - include sourceActivityId from connector tool activity when turning that result into artifacts
 - create draft artifacts for proposed messages or documents before sending when the user is still reviewing them
@@ -626,14 +706,17 @@ Rules:
 }
 
 function createGraphContext(workspace: SynapseWorkspace, selectedNodeId: string): Record<string, unknown> {
-  const nodeIds = connectedNodeIds(workspace, selectedNodeId);
-  const nodes = workspace.nodes.filter((node) => nodeIds.has(node.id)).slice(0, maximumContextNodes);
-  const includedIds = new Set(nodes.map((node) => node.id));
+  const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
+  const rankedNodes = connectedNodesByDistance(workspace, selectedNodeId)
+    .map(({ nodeId, distance }) => ({ node: nodesById.get(nodeId), distance }))
+    .filter((entry): entry is { node: SynapseNode; distance: number } => entry.node !== undefined);
+  const includedIds = new Set(rankedNodes.map(({ node }) => node.id));
   return {
     workspace: { id: workspace.id, name: workspace.name },
     selectedNodeId,
-    nodes: nodes.map((node) => ({
+    nodes: rankedNodes.map(({ node, distance }) => ({
       ...node,
+      graphDistance: distance,
       ...(node.kind === "artifact"
         ? {
             summary: truncate(node.summary, 4_000),
@@ -646,37 +729,82 @@ function createGraphContext(workspace: SynapseWorkspace, selectedNodeId: string)
   };
 }
 
-function connectedNodeIds(workspace: SynapseWorkspace, selectedNodeId: string): Set<string> {
+function connectedNodesByDistance(
+  workspace: SynapseWorkspace,
+  selectedNodeId: string,
+): Array<{ nodeId: string; distance: number }> {
+  const adjacency = new Map<string, string[]>();
+  for (const edge of workspace.edges) {
+    adjacency.set(edge.sourceNodeId, [...(adjacency.get(edge.sourceNodeId) ?? []), edge.targetNodeId]);
+    adjacency.set(edge.targetNodeId, [...(adjacency.get(edge.targetNodeId) ?? []), edge.sourceNodeId]);
+  }
   const visited = new Set([selectedNodeId]);
-  const queue = [selectedNodeId];
+  const ordered = [{ nodeId: selectedNodeId, distance: 0 }];
+  const queue = [...ordered];
   while (queue.length > 0 && visited.size < maximumContextNodes) {
     const current = queue.shift()!;
-    for (const edge of workspace.edges) {
-      const adjacent =
-        edge.sourceNodeId === current
-          ? edge.targetNodeId
-          : edge.targetNodeId === current
-            ? edge.sourceNodeId
-            : undefined;
-      if (adjacent && !visited.has(adjacent)) {
+    for (const adjacent of adjacency.get(current.nodeId) ?? []) {
+      if (!visited.has(adjacent)) {
         visited.add(adjacent);
-        queue.push(adjacent);
+        const entry = { nodeId: adjacent, distance: current.distance + 1 };
+        ordered.push(entry);
+        queue.push(entry);
+        if (visited.size >= maximumContextNodes) break;
       }
     }
   }
-  return visited;
+  return ordered;
 }
 
-function artifactCandidates(output: unknown, actionId: string): ArtifactInput[] {
+function providerNodeForBranch(
+  workspace: SynapseWorkspace,
+  selectedNode: SynapseNode,
+  connectionId: string,
+): SynapseProviderNode | undefined {
+  const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
+  for (const { nodeId } of connectedNodesByDistance(workspace, selectedNode.id)) {
+    const node = nodesById.get(nodeId);
+    if (node?.kind === "provider" && node.connectionId === connectionId) return node;
+  }
+  return undefined;
+}
+
+function previewDescriptors(workspaceId: string, node: SynapseArtifactNode): ProviderPreviewDescriptor[] {
+  return createProviderPreviews({
+    service: node.sourceActionId?.split(".")[0],
+    connectionId: node.sourceConnectionId,
+    actionId: node.sourceActionId,
+    sourceInput: node.sourceInput,
+    item: isRecord(node.data) ? node.data : {},
+    title: node.title,
+    summary: node.summary,
+    externalUrl: node.externalUrl,
+    contentUrl: (previewId) =>
+      `/api/synapses/${encodeURIComponent(workspaceId)}/nodes/${encodeURIComponent(node.id)}/previews/${encodeURIComponent(previewId)}`,
+  });
+}
+
+function artifactCandidates(
+  output: unknown,
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+): ArtifactInput[] {
   const outputRecord = isRecord(output) ? output : undefined;
-  const collection = ["items", "results", "value", "messages", "files", "records"]
+  const collection = ["items", "results", "value", "messages", "files", "records", "attachments"]
     .map((field) => outputRecord?.[field])
     .find(Array.isArray);
   const values = collection ?? (output === undefined ? [] : [output]);
-  return values.map((value, index) => artifactFromValue(value, actionId, index));
+  return values.map((value, index) => artifactFromValue(value, actionId, connectionId, sourceInput, index));
 }
 
-function artifactFromValue(value: unknown, actionId: string, index: number): ArtifactInput {
+function artifactFromValue(
+  value: unknown,
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+  index: number,
+): ArtifactInput {
   const item = isRecord(value) ? value : undefined;
   const title = firstText(item, ["subject", "title", "name", "displayName", "fileName", "path"]);
   const summary = firstText(item, ["bodyPreview", "snippet", "description", "summary", "preview"]);
@@ -688,8 +816,64 @@ function artifactFromValue(value: unknown, actionId: string, index: number): Art
     summary: truncate(summary, 4_000),
     content: artifactMarkdown(value, summary, content, externalUrl),
     externalUrl,
+    itemIdentity: providerItemIdentity(item, actionId, connectionId, sourceInput),
     data: boundedData(value),
   };
+}
+
+function providerItemIdentity(
+  item: Record<string, unknown> | undefined,
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!item) return undefined;
+  const service = actionId.split(".")[0] ?? actionId;
+  const resource = actionId
+    .split(".")
+    .at(-1)!
+    .replace(/^(?:list|get|search|download|create|update|read)_/u, "")
+    .replace(/ies$/u, "y")
+    .replace(/s$/u, "");
+  const explicit = firstText(item, [
+    "id",
+    "messageId",
+    "itemId",
+    "invoiceId",
+    "contactId",
+    "workItemId",
+    "projectId",
+    "eventId",
+    "taskId",
+    "uid",
+  ]);
+  const messageId = actionId.includes("attachment") ? firstText(sourceInput, ["messageId"]) : undefined;
+  const path = firstText(item, ["pathLower", "pathDisplay", "path"]);
+  const externalUrl = firstHttpsUrl(item, ["webUrl", "webLink", "url", "link"]);
+  const stableValue = explicit
+    ? `${messageId ? `${messageId}:` : ""}${explicit}`
+    : path
+      ? path.toLowerCase()
+      : normalizedIdentityUrl(externalUrl);
+  return stableValue ? `${connectionId}:${service}:${resource}:${stableValue}` : undefined;
+}
+
+function artifactIdentity(node: SynapseArtifactNode): string | undefined {
+  if (node.itemIdentity) return node.itemIdentity;
+  if (!node.sourceActionId || !node.sourceConnectionId) return undefined;
+  return providerItemIdentity(
+    isRecord(node.data) ? node.data : undefined,
+    node.sourceActionId,
+    node.sourceConnectionId,
+    node.sourceInput,
+  );
+}
+
+function normalizedIdentityUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  url.hash = "";
+  return url.toString();
 }
 
 function artifactMarkdown(
@@ -826,6 +1010,8 @@ function readArtifactInput(body: Record<string, unknown>): ArtifactInput {
     sourceActionId: optionalText(body.sourceActionId, "sourceActionId", 200),
     sourceConnectionId: optionalText(body.sourceConnectionId, "sourceConnectionId", 200),
     sourceActivityId: optionalText(body.sourceActivityId, "sourceActivityId", 200),
+    sourceInput: body.sourceInput === undefined ? undefined : readObject(body.sourceInput, "sourceInput"),
+    itemIdentity: optionalText(body.itemIdentity, "itemIdentity", 1_000),
     data: body.data,
   };
 }

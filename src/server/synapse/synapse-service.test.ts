@@ -1,4 +1,5 @@
 import type { ProviderDefinition } from "../../core/types.ts";
+import type { IActionRunner } from "../actions/action-runner.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
 import type { AgentChatApprovalResult, AgentChatResponse } from "../chat/agent-chat-types.ts";
 import type { ISynapseStore, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
@@ -80,7 +81,191 @@ describe("SynapseService", () => {
     expect(result.threads[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.nodes.find((node) => node.kind === "artifact" && node.title === "Deal one")).toMatchObject({
       content: "Half price\n\n[Open source](https://example.com/deal-one)",
+      itemIdentity: "brave-1:brave:web_search:https://example.com/deal-one",
+      previews: [expect.objectContaining({ kind: "web", externalUrl: "https://example.com/deal-one" })],
     });
+  });
+
+  it("allows branch-local instances of one provider connection", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Parallel mail branches" });
+    await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: 100, y: 100 },
+      instructions: "Investigate sales mail.",
+    });
+    const result = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: 500, y: 100 },
+      instructions: "Investigate project mail.",
+    });
+
+    expect(result.nodes.filter((node) => node.kind === "provider" && node.connectionId === "outlook-1")).toHaveLength(
+      2,
+    );
+  });
+
+  it("reuses a stable provider item across repeated connector results", async () => {
+    let activityNumber = 0;
+    const service = createService({
+      respondWithExtension: vi.fn(async () => {
+        activityNumber += 1;
+        return completedResponse([
+          {
+            id: `activity-${activityNumber}`,
+            type: "action",
+            label: "outlook.list_messages",
+            ok: true,
+            actionId: "outlook.list_messages",
+            connectionId: "outlook-1",
+            input: { top: 10 },
+            output: {
+              messages: [
+                {
+                  id: "message-1",
+                  subject: "Project update",
+                  bodyPreview: "Current status",
+                  webLink: "https://outlook.office.com/mail/message-1",
+                },
+              ],
+            },
+          },
+        ]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Stable mail" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: 100, y: 100 },
+    });
+    const outlook = seeded.nodes[0]!;
+
+    await service.chat(workspace.id, outlook.id, { content: "Find updates." });
+    const repeated = await service.chat(workspace.id, outlook.id, { content: "Refresh updates." });
+    const artifacts = repeated.nodes.filter((node) => node.kind === "artifact");
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      itemIdentity: "outlook-1:outlook:message:message-1",
+      sourceActivityId: "activity-2",
+    });
+  });
+
+  it("orders connected context from the selected node outward", async () => {
+    let extensionSeen: AgentChatExtension | undefined;
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        extensionSeen = extension;
+        return completedResponse([]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Ranked context" });
+    const first = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Old distant node",
+      position: { x: 100, y: 100 },
+    });
+    const second = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Nearest node",
+      position: { x: 400, y: 100 },
+    });
+    const third = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Selected node",
+      position: { x: 700, y: 100 },
+    });
+    await service.addEdge(workspace.id, { sourceNodeId: first.nodes[0]!.id, targetNodeId: second.nodes[1]!.id });
+    await service.addEdge(workspace.id, { sourceNodeId: second.nodes[1]!.id, targetNodeId: third.nodes[2]!.id });
+
+    await service.chat(workspace.id, third.nodes[2]!.id, { content: "Summarise this branch." });
+
+    expect(extensionSeen?.context).toMatchObject({
+      nodes: [
+        { id: third.nodes[2]!.id, graphDistance: 0 },
+        { id: second.nodes[1]!.id, graphDistance: 1 },
+        { id: first.nodes[0]!.id, graphDistance: 2 },
+      ],
+    });
+  });
+
+  it("loads Outlook attachment previews through the source connection", async () => {
+    const actions = {
+      run: vi.fn(async () => ({
+        executionId: "preview-execution",
+        auditPersisted: true,
+        result: {
+          ok: true as const,
+          output: {
+            name: "Plans.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 4,
+            file: null,
+            contentBase64: "JVBERg==",
+          },
+        },
+      })),
+    };
+    const service = createService(
+      {
+        respondWithExtension: vi.fn(async () =>
+          completedResponse([
+            {
+              id: "attachment-activity",
+              type: "action",
+              label: "outlook.list_attachments",
+              ok: true,
+              actionId: "outlook.list_attachments",
+              connectionId: "outlook-1",
+              input: { messageId: "message-1" },
+              output: {
+                attachments: [{ id: "attachment-1", name: "Plans.pdf", contentType: "application/pdf", size: 4 }],
+              },
+            },
+          ]),
+        ),
+        getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+      },
+      actions,
+    );
+    const workspace = await service.create({ name: "Mail previews" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "outlook-1",
+      position: { x: 100, y: 100 },
+    });
+    const result = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Show the attachment." });
+    const attachment = result.nodes.find(
+      (node): node is Extract<(typeof result.nodes)[number], { kind: "artifact" }> => node.kind === "artifact",
+    )!;
+
+    expect(attachment.previews).toEqual([
+      expect.objectContaining({ id: "file", kind: "pdf", contentUrl: expect.stringContaining("/previews/file") }),
+    ]);
+    await expect(service.getPreview(workspace.id, attachment.id, "file")).resolves.toMatchObject({
+      name: "Plans.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 4,
+    });
+    expect(actions.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "outlook.download_attachment",
+        connectionId: "outlook-1",
+        input: { messageId: "message-1", attachmentId: "attachment-1" },
+        approvalPolicy: "bypass",
+      }),
+    );
   });
 
   it("lets the agent create and revise durable artifact cards with Synapse graph tools", async () => {
@@ -224,10 +409,13 @@ function cardsOverlap(
   );
 }
 
-function createService(agentChat: {
-  respondWithExtension: (input: unknown, extension: AgentChatExtension) => Promise<AgentChatResponse>;
-  getApprovalResult: (approvalId: string) => Promise<AgentChatApprovalResult>;
-}): SynapseService {
+function createService(
+  agentChat: {
+    respondWithExtension: (input: unknown, extension: AgentChatExtension) => Promise<AgentChatResponse>;
+    getApprovalResult: (approvalId: string) => Promise<AgentChatApprovalResult>;
+  },
+  actions?: Pick<IActionRunner, "run">,
+): SynapseService {
   return new SynapseService({
     catalog: createCatalogStore([provider("outlook", "Outlook"), provider("brave", "Brave Search")]),
     connections: {
@@ -236,6 +424,7 @@ function createService(agentChat: {
       },
     },
     agentChat,
+    actions,
     store: new MemorySynapseStore(),
   });
 }
