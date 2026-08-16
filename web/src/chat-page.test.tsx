@@ -135,6 +135,8 @@ describe("ChatPage", () => {
     expect(html).toContain("Waiting for approval");
     expect(html).toContain("Approve and continue");
     expect(html).toContain(">Deny<");
+    expect(html).toContain('class="chat-tool-call pending"');
+    expect(html).not.toContain('class="chat-tool-call failed"');
     expect(html).toContain('href="/approvals"');
     expect(html).toContain('target="_blank"');
   });

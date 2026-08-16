@@ -249,16 +249,20 @@ describe("SynapseNodeCard", () => {
     const html = renderToStaticMarkup(
       <SynapseApprovalNodeCard
         item={item!}
+        provider={provider}
         selected
         speechAvailable
         speaking={false}
         speechConnecting={false}
         onSelect={() => {}}
+        onDecision={async () => {}}
         onToggleSpeech={() => {}}
       />,
     );
-    expect(html).toContain("Approval required");
-    expect(html).toContain("approve or deny");
+    expect(html).toContain("Connector approval");
+    expect(html).toContain("Approve once");
+    expect(html).toContain(" Deny</button>");
+    expect(html).toContain('class="provider-icon large"');
     expect(html).toContain("Sales inbox");
     expect(html).toContain("Read outlook.send_message aloud");
   });

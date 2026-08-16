@@ -536,6 +536,10 @@
   border-color: color-mix(in oklab, var(--destructive) 32%, var(--border));
 }
 
+.chat-tool-call.pending {
+  border-color: color-mix(in oklab, var(--warning) 40%, var(--border));
+}
+
 .chat-tool-call summary {
   display: flex;
   align-items: center;

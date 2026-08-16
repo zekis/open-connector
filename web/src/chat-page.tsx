@@ -837,9 +837,17 @@ export function ChatToolActivityList(props: {
                 </div>
               </div>
             ) : null}
-            <details className={activity.ok ? "chat-tool-call" : "chat-tool-call failed"}>
+            <details
+              className={waiting ? "chat-tool-call pending" : activity.ok ? "chat-tool-call" : "chat-tool-call failed"}
+            >
               <summary>
-                {activity.ok ? <CircleCheck size={14} aria-hidden="true" /> : <CircleX size={14} aria-hidden="true" />}
+                {waiting ? (
+                  <Clock3 size={14} aria-hidden="true" />
+                ) : activity.ok ? (
+                  <CircleCheck size={14} aria-hidden="true" />
+                ) : (
+                  <CircleX size={14} aria-hidden="true" />
+                )}
                 <Wrench size={13} aria-hidden="true" />
                 <span>{activity.type === "search" ? activity.label : activity.actionId}</span>
                 {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}

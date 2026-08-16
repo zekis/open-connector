@@ -380,18 +380,28 @@
 }
 
 .synapse-node.approval {
-  min-height: 142px;
-  padding: 14px 16px;
-  border-top: 3px solid var(--warning);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: stretch;
+  min-height: 190px;
+  gap: 12px;
+  padding: 16px;
+  border-left: 4px solid var(--warning);
   background: color-mix(in oklab, var(--warning) 6%, var(--card));
   cursor: pointer;
 }
 
-.synapse-node.approval header {
+.synapse-approval-connector-copy {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+}
+
+.synapse-approval-connector-copy header {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 10px;
+  margin-bottom: 7px;
   color: var(--warning);
   font-size: 10px;
   font-weight: 720;
@@ -400,7 +410,7 @@
   padding-right: 30px;
 }
 
-.synapse-node.approval header small {
+.synapse-approval-connector-copy header small {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -409,7 +419,7 @@
   font-size: 9px;
 }
 
-.synapse-node.approval > strong {
+.synapse-approval-connector-copy > strong {
   display: block;
   overflow: hidden;
   margin-bottom: 5px;
@@ -418,7 +428,8 @@
   font-size: 14px;
 }
 
-.synapse-node.approval > p {
+.synapse-approval-connector-copy > p,
+.synapse-approval-connector-copy > code {
   overflow: hidden;
   margin: 0;
   color: var(--muted-foreground);
@@ -427,16 +438,25 @@
   font-size: 11px;
 }
 
-.synapse-node-icon.approval {
-  color: var(--warning);
-}
-
-.synapse-approval-open {
-  display: inline-block;
-  margin-top: 14px;
+.synapse-approval-connector-copy > code {
+  margin-top: 7px;
   color: var(--foreground);
   font-size: 10px;
-  font-weight: 650;
+}
+
+.approval-provider-icon {
+  align-self: start;
+}
+
+.synapse-approval-node-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.synapse-approval-node-actions button {
+  min-width: 0;
 }
 
 .synapse-node-icon {
@@ -891,6 +911,25 @@
 
 .synapse-message .chat-tool-list {
   margin-bottom: 7px;
+}
+.synapse-panel .chat-approval-request {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+.synapse-panel .chat-approval-actions {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  padding-left: 0;
+}
+.synapse-panel .chat-approval-actions > :first-child {
+  grid-column: 1 / -1;
+}
+.synapse-panel .chat-approval-actions > * {
+  width: 100%;
+  min-width: 0;
 }
 .synapse-message .chat-tool-call summary {
   font-size: 11px;

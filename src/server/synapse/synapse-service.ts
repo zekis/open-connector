@@ -65,12 +65,15 @@ export class SynapseService {
   }
 
   async list(): Promise<SynapseWorkspaceSummary[]> {
-    return (await this.options.store.listWorkspaces()).map((workspace) => ({
-      id: workspace.id,
-      name: workspace.name,
-      nodeCount: workspace.nodes.length,
-      updatedAt: workspace.updatedAt,
-    }));
+    return (await this.options.store.listWorkspaces()).map((workspace) => {
+      removeLegacyRawConnectorArtifacts(workspace);
+      return {
+        id: workspace.id,
+        name: workspace.name,
+        nodeCount: workspace.nodes.length,
+        updatedAt: workspace.updatedAt,
+      };
+    });
   }
 
   async create(input: unknown): Promise<SynapseWorkspace> {
@@ -446,7 +449,7 @@ export class SynapseService {
       }
       const sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
       const nodes = input.artifacts.map((item, index) => {
-        const artifact = readArtifactInput(readObject(item, `artifacts[${index}]`));
+        const artifact = normalizeAgentArtifact(readArtifactInput(readObject(item, `artifacts[${index}]`)));
         const node = this.addArtifactNode(
           workspace,
           nextFanPosition(workspace, parent, "artifact", automaticArtifactSize(artifact)),
@@ -583,6 +586,11 @@ export class SynapseService {
     response: AgentChatResponse,
     replaceMessageId?: string,
   ): Promise<void> {
+    const approvedAction = replaceMessageId
+      ? thread.messages
+          .find((candidate) => candidate.id === replaceMessageId)
+          ?.toolActivity?.find((activity) => activity.approvalId === thread.pendingApprovalId)
+      : undefined;
     const message: SynapseMessage = { ...response.message, toolActivity: response.toolActivity };
     if (replaceMessageId) {
       const index = thread.messages.findIndex((candidate) => candidate.id === replaceMessageId);
@@ -595,35 +603,55 @@ export class SynapseService {
     thread.pendingApprovalId = response.status === "waiting_for_approval" ? response.approvalId : undefined;
     thread.pendingMessageId = response.status === "waiting_for_approval" ? response.message.id : undefined;
     thread.updatedAt = response.message.createdAt;
-    await this.materializeConnectorResults(workspace, selectedNode, response.toolActivity);
+    await this.materializeConnectorResults(workspace, selectedNode, response.toolActivity, approvedAction);
   }
 
   private async materializeConnectorResults(
     workspace: SynapseWorkspace,
     selectedNode: SynapseNode,
     activities: AgentChatToolActivity[],
+    approvedAction?: AgentChatToolActivity,
   ): Promise<void> {
+    const hasCuratedArtifacts = activities.some(
+      (activity) => activity.ok && activity.actionId === "synapse_add_artifacts",
+    );
+    let approvedProvider: SynapseProviderNode | undefined;
     for (const activity of activities) {
       if (
         activity.type !== "action" ||
         !activity.ok ||
         !activity.actionId ||
         activity.actionId.startsWith("synapse_") ||
-        !activity.connectionId ||
+        !activity.connectionId
+      ) {
+        continue;
+      }
+      const isApprovedAction = Boolean(
+        approvedAction?.actionId === activity.actionId &&
+        approvedAction.connectionId === activity.connectionId &&
+        activity.ok,
+      );
+      if (
+        !isApprovedAction &&
         workspace.nodes.some((node) => node.kind === "artifact" && node.sourceActivityId === activity.id)
       ) {
         continue;
       }
-      let connection = providerNodeForBranch(workspace, selectedNode, activity.connectionId);
+      if (hasCuratedArtifacts && !isApprovedAction) continue;
+      let connection = isApprovedAction
+        ? approvedProvider
+        : providerNodeForBranch(workspace, selectedNode, activity.connectionId);
       if (!connection) {
         connection = await this.addProviderNode(
           workspace,
           activity.connectionId,
           nextFanPosition(workspace, selectedNode, "provider", automaticProviderSize(undefined, undefined)),
-          {},
+          isApprovedAction ? { instructions: `Completed ${humanize(activity.actionId)}.` } : {},
         );
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
+        if (isApprovedAction) approvedProvider = connection;
       }
+      if (hasCuratedArtifacts) continue;
       const parent = connection;
       const boundedSourceInput = boundedData(activity.input, 4_000);
       const sourceInput = isRecord(boundedSourceInput) ? boundedSourceInput : undefined;
@@ -672,6 +700,7 @@ export class SynapseService {
   private async requiredWorkspace(id: string): Promise<SynapseWorkspace> {
     const workspace = await this.options.store.getWorkspace(id);
     if (!workspace) throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
+    removeLegacyRawConnectorArtifacts(workspace);
     return workspace;
   }
 
@@ -684,15 +713,18 @@ export class SynapseService {
   private presentWorkspace(workspace: SynapseWorkspace): SynapseWorkspace {
     return {
       ...workspace,
-      nodes: workspace.nodes.map((node) =>
-        node.kind === "artifact"
-          ? {
-              ...node,
-              size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node),
-              previews: previewDescriptors(workspace.id, node).map((descriptor) => descriptor.preview),
-            }
-          : { ...node, size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node) },
-      ),
+      nodes: workspace.nodes.map((node) => {
+        if (node.kind !== "artifact") {
+          return { ...node, size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node) };
+        }
+        const parsed = parseRawJsonArtifact(node.content);
+        const presented = parsed === undefined ? node : { ...node, content: structuredArtifactMarkdown(parsed) };
+        return {
+          ...presented,
+          size: presented.autoSize === false && presented.size ? presented.size : automaticNodeSize(presented),
+          previews: previewDescriptors(workspace.id, node).map((descriptor) => descriptor.preview),
+        };
+      }),
     };
   }
 }
@@ -835,6 +867,7 @@ Rules:
 - retrieve attachment metadata for useful emails that report attachments so the canvas can render those files
 - put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
 - include sourceActivityId from connector tool activity when turning that result into artifacts
+- never create an artifact containing raw JSON, a JSON code fence, an API response dump, or provider field-reference maps; translate structured results into concise human-readable Markdown
 - create draft artifacts for proposed messages or documents before sending when the user is still reviewing them
 - update the selected draft or artifact in place with synapse_update_artifact when the user requests revisions
 - connect nodes whose relationship helps explain the work
@@ -934,11 +967,62 @@ function artifactCandidates(
   sourceInput: Record<string, unknown> | undefined,
 ): ArtifactInput[] {
   const outputRecord = isRecord(output) ? output : undefined;
-  const collection = ["items", "results", "value", "messages", "files", "records", "attachments"]
+  const workItemCollection = azureDevOpsWorkItemCollectionArtifact(outputRecord, actionId, connectionId, sourceInput);
+  if (workItemCollection) return [workItemCollection];
+  const collection = ["items", "workItems", "results", "value", "messages", "files", "records", "attachments"]
     .map((field) => outputRecord?.[field])
     .find(Array.isArray);
-  const values = collection ?? (output === undefined ? [] : [output]);
+  const singleItem = ["workItem", "item", "result", "message", "file", "record", "attachment"]
+    .map((field) => outputRecord?.[field])
+    .find(isRecord);
+  const values = collection ?? (singleItem ? [singleItem] : output === undefined ? [] : [output]);
   return values.map((value, index) => artifactFromValue(value, actionId, connectionId, sourceInput, index));
+}
+
+function azureDevOpsWorkItemCollectionArtifact(
+  output: Record<string, unknown> | undefined,
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+): ArtifactInput | undefined {
+  if (actionId !== "azure_devops.query_work_items" || !Array.isArray(output?.workItems)) return undefined;
+  const workItems = output.workItems.filter(isRecord);
+  const project = firstScalarText(sourceInput, ["project"]);
+  const rows = workItems.slice(0, 200).map((item) => {
+    const fields = isRecord(item.fields) ? item.fields : {};
+    const id = scalarText(item.id) ?? "—";
+    const url = azureDevOpsWorkItemUrl(item) ?? firstHttpsUrl(item, ["url"]);
+    return [
+      url ? `[${escapeMarkdownTableCell(id)}](${url})` : escapeMarkdownTableCell(id),
+      escapeMarkdownTableCell(fieldText(fields, "System.WorkItemType") ?? "—"),
+      escapeMarkdownTableCell(fieldText(fields, "System.Title") ?? "Untitled"),
+      escapeMarkdownTableCell(fieldText(fields, "System.State") ?? "—"),
+      escapeMarkdownTableCell(fieldText(fields, "System.AssignedTo") ?? "Unassigned"),
+    ];
+  });
+  const omitted = Math.max(0, workItems.length - rows.length);
+  const content = [
+    "| ID | Type | Title | State | Assigned to |",
+    "| --- | --- | --- | --- | --- |",
+    ...rows.map((row) => `| ${row.join(" | ")} |`),
+    omitted > 0 ? `\n_${omitted} additional work items omitted from this fallback table._` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+  return {
+    artifactKind: "note",
+    title: `${project ?? "Azure DevOps"} work items (${workItems.length})`,
+    summary: `${workItems.length} work item${workItems.length === 1 ? "" : "s"} returned by Azure DevOps.`,
+    content: truncate(content, maximumNodeTextCharacters),
+    sourceActionId: actionId,
+    sourceConnectionId: connectionId,
+    sourceInput,
+    data: boundedData(output),
+  };
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return readableText(value).replace(/\|/gu, "\\|").replace(/\r?\n/gu, " ");
 }
 
 function artifactFromValue(
@@ -949,6 +1033,8 @@ function artifactFromValue(
   index: number,
 ): ArtifactInput {
   const item = isRecord(value) ? value : undefined;
+  const workItem = azureDevOpsWorkItemArtifact(item, actionId, connectionId, sourceInput);
+  if (workItem) return workItem;
   const title = firstText(item, ["subject", "title", "name", "displayName", "fileName", "path"]);
   const summary = firstText(item, ["bodyPreview", "snippet", "description", "summary", "preview"]);
   const content = firstText(item, ["content", "body", "text"]);
@@ -962,6 +1048,62 @@ function artifactFromValue(
     itemIdentity: providerItemIdentity(item, actionId, connectionId, sourceInput),
     data: boundedData(value),
   };
+}
+
+function azureDevOpsWorkItemArtifact(
+  item: Record<string, unknown> | undefined,
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+): ArtifactInput | undefined {
+  if (!item || !actionId.startsWith("azure_devops.") || !isRecord(item.fields)) return undefined;
+  const id = scalarText(item.id);
+  const title = fieldText(item.fields, "System.Title");
+  if (!id || !title) return undefined;
+
+  const type = fieldText(item.fields, "System.WorkItemType");
+  const state = fieldText(item.fields, "System.State");
+  const assignedTo = fieldText(item.fields, "System.AssignedTo");
+  const webUrl = azureDevOpsWorkItemUrl(item) ?? firstHttpsUrl(item, ["url"]);
+  const facts = [
+    ["State", state],
+    ["Type", type],
+    ["Assigned to", assignedTo],
+    ["Area", fieldText(item.fields, "System.AreaPath")],
+    ["Iteration", fieldText(item.fields, "System.IterationPath")],
+    ["Priority", fieldText(item.fields, "Microsoft.VSTS.Common.Priority")],
+    ["Effort", fieldText(item.fields, "Microsoft.VSTS.Scheduling.Effort")],
+    ["Tags", fieldText(item.fields, "System.Tags")],
+  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
+  const description = fieldText(item.fields, "System.Description");
+  const content = [
+    facts.map(([label, value]) => `- **${label}:** ${value}`).join("\n"),
+    description ? readableText(description) : undefined,
+    webUrl ? `[Open work item in Azure DevOps](${webUrl})` : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+  return {
+    artifactKind: "task",
+    title: `#${id} ${title}`,
+    summary: [type, state, assignedTo].filter(Boolean).join(" · ") || undefined,
+    content,
+    externalUrl: webUrl,
+    itemIdentity: providerItemIdentity(item, actionId, connectionId, sourceInput),
+    data: boundedData(item),
+  };
+}
+
+function azureDevOpsWorkItemUrl(item: Record<string, unknown>): string | undefined {
+  const links = isRecord(item._links) ? item._links : undefined;
+  const html = isRecord(links?.html) ? links.html : undefined;
+  return firstHttpsUrl(html, ["href"]);
+}
+
+function fieldText(fields: Record<string, unknown>, name: string): string | undefined {
+  const value = fields[name];
+  if (isRecord(value)) return firstText(value, ["displayName", "name", "uniqueName", "address"]);
+  return scalarText(value);
 }
 
 function providerItemIdentity(
@@ -978,7 +1120,7 @@ function providerItemIdentity(
     .replace(/^(?:list|get|search|download|create|update|read)_/u, "")
     .replace(/ies$/u, "y")
     .replace(/s$/u, "");
-  const explicit = firstText(item, [
+  const explicit = firstScalarText(item, [
     "id",
     "messageId",
     "itemId",
@@ -1029,8 +1171,102 @@ function artifactMarkdown(
   const body = truncate(markdownContent ?? summary, maximumNodeTextCharacters);
   const sourceLink = externalUrl ? `[Open source](${externalUrl})` : undefined;
   if (body || sourceLink) return [body, sourceLink].filter(Boolean).join("\n\n");
-  const serialized = JSON.stringify(boundedData(value), null, 2);
-  return `\`\`\`json\n${serialized ?? "{}"}\n\`\`\``;
+  return structuredArtifactMarkdown(value);
+}
+
+function normalizeAgentArtifact(artifact: ArtifactInput): ArtifactInput {
+  const parsed = parseRawJsonArtifact(artifact.content);
+  return parsed === undefined ? artifact : { ...artifact, content: structuredArtifactMarkdown(parsed) };
+}
+
+function removeLegacyRawConnectorArtifacts(workspace: SynapseWorkspace): void {
+  const removedNodeIds = new Set(
+    workspace.nodes
+      .filter(
+        (node) =>
+          node.kind === "artifact" && Boolean(node.sourceActionId) && parseRawJsonArtifact(node.content) !== undefined,
+      )
+      .map((node) => node.id),
+  );
+  if (removedNodeIds.size === 0) return;
+  workspace.nodes = workspace.nodes.filter((node) => !removedNodeIds.has(node.id));
+  workspace.edges = workspace.edges.filter(
+    (edge) => !removedNodeIds.has(edge.sourceNodeId) && !removedNodeIds.has(edge.targetNodeId),
+  );
+  workspace.threads = workspace.threads.filter((thread) => !removedNodeIds.has(thread.nodeId));
+}
+
+function parseRawJsonArtifact(content: string | undefined): unknown {
+  if (!content) return undefined;
+  const trimmed = content.trim();
+  const fenced = /^```json\s*([\s\S]*?)\s*```$/iu.exec(trimmed)?.[1];
+  const candidate = fenced ?? trimmed;
+  if (!fenced && !/^(?:\{[\s\S]*\}|\[[\s\S]*\])$/u.test(candidate)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(candidate);
+    return isRecord(parsed) || Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function structuredArtifactMarkdown(value: unknown): string {
+  const lines = structuredMarkdownLines(value, 0);
+  return truncate(lines.join("\n"), maximumNodeTextCharacters) ?? "Structured result retrieved.";
+}
+
+function structuredMarkdownLines(value: unknown, depth: number): string[] {
+  const indentation = "  ".repeat(depth);
+  if (depth >= 3) return [`${indentation}- _Additional details omitted._`];
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${indentation}- _No items._`];
+    return value.slice(0, 20).flatMap((item, index) => {
+      const scalar = scalarText(item);
+      return scalar
+        ? [`${indentation}- ${readableText(scalar)}`]
+        : [`${indentation}- **Item ${index + 1}**`, ...structuredMarkdownLines(item, depth + 1)];
+    });
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value).slice(0, 24);
+    if (entries.length === 0) return [`${indentation}- _No details._`];
+    return entries.flatMap(([key, item]) => {
+      const scalar = scalarText(item);
+      return scalar
+        ? [`${indentation}- **${readableFieldName(key)}:** ${readableText(scalar)}`]
+        : [`${indentation}- **${readableFieldName(key)}**`, ...structuredMarkdownLines(item, depth + 1)];
+    });
+  }
+  return [`${indentation}- ${scalarText(value) ?? "_No value._"}`];
+}
+
+function scalarText(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function readableText(value: string): string {
+  return value
+    .replace(/<br\s*\/?\s*>/giu, "\n")
+    .replace(/<\/(?:div|p|li|h[1-6])\s*>/giu, "\n")
+    .replace(/<[^>]+>/gu, "")
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&quot;/giu, '"')
+    .replace(/&#39;/giu, "'")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
+function readableFieldName(value: string): string {
+  const words = value
+    .replace(/([a-z\d])([A-Z])/gu, "$1 $2")
+    .replace(/[._-]+/gu, " ")
+    .trim();
+  return words ? `${words[0]!.toUpperCase()}${words.slice(1)}` : "Detail";
 }
 
 function inferArtifactKind(actionId: string): SynapseArtifactKind {
@@ -1425,6 +1661,14 @@ function firstText(value: Record<string, unknown> | undefined, fields: string[])
       const nested = firstText(candidate, ["content", "text", "name", "address"]);
       if (nested) return nested;
     }
+  }
+  return undefined;
+}
+
+function firstScalarText(value: Record<string, unknown> | undefined, fields: string[]): string | undefined {
+  for (const field of fields) {
+    const candidate = scalarText(value?.[field]);
+    if (candidate) return candidate;
   }
   return undefined;
 }

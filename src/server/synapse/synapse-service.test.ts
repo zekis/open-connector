@@ -34,6 +34,16 @@ const connections = [
     default: true,
     profile: { accountId: "brave:default", displayName: "Brave Search", grantedScopes: [] },
   },
+  {
+    id: "azure-devops-1",
+    service: "azure_devops",
+    connectionName: "yardcraft",
+    authType: "api_key" as const,
+    configured: true,
+    virtual: false,
+    default: true,
+    profile: { accountId: "azure-devops:yardcraft", displayName: "Yardcraft", grantedScopes: [] },
+  },
 ];
 
 describe("SynapseService", () => {
@@ -152,6 +162,162 @@ describe("SynapseService", () => {
       itemIdentity: "brave-1:brave:web_search:https://example.com/deal-one",
       previews: [expect.objectContaining({ kind: "web", externalUrl: "https://example.com/deal-one" })],
     });
+  });
+
+  it("projects an Azure DevOps query into one readable Markdown table instead of per-item or JSON cards", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () =>
+        completedResponse([
+          {
+            id: "work-items-activity",
+            type: "action",
+            label: "azure_devops.query_work_items",
+            ok: true,
+            actionId: "azure_devops.query_work_items",
+            connectionId: "azure-devops-1",
+            connectionDisplayName: "Yardcraft",
+            input: { project: "Yardcraft" },
+            output: {
+              workItems: [
+                {
+                  id: 194047,
+                  rev: 12,
+                  url: "https://dev.azure.com/example/_apis/wit/workItems/194047",
+                  _links: { html: { href: "https://dev.azure.com/example/Yardcraft/_workitems/edit/194047" } },
+                  fields: {
+                    "System.Title": "Complete commissioning checklist",
+                    "System.WorkItemType": "Task",
+                    "System.State": "Active",
+                    "System.AssignedTo": { displayName: "Zeke Tierney" },
+                    "System.AreaPath": "Yardcraft",
+                    "System.IterationPath": "Yardcraft\\Sprint 8",
+                    "System.Description": "<p>Close the remaining commissioning actions.</p>",
+                  },
+                },
+              ],
+              queryType: "flat",
+            },
+          },
+        ]),
+      ),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Yardcraft work" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+
+    const result = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Get all open items." });
+    const artifacts = result.nodes.filter((node) => node.kind === "artifact");
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      artifactKind: "note",
+      title: "Yardcraft work items (1)",
+      summary: "1 work item returned by Azure DevOps.",
+    });
+    expect(artifacts[0]?.content).toContain("| ID | Type | Title | State | Assigned to |");
+    expect(artifacts[0]?.content).toContain(
+      "| [194047](https://dev.azure.com/example/Yardcraft/_workitems/edit/194047) | Task | Complete commissioning checklist | Active | Zeke Tierney |",
+    );
+    expect(artifacts[0]?.content).not.toContain("```json");
+    expect(artifacts[0]?.content).not.toContain("System.Title");
+  });
+
+  it("turns raw JSON supplied by the agent into readable artifact Markdown", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const activity = await extension.runTool("synapse_add_artifacts", {
+          artifacts: [
+            {
+              artifactKind: "task",
+              title: "Work item 194047",
+              content: '```json\n{"state":"Active","assignedTo":"Zeke Tierney"}\n```',
+            },
+          ],
+        });
+        return completedResponse(activity ? [activity] : []);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Readable agent artifacts" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+
+    const result = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Show the item." });
+    const artifact = result.nodes.find((node) => node.kind === "artifact");
+
+    expect(artifact?.content).toBe("- **State:** Active\n- **Assigned To:** Zeke Tierney");
+  });
+
+  it("does not add automatic result cards when the agent already created curated artifacts", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const curated = await extension.runTool("synapse_add_artifacts", {
+          artifacts: [
+            {
+              artifactKind: "task",
+              title: "#194047 Commissioning checklist",
+              content: "- **State:** Active\n- **Owner:** Zeke Tierney",
+            },
+          ],
+        });
+        return completedResponse([
+          {
+            id: "connector-activity",
+            type: "action",
+            label: "azure_devops.query_work_items",
+            ok: true,
+            actionId: "azure_devops.query_work_items",
+            connectionId: "azure-devops-1",
+            input: { project: "Yardcraft" },
+            output: {
+              workItems: [{ id: 194047, fields: { "System.Title": "Commissioning checklist" } }],
+            },
+          },
+          ...(curated ? [curated] : []),
+        ]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Curated results" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+
+    const result = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Find open items." });
+    const artifacts = result.nodes.filter((node) => node.kind === "artifact");
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.title).toBe("#194047 Commissioning checklist");
+  });
+
+  it("removes legacy raw connector JSON projection nodes", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Legacy artifacts" });
+
+    await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "generic",
+      title: "Old API result",
+      content: '```json\n{"state":"Active","count":3}\n```',
+      sourceActionId: "azure_devops.query_work_items",
+      sourceConnectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+    const result = await service.get(workspace.id);
+
+    expect(result.nodes).toEqual([]);
   });
 
   it("allows branch-local instances of one provider connection", async () => {
@@ -601,6 +767,7 @@ describe("SynapseService", () => {
 
     const waiting = await service.chat(workspace.id, outlook.id, { content: "Send the draft." });
     expect(waiting.threads[0]).toMatchObject({ pendingApprovalId: approvalId });
+    expect(waiting.nodes.filter((node) => node.kind === "provider")).toHaveLength(1);
 
     approvalResult = {
       approvalId,
@@ -622,9 +789,23 @@ describe("SynapseService", () => {
 
     expect(resumed.threads[0]).toMatchObject({ pendingApprovalId: undefined });
     expect(resumed.threads[0]?.messages).toHaveLength(2);
+    const providerNodes = resumed.nodes.filter((node) => node.kind === "provider");
+    expect(providerNodes).toHaveLength(2);
+    const approvedProvider = providerNodes.find((node) => node.id !== outlook.id)!;
+    expect(approvedProvider).toMatchObject({
+      connectionId: "outlook-1",
+      instructions: "Completed Outlook send draft.",
+    });
     expect(resumed.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "artifact", title: "Sale for Alex", sourceActivityId: "send-activity" }),
+      ]),
+    );
+    const resultArtifact = resumed.nodes.find((node) => node.kind === "artifact" && node.title === "Sale for Alex")!;
+    expect(resumed.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceNodeId: outlook.id, targetNodeId: approvedProvider.id }),
+        expect.objectContaining({ sourceNodeId: approvedProvider.id, targetNodeId: resultArtifact.id }),
       ]),
     );
   });
@@ -657,7 +838,11 @@ function createService(
   actions?: Pick<IActionRunner, "run">,
 ): SynapseService {
   return new SynapseService({
-    catalog: createCatalogStore([provider("outlook", "Outlook"), provider("brave", "Brave Search")]),
+    catalog: createCatalogStore([
+      provider("outlook", "Outlook"),
+      provider("brave", "Brave Search"),
+      provider("azure_devops", "Azure DevOps"),
+    ]),
     connections: {
       async listConnections() {
         return structuredClone(connections);
