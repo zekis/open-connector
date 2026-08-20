@@ -5,6 +5,7 @@ import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts"
 import type { AgentModelOption } from "../agents/agent-settings-service.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
+import type { FlowDefinition, FlowDefinitionInput } from "../flows/flow-types.ts";
 import type { AgentChatProgress, AgentChatResponse } from "./agent-chat-types.ts";
 
 import { describe, expect, it } from "vitest";
@@ -163,6 +164,186 @@ describe("AgentChatService", () => {
     expect(["Okay, Example completed that step.", "Good, that Example step is complete."]).toContain(
       progress[3]?.speech,
     );
+  });
+
+  it("creates an explicitly requested scheduled Flow through the platform scheduler", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "list_flows", arguments: {} },
+      { kind: "tool_call", toolName: "search_connector_actions", arguments: { query: "look up record" } },
+      {
+        kind: "tool_call",
+        toolName: "create_flow",
+        arguments: {
+          name: "Daily record check",
+          status: "active",
+          sourceConnectionId: connection.id,
+          destinationConnectionId: connection.id,
+          instructions: "Look up record 42 and report whether it is active.",
+          trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+          tools: [
+            {
+              actionId: "example.lookup",
+              connectionId: connection.id,
+              role: "source",
+              approval: "inherit",
+            },
+          ],
+          userConfirmedActivation: true,
+        },
+      },
+      { kind: "final", text: "Created and activated the daily record check." },
+    ]);
+    const flows = new FakeFlowService();
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    const response = await service.respond({
+      messages: [{ role: "user", content: "Create a Flow that checks record 42 every day at 9am Perth time." }],
+    });
+
+    expect(response.status).toBe("completed");
+    expect(response.toolActivity).toMatchObject([
+      { label: "List flows", ok: true },
+      { type: "search", ok: true },
+      { label: "Create flow", ok: true },
+    ]);
+    expect(flows.createInputs).toEqual([
+      {
+        name: "Daily record check",
+        status: "active",
+        sourceConnectionId: connection.id,
+        destinationConnectionId: connection.id,
+        instructions: "Look up record 42 and report whether it is active.",
+        trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+        agent: { connectionId: "claude-subscription" },
+        tools: [
+          {
+            actionId: "example.lookup",
+            connectionId: connection.id,
+            role: "source",
+            approval: "inherit",
+          },
+        ],
+        maxSteps: undefined,
+      },
+    ]);
+    expect(claude.inputs[0]?.systemPrompt).toContain("OOMOL Connect itself owns Flow scheduling");
+    expect(claude.inputs[0]?.prompt).toContain('"name":"create_flow"');
+  });
+
+  it("blocks active Flow creation when the agent cannot assert explicit user confirmation", async () => {
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "create_flow",
+        arguments: {
+          name: "Unconfirmed automation",
+          status: "active",
+          sourceConnectionId: connection.id,
+          destinationConnectionId: connection.id,
+          instructions: "Look up a record every day.",
+          trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+          tools: [
+            {
+              actionId: "example.lookup",
+              connectionId: connection.id,
+              role: "source",
+              approval: "inherit",
+            },
+          ],
+          userConfirmedActivation: false,
+        },
+      },
+      { kind: "final", text: "Please confirm that you want me to activate this daily Flow." },
+    ]);
+    const flows = new FakeFlowService();
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    const response = await service.respond({
+      messages: [{ role: "user", content: "Could you suggest a daily record-checking Flow?" }],
+    });
+
+    expect(flows.createInputs).toEqual([]);
+    expect(response.toolActivity[0]).toMatchObject({
+      label: "Create flow",
+      ok: false,
+      output: { error: { code: "flow_confirmation_required" } },
+    });
+    expect(response.message.content).toContain("confirm");
+  });
+
+  it("lists, reads, updates, activates, and deletes Flows through Chat", async () => {
+    const flows = new FakeFlowService();
+    await flows.create({
+      name: "Record check draft",
+      status: "paused",
+      sourceConnectionId: connection.id,
+      destinationConnectionId: connection.id,
+      instructions: "Look up record 42.",
+      trigger: { type: "manual" },
+      agent: { connectionId: "claude-subscription" },
+      tools: [
+        {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          role: "source",
+          approval: "inherit",
+        },
+      ],
+    });
+    flows.createInputs.length = 0;
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "list_flows", arguments: {} },
+      { kind: "tool_call", toolName: "get_flow", arguments: { flowId: "flow-1" } },
+      {
+        kind: "tool_call",
+        toolName: "update_flow",
+        arguments: {
+          flowId: "flow-1",
+          changes: {
+            instructions: "Look up record 42 and report whether it is active.",
+            trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+          },
+          userConfirmedChange: false,
+        },
+      },
+      {
+        kind: "tool_call",
+        toolName: "set_flow_status",
+        arguments: { flowId: "flow-1", status: "active", userConfirmedActivation: true },
+      },
+      {
+        kind: "tool_call",
+        toolName: "delete_flow",
+        arguments: { flowId: "flow-1", userConfirmedDeletion: true },
+      },
+      { kind: "final", text: "Updated, activated, and then deleted the Flow as requested." },
+    ]);
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    const response = await service.respond({
+      messages: [
+        {
+          role: "user",
+          content: "Schedule the draft for 9am Perth time, activate it, and then delete it as a test.",
+        },
+      ],
+    });
+
+    expect(response.toolActivity.map((activity) => activity.label)).toEqual([
+      "List flows",
+      "Get flow",
+      "Update flow",
+      "Set flow status",
+      "Delete flow",
+    ]);
+    expect(flows.updateInputs).toHaveLength(2);
+    expect(flows.updateInputs[0]?.input).toMatchObject({
+      status: "paused",
+      instructions: "Look up record 42 and report whether it is active.",
+      trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+    });
+    expect(flows.updateInputs[1]?.input.status).toBe("active");
+    expect(flows.deleteInputs).toEqual(["flow-1"]);
   });
 
   it("pauses on approval and resumes the exact action with saved agent context", async () => {
@@ -409,6 +590,7 @@ function createService(
   actions: IActionRunner,
   agentConfigured = true,
   approvals = new FakeChatApprovals(),
+  flows = new FakeFlowService(),
 ): AgentChatService {
   const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
   return new AgentChatService({
@@ -443,9 +625,72 @@ function createService(
     },
     claudeCode,
     actions,
+    flows,
     approvals,
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
   });
+}
+
+class FakeFlowService {
+  readonly createInputs: FlowDefinitionInput[] = [];
+  readonly updateInputs: Array<{ id: string; input: FlowDefinitionInput }> = [];
+  readonly deleteInputs: string[] = [];
+  private readonly flows = new Map<string, FlowDefinition>();
+
+  async create(input: unknown): Promise<FlowDefinition> {
+    const value = structuredClone(input) as FlowDefinitionInput;
+    this.createInputs.push(value);
+    const flow = createFlowDefinition(`flow-${this.flows.size + 1}`, value);
+    this.flows.set(flow.id, flow);
+    return structuredClone(flow);
+  }
+
+  async update(id: string, input: unknown): Promise<FlowDefinition> {
+    const value = structuredClone(input) as FlowDefinitionInput;
+    this.updateInputs.push({ id, input: value });
+    const flow = createFlowDefinition(id, value);
+    this.flows.set(id, flow);
+    return structuredClone(flow);
+  }
+
+  async list(): Promise<FlowDefinition[]> {
+    return structuredClone([...this.flows.values()]);
+  }
+
+  async getRequired(id: string): Promise<FlowDefinition> {
+    const flow = this.flows.get(id);
+    if (!flow) throw new Error(`Flow not found: ${id}`);
+    return structuredClone(flow);
+  }
+
+  async delete(id: string): Promise<void> {
+    this.deleteInputs.push(id);
+    this.flows.delete(id);
+  }
+}
+
+function createFlowDefinition(id: string, input: FlowDefinitionInput): FlowDefinition {
+  const now = new Date().toISOString();
+  return {
+    id,
+    revision: crypto.randomUUID(),
+    name: input.name,
+    status: input.status ?? "active",
+    sourceConnectionId: input.sourceConnectionId,
+    destinationConnectionId: input.destinationConnectionId,
+    instructions: input.instructions,
+    trigger: input.trigger ?? { type: "manual" },
+    agent: {
+      provider: input.agent.provider ?? "claude_code",
+      connectionId: input.agent.connectionId,
+      model: "opus",
+      reasoningEffort: input.agent.reasoningEffort ?? "medium",
+    },
+    tools: input.tools,
+    maxSteps: input.maxSteps ?? 20,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 class FakeClaudeCodeClient implements IClaudeCodeClient {

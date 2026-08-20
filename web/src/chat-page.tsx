@@ -78,7 +78,7 @@ const voiceApprovalCue = "I need your approval before I can continue. You can ap
 
 const suggestions = [
   "Summarize today's important emails.",
-  "What connected applications can you use?",
+  "Create a daily Flow from my connected applications.",
   "Find the latest updates for my active projects.",
 ];
 
@@ -743,7 +743,9 @@ function ChatWelcome(props: { configured: boolean; onSuggestion(value: string): 
         <MessageCircle size={27} aria-hidden="true" />
       </span>
       <h2>What can I help you with?</h2>
-      <p>Claude can answer directly or use actions from your connected applications when the request needs them.</p>
+      <p>
+        Claude can answer directly, use actions from your connected applications, or create and manage scheduled Flows.
+      </p>
       <div className="chat-suggestions">
         {suggestions.map((suggestion) => (
           <button type="button" key={suggestion} onClick={() => props.onSuggestion(suggestion)}>

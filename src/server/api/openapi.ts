@@ -558,7 +558,7 @@ function createAgentChatMessagesPath(): Record<string, unknown> {
       tags: ["Chat"],
       summary: "Send a message to the configured agent.",
       description:
-        "Runs one conversational Claude response. The agent can search and execute actions on currently connected applications through the guarded action runner. Runtime policy and run auditing apply to every connector action. Requires local admin authentication when configured.",
+        "Runs one conversational Claude response. The agent can search and execute actions on currently connected applications through the guarded action runner, and can create or manage OOMOL Connect Flows. Explicit confirmation is required before active automation or deletion. Runtime policy and run auditing apply to every connector action. Requires local admin authentication when configured.",
       requestBody: {
         required: true,
         content: {

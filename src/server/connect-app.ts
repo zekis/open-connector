@@ -116,6 +116,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     agentSettings,
     claudeCode,
     actions,
+    flows,
     approvals: connectionApprovals,
     getPolicySnapshot,
   });
