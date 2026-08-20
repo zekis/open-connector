@@ -68,6 +68,10 @@ describe("ChatPage", () => {
     expect(html).toContain("1 connected application · 1 available action");
     expect(html).toContain("What can I help you with?");
     expect(html).toContain("Summarize today&#x27;s important emails.");
+    expect(html).toContain('aria-label="Chat history"');
+    expect(html).toContain('aria-label="Saved chats"');
+    expect(html).toContain("New chat");
+    expect(html).toContain('aria-label="Hide chat history"');
     expect(html).toContain('aria-label="Message Claude"');
     expect(html).not.toContain("Set up Claude to start chatting");
   });

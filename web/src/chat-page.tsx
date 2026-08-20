@@ -1,7 +1,12 @@
 import type {
+  ChatConversation,
+  ChatDisplayMessage as DisplayMessage,
+  ChatHistoryState,
+  ChatSession,
+} from "./chat-history";
+import type {
   AgentChatApprovalResult,
   AgentChatInterruptionDecision,
-  AgentChatMessage,
   AgentChatProgress,
   AgentChatResponse,
   AgentChatStreamEvent,
@@ -22,8 +27,13 @@ import {
   Clock3,
   Loader2,
   MessageCircle,
+  MessageSquare,
   Mic,
   MicOff,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Plus,
   Settings2,
   Send,
   Trash2,
@@ -35,6 +45,17 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiGet, apiPost, apiPostNdjson, apiPut } from "./api";
+import {
+  activeChatConversation,
+  addChatConversation,
+  clearChatHistory,
+  deleteChatConversation,
+  readStoredChatHistory,
+  renameChatConversation,
+  replaceChatConversationSession,
+  selectChatConversation,
+  storeChatHistory,
+} from "./chat-history";
 import { ChatMarkdown } from "./chat-markdown";
 import { evaluatePolicy, policyLayers } from "./policy";
 import { SaynaVoiceClient } from "./sayna-voice";
@@ -51,23 +72,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-interface DisplayMessage extends AgentChatMessage {
-  id: string;
-  createdAt: string;
-  toolActivity?: AgentChatToolActivity[];
-}
-
-interface PendingChatApproval {
-  approvalId: string;
-  assistantMessageId: string;
-}
-
-interface ChatSession {
-  messages: DisplayMessage[];
-  pendingApproval?: PendingChatApproval;
-}
-
-const chatSessionStorageKey = "open-connector.agent-chat-session.v1";
 const voiceWorkingCueDelayMs = 1_200;
 const voiceWorkingCues = [
   "Hmm, let me check that.",
@@ -83,7 +87,8 @@ const suggestions = [
 ];
 
 export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode {
-  const [session, setSession] = useState<ChatSession>(readStoredChatSession);
+  const [history, setHistory] = useState(readStoredChatHistory);
+  const [historyOpen, setHistoryOpen] = useState(true);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [agentProgress, setAgentProgress] = useState<AgentChatProgress>();
@@ -99,6 +104,11 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const transcriptRef = useRef<HTMLDivElement>(null);
   const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
   const sendVoiceMessageRef = useRef<(value: string) => Promise<void>>(async () => {});
+  const activeConversation = activeChatConversation(history);
+  const session: ChatSession = {
+    messages: activeConversation.messages,
+    pendingApproval: activeConversation.pendingApproval,
+  };
   const sessionRef = useRef(session);
   const sendingRef = useRef(false);
   const voiceRepliesRef = useRef(false);
@@ -107,7 +117,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const queuedVoiceTurnsRef = useRef<string[]>([]);
   const workingCueTimerRef = useRef<number | undefined>(undefined);
   const workingCueIndexRef = useRef(0);
-  const spokenMessageIds = useRef(new Set(session.messages.map((message) => message.id)));
+  const spokenMessageIds = useRef(new Set(activeConversation.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
   const agentConnection = props.data.agentConnections?.find((connection) => connection.provider === "claude_code");
@@ -144,9 +154,14 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }, [messages, sending]);
 
   useEffect(() => {
-    sessionRef.current = session;
-    storeChatSession(session);
-  }, [session]);
+    const current = activeChatConversation(history);
+    sessionRef.current = { messages: current.messages, pendingApproval: current.pendingApproval };
+    storeChatHistory(history);
+  }, [history]);
+
+  useEffect(() => {
+    spokenMessageIds.current = new Set(activeConversation.messages.map((message) => message.id));
+  }, [activeConversation.id]);
 
   useEffect(() => {
     voiceRepliesRef.current = voiceReplies;
@@ -365,12 +380,42 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
     }
   }
 
-  function resetChat(): void {
-    activeChatAbortRef.current?.abort();
+  function newChat(): void {
+    if (sendingRef.current) return;
+    prepareConversationChange();
+    updateHistory((current) => addChatConversation(current));
+  }
+
+  function openChat(id: string): void {
+    if (sendingRef.current || id === activeConversation.id) return;
+    prepareConversationChange();
+    updateHistory((current) => selectChatConversation(current, id));
+  }
+
+  function renameChat(conversation: ChatConversation): void {
+    const title = window.prompt("Rename chat", conversation.title);
+    if (title === null) return;
+    updateHistory((current) => renameChatConversation(current, conversation.id, title));
+  }
+
+  function deleteChat(conversation: ChatConversation): void {
+    if (sendingRef.current || conversation.pendingApproval) return;
+    if (conversation.messages.length > 0 && !window.confirm(`Delete “${conversation.title}”?`)) return;
+    if (conversation.id === activeConversation.id) prepareConversationChange();
+    updateHistory((current) => deleteChatConversation(current, conversation.id));
+  }
+
+  function clearHistory(): void {
+    if (sendingRef.current || history.conversations.some((conversation) => conversation.pendingApproval)) return;
+    if (!window.confirm("Delete every saved chat? This cannot be undone.")) return;
+    prepareConversationChange();
+    updateHistory(() => clearChatHistory());
+  }
+
+  function prepareConversationChange(): void {
     voiceClientRef.current?.stopSpeaking();
     queuedVoiceTurnsRef.current = [];
     setQueuedVoiceTurnCount(0);
-    replaceSession({ messages: [] });
     setDraft("");
     setError(null);
     setVoiceError(null);
@@ -401,9 +446,15 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   }
 
   function replaceSession(next: ChatSession | ((current: ChatSession) => ChatSession)): void {
-    setSession((current) => {
-      const updated = typeof next === "function" ? next(current) : next;
-      sessionRef.current = updated;
+    const conversationId = activeConversation.id;
+    updateHistory((current) => replaceChatConversationSession(current, conversationId, next));
+  }
+
+  function updateHistory(operation: (current: ChatHistoryState) => ChatHistoryState): void {
+    setHistory((current) => {
+      const updated = operation(current);
+      const active = activeChatConversation(updated);
+      sessionRef.current = { messages: active.messages, pendingApproval: active.pendingApproval };
       return updated;
     });
   }
@@ -442,171 +493,281 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const actionSummary = `${actionCount} available action${actionCount === 1 ? "" : "s"}`;
 
   return (
-    <div className="chat-page">
-      <section className="chat-context-bar" aria-label="Chat agent status">
-        <div className="chat-agent-state">
-          <span className={agentConnection ? "chat-agent-icon ready" : "chat-agent-icon"}>
-            <Bot size={17} aria-hidden="true" />
-          </span>
-          <span>
-            <strong>
-              {pendingApproval
-                ? "Claude is waiting for approval"
-                : agentConnection
-                  ? "Claude is ready"
-                  : "Agent setup required"}
-            </strong>
-            <small>
-              {agentConnection
-                ? pendingApproval
-                  ? "Approving the pending connector action will resume this Chat automatically."
-                  : `${connectionSummary} · ${actionSummary}`
-                : "Connect your Claude subscription before starting a chat."}
-            </small>
-          </span>
-        </div>
-        <div className="chat-context-actions">
-          {voiceConfiguration?.enabled ? (
-            <>
-              <span className={`chat-voice-state ${voiceState}`} title="Voice input and output provided by Sayna">
-                <AudioWaveform size={14} aria-hidden="true" />
-                {voiceStateLabel(voiceState, voiceListening)}
-                {queuedVoiceTurnCount > 0 ? ` · ${queuedVoiceTurnCount} queued` : ""}
-              </span>
-              <Button
-                variant="outline"
-                size="icon-sm"
-                onClick={toggleVoiceReplies}
-                aria-label={voiceReplies ? "Disable spoken agent replies" : "Enable spoken agent replies"}
-                aria-pressed={voiceReplies}
-                title={voiceReplies ? "Spoken replies enabled" : "Enable spoken replies"}
-              >
-                {voiceReplies ? <Volume2 size={15} /> : <VolumeX size={15} />}
-              </Button>
-            </>
-          ) : null}
-          {voiceConfiguration?.available ? (
-            <Button
-              variant="outline"
-              size={voiceConfiguration.configured ? "icon-sm" : "sm"}
-              onClick={() => setVoiceSettingsOpen(true)}
-              aria-label="Configure Sayna voice"
-              title="Configure Sayna voice"
-            >
-              <Settings2 size={15} aria-hidden="true" />
-              {voiceConfiguration.configured ? null : "Set up voice"}
-            </Button>
-          ) : null}
-          {messages.length > 0 ? (
-            <Button variant="outline" size="sm" onClick={resetChat} disabled={sending || Boolean(pendingApproval)}>
-              <Trash2 size={14} aria-hidden="true" />
-              New chat
-            </Button>
-          ) : null}
-        </div>
-      </section>
-
-      <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
-        {messages.length === 0 ? (
-          <ChatWelcome
-            configured={Boolean(agentConnection)}
-            onSuggestion={(suggestion) => void sendMessage(suggestion)}
-          />
-        ) : (
-          <div className="chat-message-list">
-            {messages.map((message) => (
-              <ChatMessageView
-                key={message.id}
-                message={message}
-                activeApprovalId={pendingApproval?.approvalId}
-                approvalDecision={approvalDecision}
-                onApprovalDecision={(decision) => void decideApproval(decision)}
-              />
-            ))}
-            {sending ? (
-              <div className="chat-message-row assistant">
-                <span className="chat-avatar">
-                  <Bot size={15} aria-hidden="true" />
-                </span>
-                <div className="chat-bubble assistant thinking">
-                  <Loader2 className="spin" size={16} aria-hidden="true" />
-                  <span>{agentProgress?.message ?? "Claude is working with your connections…"}</span>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      <form className="chat-composer" onSubmit={(event) => void submit(event)}>
-        {error || voiceError ? <div className="chat-error">{error ?? voiceError}</div> : null}
-        <div className="chat-composer-box">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={keyDown}
-            placeholder={
-              pendingApproval
-                ? "Waiting for the pending approval…"
-                : voiceListening
-                  ? "Listening with Sayna…"
-                  : agentConnection
-                    ? "Ask Claude to find, explain, or do something…"
-                    : "Set up Claude to start chatting"
-            }
-            aria-label="Message Claude"
-            disabled={!agentConnection || sending || Boolean(pendingApproval)}
-            rows={3}
-          />
-          <div className="chat-composer-actions">
-            {voiceConfiguration?.enabled ? (
-              <Button
-                type="button"
-                size="icon"
-                variant={voiceListening ? "destructive" : "outline"}
-                onClick={toggleVoiceInput}
-                disabled={!agentConnection || (voiceState === "connecting" && !voiceListening)}
-                aria-label={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
-                aria-pressed={voiceListening}
-                title={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
-              >
-                {voiceState === "connecting" && !voiceListening ? (
-                  <Loader2 className="spin" size={17} />
-                ) : voiceListening ? (
-                  <MicOff size={17} />
-                ) : (
-                  <Mic size={17} />
-                )}
-              </Button>
-            ) : null}
-            <Button
-              type="submit"
-              size="icon"
-              disabled={!agentConnection || sending || Boolean(pendingApproval) || !draft.trim()}
-              aria-label="Send message"
-            >
-              {sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-            </Button>
-          </div>
-        </div>
-        <p>
-          {voiceConfiguration?.enabled ? "Sayna continuous voice · " : ""}Enter to send · Shift+Enter for a new line ·
-          Connector actions follow your runtime policy.
-        </p>
-      </form>
-      {voiceConfiguration?.available ? (
-        <SaynaVoiceSettingsDialog
-          open={voiceSettingsOpen}
-          configuration={voiceConfiguration}
-          onOpenChange={setVoiceSettingsOpen}
-          onSaved={(configuration) => {
-            setVoiceConfiguration(configuration);
-            setVoiceError(null);
-          }}
+    <div className={historyOpen ? "chat-layout" : "chat-layout history-collapsed"}>
+      {historyOpen ? (
+        <ChatHistorySidebar
+          conversations={history.conversations}
+          activeConversationId={activeConversation.id}
+          disabled={sending}
+          onNew={newChat}
+          onSelect={openChat}
+          onRename={renameChat}
+          onDelete={deleteChat}
+          onClear={clearHistory}
         />
       ) : null}
+      <div className="chat-page">
+        <section className="chat-context-bar" aria-label="Chat agent status">
+          <div className="chat-agent-state">
+            <span className={agentConnection ? "chat-agent-icon ready" : "chat-agent-icon"}>
+              <Bot size={17} aria-hidden="true" />
+            </span>
+            <span>
+              <strong>
+                {pendingApproval
+                  ? "Claude is waiting for approval"
+                  : agentConnection
+                    ? "Claude is ready"
+                    : "Agent setup required"}
+              </strong>
+              <small>
+                {agentConnection
+                  ? pendingApproval
+                    ? "Approving the pending connector action will resume this Chat automatically."
+                    : `${connectionSummary} · ${actionSummary}`
+                  : "Connect your Claude subscription before starting a chat."}
+              </small>
+            </span>
+          </div>
+          <div className="chat-context-actions">
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => setHistoryOpen((open) => !open)}
+              aria-label={historyOpen ? "Hide chat history" : "Show chat history"}
+              title={historyOpen ? "Hide chat history" : "Show chat history"}
+            >
+              {historyOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+            </Button>
+            {voiceConfiguration?.enabled ? (
+              <>
+                <span className={`chat-voice-state ${voiceState}`} title="Voice input and output provided by Sayna">
+                  <AudioWaveform size={14} aria-hidden="true" />
+                  {voiceStateLabel(voiceState, voiceListening)}
+                  {queuedVoiceTurnCount > 0 ? ` · ${queuedVoiceTurnCount} queued` : ""}
+                </span>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  onClick={toggleVoiceReplies}
+                  aria-label={voiceReplies ? "Disable spoken agent replies" : "Enable spoken agent replies"}
+                  aria-pressed={voiceReplies}
+                  title={voiceReplies ? "Spoken replies enabled" : "Enable spoken replies"}
+                >
+                  {voiceReplies ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                </Button>
+              </>
+            ) : null}
+            {voiceConfiguration?.available ? (
+              <Button
+                variant="outline"
+                size={voiceConfiguration.configured ? "icon-sm" : "sm"}
+                onClick={() => setVoiceSettingsOpen(true)}
+                aria-label="Configure Sayna voice"
+                title="Configure Sayna voice"
+              >
+                <Settings2 size={15} aria-hidden="true" />
+                {voiceConfiguration.configured ? null : "Set up voice"}
+              </Button>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={newChat} disabled={sending}>
+              <Plus size={14} aria-hidden="true" />
+              New chat
+            </Button>
+          </div>
+        </section>
+
+        <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
+          {messages.length === 0 ? (
+            <ChatWelcome
+              configured={Boolean(agentConnection)}
+              onSuggestion={(suggestion) => void sendMessage(suggestion)}
+            />
+          ) : (
+            <div className="chat-message-list">
+              {messages.map((message) => (
+                <ChatMessageView
+                  key={message.id}
+                  message={message}
+                  activeApprovalId={pendingApproval?.approvalId}
+                  approvalDecision={approvalDecision}
+                  onApprovalDecision={(decision) => void decideApproval(decision)}
+                />
+              ))}
+              {sending ? (
+                <div className="chat-message-row assistant">
+                  <span className="chat-avatar">
+                    <Bot size={15} aria-hidden="true" />
+                  </span>
+                  <div className="chat-bubble assistant thinking">
+                    <Loader2 className="spin" size={16} aria-hidden="true" />
+                    <span>{agentProgress?.message ?? "Claude is working with your connections…"}</span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+
+        <form className="chat-composer" onSubmit={(event) => void submit(event)}>
+          {error || voiceError ? <div className="chat-error">{error ?? voiceError}</div> : null}
+          <div className="chat-composer-box">
+            <Textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={keyDown}
+              placeholder={
+                pendingApproval
+                  ? "Waiting for the pending approval…"
+                  : voiceListening
+                    ? "Listening with Sayna…"
+                    : agentConnection
+                      ? "Ask Claude to find, explain, or do something…"
+                      : "Set up Claude to start chatting"
+              }
+              aria-label="Message Claude"
+              disabled={!agentConnection || sending || Boolean(pendingApproval)}
+              rows={3}
+            />
+            <div className="chat-composer-actions">
+              {voiceConfiguration?.enabled ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={voiceListening ? "destructive" : "outline"}
+                  onClick={toggleVoiceInput}
+                  disabled={!agentConnection || (voiceState === "connecting" && !voiceListening)}
+                  aria-label={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
+                  aria-pressed={voiceListening}
+                  title={voiceListening ? "Stop continuous listening" : "Start continuous voice conversation"}
+                >
+                  {voiceState === "connecting" && !voiceListening ? (
+                    <Loader2 className="spin" size={17} />
+                  ) : voiceListening ? (
+                    <MicOff size={17} />
+                  ) : (
+                    <Mic size={17} />
+                  )}
+                </Button>
+              ) : null}
+              <Button
+                type="submit"
+                size="icon"
+                disabled={!agentConnection || sending || Boolean(pendingApproval) || !draft.trim()}
+                aria-label="Send message"
+              >
+                {sending ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+              </Button>
+            </div>
+          </div>
+          <p>
+            {voiceConfiguration?.enabled ? "Sayna continuous voice · " : ""}Enter to send · Shift+Enter for a new line ·
+            Connector actions follow your runtime policy.
+          </p>
+        </form>
+        {voiceConfiguration?.available ? (
+          <SaynaVoiceSettingsDialog
+            open={voiceSettingsOpen}
+            configuration={voiceConfiguration}
+            onOpenChange={setVoiceSettingsOpen}
+            onSaved={(configuration) => {
+              setVoiceConfiguration(configuration);
+              setVoiceError(null);
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function ChatHistorySidebar(props: {
+  conversations: ChatConversation[];
+  activeConversationId: string;
+  disabled: boolean;
+  onNew(): void;
+  onSelect(id: string): void;
+  onRename(conversation: ChatConversation): void;
+  onDelete(conversation: ChatConversation): void;
+  onClear(): void;
+}): ReactNode {
+  const hasSavedMessages = props.conversations.some((conversation) => conversation.messages.length > 0);
+  const hasPendingApproval = props.conversations.some((conversation) => conversation.pendingApproval);
+  return (
+    <aside className="chat-history" aria-label="Chat history">
+      <div className="chat-history-header">
+        <span>
+          <MessageSquare size={16} aria-hidden="true" />
+          <strong>Chats</strong>
+        </span>
+        <Button variant="outline" size="icon-sm" onClick={props.onNew} disabled={props.disabled} aria-label="New chat">
+          <Plus size={15} aria-hidden="true" />
+        </Button>
+      </div>
+      <nav className="chat-history-list" aria-label="Saved chats">
+        {props.conversations.map((conversation) => {
+          const active = conversation.id === props.activeConversationId;
+          return (
+            <div className={active ? "chat-history-item active" : "chat-history-item"} key={conversation.id}>
+              <button
+                type="button"
+                className="chat-history-select"
+                onClick={() => props.onSelect(conversation.id)}
+                disabled={props.disabled}
+                aria-current={active ? "page" : undefined}
+                title={conversation.title}
+              >
+                <span>{conversation.title}</span>
+                <small>
+                  {formatHistoryTimestamp(conversation.updatedAt)}
+                  {conversation.pendingApproval ? " · Approval pending" : ""}
+                </small>
+              </button>
+              <div className="chat-history-item-actions">
+                <button
+                  type="button"
+                  onClick={() => props.onRename(conversation)}
+                  disabled={props.disabled}
+                  aria-label={`Rename ${conversation.title}`}
+                  title="Rename chat"
+                >
+                  <Pencil size={13} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onDelete(conversation)}
+                  disabled={props.disabled || Boolean(conversation.pendingApproval)}
+                  aria-label={`Delete ${conversation.title}`}
+                  title={conversation.pendingApproval ? "Resolve the pending approval before deleting" : "Delete chat"}
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </nav>
+      <button
+        type="button"
+        className="chat-history-clear"
+        onClick={props.onClear}
+        disabled={props.disabled || !hasSavedMessages || hasPendingApproval}
+        title={hasPendingApproval ? "Resolve pending approvals before clearing history" : "Delete all saved chats"}
+      >
+        <Trash2 size={13} aria-hidden="true" />
+        Clear history
+      </button>
+    </aside>
+  );
+}
+
+function formatHistoryTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return "Saved chat";
+  const now = new Date();
+  return date.toDateString() === now.toDateString()
+    ? new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date)
+    : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
 function SaynaVoiceSettingsDialog(props: {
@@ -912,57 +1073,12 @@ export function applyApprovalResult(session: ChatSession, result: AgentChatAppro
   };
 }
 
-function readStoredChatSession(): ChatSession {
-  if (typeof window === "undefined") return { messages: [] };
-  try {
-    const raw = window.sessionStorage.getItem(chatSessionStorageKey);
-    if (!raw) return { messages: [] };
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || !Array.isArray(parsed.messages)) return { messages: [] };
-    const messages = parsed.messages.filter(isDisplayMessage);
-    const pendingApproval = isPendingChatApproval(parsed.pendingApproval) ? parsed.pendingApproval : undefined;
-    return pendingApproval && messages.some((message) => message.id === pendingApproval.assistantMessageId)
-      ? { messages, pendingApproval }
-      : { messages };
-  } catch {
-    return { messages: [] };
-  }
-}
-
 function browserTimeZone(): string {
   try {
     return new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
     return "UTC";
   }
-}
-
-function storeChatSession(session: ChatSession): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(chatSessionStorageKey, JSON.stringify(session));
-  } catch {
-    // Chat remains usable when browser storage is disabled or full.
-  }
-}
-
-function isDisplayMessage(value: unknown): value is DisplayMessage {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    typeof value.createdAt === "string" &&
-    (value.role === "user" || value.role === "assistant") &&
-    typeof value.content === "string" &&
-    (value.toolActivity === undefined || Array.isArray(value.toolActivity))
-  );
-}
-
-function isPendingChatApproval(value: unknown): value is PendingChatApproval {
-  return isRecord(value) && typeof value.approvalId === "string" && typeof value.assistantMessageId === "string";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isAbortError(value: unknown): boolean {
