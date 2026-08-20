@@ -54,6 +54,7 @@ export interface AgentChatApprovalContinuation {
   toolActivity: AgentChatToolActivity[];
   batchApprovalIds?: string[];
   voiceMode?: boolean;
+  timeZone?: string;
   response?: AgentChatResponse;
 }
 

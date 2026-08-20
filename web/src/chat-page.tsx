@@ -275,6 +275,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         {
           messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
           voiceMode: voiceRepliesRef.current || source === "voice",
+          timeZone: browserTimeZone(),
         },
         (event) => {
           if (event.type === "error") throw new Error(event.error.message);
@@ -925,6 +926,14 @@ function readStoredChatSession(): ChatSession {
       : { messages };
   } catch {
     return { messages: [] };
+  }
+}
+
+function browserTimeZone(): string {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
   }
 }
 

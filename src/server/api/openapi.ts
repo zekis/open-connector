@@ -591,6 +591,11 @@ function createAgentChatRequestSchema(): JsonSchema {
   return jsonSchema.object(
     {
       messages: jsonSchema.array({ $ref: "#/components/schemas/AgentChatMessage" }, { minItems: 1, maxItems: 40 }),
+      timeZone: jsonSchema.nonWhitespaceString(
+        "IANA time zone used to present the host-supplied current date and time to the agent. Defaults to the server time zone.",
+        { maxLength: 100 },
+      ),
+      voiceMode: jsonSchema.boolean("Whether the response should follow concise voice-output rules."),
     },
     {
       required: ["messages"],

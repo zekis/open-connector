@@ -237,7 +237,10 @@ describe("action execution OpenAPI", () => {
     const request = document.components.schemas.AgentChatRequest as {
       required: string[];
       description: string;
-      properties: { messages: { minItems: number; maxItems: number } };
+      properties: {
+        messages: { minItems: number; maxItems: number };
+        timeZone: { maxLength: number; description: string };
+      };
     };
     const activity = document.components.schemas.AgentChatToolActivity as {
       required: string[];
@@ -263,6 +266,8 @@ describe("action execution OpenAPI", () => {
     expect(request.required).toEqual(["messages"]);
     expect(request.description).toContain("encrypted approval record");
     expect(request.properties.messages).toMatchObject({ minItems: 1, maxItems: 40 });
+    expect(request.properties.timeZone).toMatchObject({ maxLength: 100 });
+    expect(request.properties.timeZone.description).toContain("host-supplied current date and time");
     expect(activity.required).toEqual(expect.arrayContaining(["type", "ok", "input", "output"]));
     expect(activity.properties).toHaveProperty("connectionId");
     expect(activity.properties).toHaveProperty("approvalId");

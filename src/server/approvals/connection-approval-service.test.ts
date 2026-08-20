@@ -113,10 +113,14 @@ describe("ConnectionApprovalService", () => {
     });
     if (requested.allowed) throw new Error("Expected a pending approval.");
 
-    await service.attachChatContinuation(requested.approval.id, [{ role: "user", content: "Send hello" }], [], false, [
+    await service.attachChatContinuation(
       requested.approval.id,
-      "approval-2",
-    ]);
+      [{ role: "user", content: "Send hello" }],
+      [],
+      false,
+      [requested.approval.id, "approval-2"],
+      "Australia/Perth",
+    );
     await service.approve(requested.approval.id);
     await service.storeChatResponse(requested.approval.id, {
       status: "waiting_for_approval",
@@ -134,6 +138,7 @@ describe("ConnectionApprovalService", () => {
       status: "approved",
       chat: {
         batchApprovalIds: [requested.approval.id, "approval-2"],
+        timeZone: "Australia/Perth",
         response: { status: "waiting_for_approval", approvalId: "approval-2" },
       },
     });

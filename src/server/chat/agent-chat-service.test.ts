@@ -383,11 +383,13 @@ describe("AgentChatService", () => {
 
     const waiting = await service.respond({
       messages: [{ role: "user", content: "Is record 42 active?" }],
+      timeZone: "Australia/Perth",
     });
 
     expect(waiting).toMatchObject({ status: "waiting_for_approval", approvalId });
     expect(approvals.approval.chat).toMatchObject({
       messages: [{ role: "user", content: "Is record 42 active?" }],
+      timeZone: "Australia/Perth",
     });
     expect(approvals.approval.chat?.toolActivity).toHaveLength(2);
     approvals.approve();
@@ -401,6 +403,7 @@ describe("AgentChatService", () => {
       approvalPolicy: "bypass",
     });
     expect(claude.inputs[3]?.prompt).toContain('"active":true');
+    expect(claude.inputs[3]?.prompt).toContain('"timeZone":"Australia/Perth"');
     expect((await service.getApprovalResult(approvalId)).response).toEqual(completed);
   });
 
@@ -515,6 +518,36 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.systemPrompt).toContain("ask whether the user wants more detail");
   });
 
+  it("includes the current UTC and user-local date and time in every Chat prompt", async () => {
+    const claude = new FakeClaudeCodeClient([{ kind: "final", text: "It is Thursday afternoon in Perth." }]);
+    const now = () => new Date("2026-08-20T07:15:30.000Z");
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), undefined, now);
+
+    await service.respond({
+      messages: [{ role: "user", content: "What day and time is it?" }],
+      timeZone: "Australia/Perth",
+    });
+
+    expect(claude.inputs[0]?.prompt).toContain("Current date and time:");
+    expect(claude.inputs[0]?.prompt).toContain('"utc":"2026-08-20T07:15:30.000Z"');
+    expect(claude.inputs[0]?.prompt).toContain('"timeZone":"Australia/Perth"');
+    expect(claude.inputs[0]?.prompt).toContain("August 20, 2026");
+    expect(claude.inputs[0]?.systemPrompt).toContain("host-supplied current date and time");
+  });
+
+  it("rejects invalid Chat time zones before calling the agent", async () => {
+    const claude = new FakeClaudeCodeClient([]);
+    const service = createService(claude, new FakeActionRunner());
+
+    await expect(
+      service.respond({
+        messages: [{ role: "user", content: "What time is it?" }],
+        timeZone: "Mars/Olympus_Mons",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_chat", status: 400 });
+    expect(claude.inputs).toEqual([]);
+  });
+
   it("runs host-provided workspace tools alongside connector tools", async () => {
     const claude = new FakeClaudeCodeClient([
       { kind: "tool_call", toolName: "synapse_add_artifact", arguments: { title: "Useful result" } },
@@ -591,6 +624,7 @@ function createService(
   agentConfigured = true,
   approvals = new FakeChatApprovals(),
   flows = new FakeFlowService(),
+  now?: () => Date,
 ): AgentChatService {
   const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
   return new AgentChatService({
@@ -628,6 +662,7 @@ function createService(
     flows,
     approvals,
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
+    now,
   });
 }
 
@@ -759,10 +794,11 @@ class FakeChatApprovals {
     toolActivity: NonNullable<ActionApproval["chat"]>["toolActivity"],
     voiceMode = false,
     batchApprovalIds = [id],
+    timeZone?: string,
   ): Promise<ActionApproval> {
     const approval = this.approvals.get(id);
     if (!approval) throw new Error("Unexpected approval id");
-    const updated = { ...approval, chat: { messages, toolActivity, voiceMode, batchApprovalIds } };
+    const updated = { ...approval, chat: { messages, toolActivity, voiceMode, batchApprovalIds, timeZone } };
     this.approvals.set(id, updated);
     return structuredClone(updated);
   }
