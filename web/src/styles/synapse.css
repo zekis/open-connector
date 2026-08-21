@@ -200,11 +200,6 @@
   opacity: 0.8;
 }
 
-.synapse-edge.approval {
-  stroke: var(--warning);
-  stroke-dasharray: 6 5;
-}
-
 #synapse-arrow path {
   fill: color-mix(in oklab, var(--brand) 56%, var(--muted-foreground));
 }
@@ -396,16 +391,6 @@
   }
 }
 
-.synapse-node.provider {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: stretch;
-  height: 118px;
-  gap: 12px;
-  padding: 16px;
-  border-left: 4px solid var(--brand);
-}
-
 .synapse-node.artifact {
   display: flex;
   flex-direction: column;
@@ -417,6 +402,9 @@
 .synapse-node.artifact.draft {
   border-top-color: var(--warning);
 }
+.synapse-node.artifact.provider-context {
+  border-top-color: var(--brand);
+}
 .synapse-node.artifact.email {
   border-top-color: var(--info);
 }
@@ -427,169 +415,53 @@
   border-top-color: var(--reward);
 }
 
-.synapse-node.approval {
-  display: flex;
-  flex-direction: column;
-  min-height: 280px;
-  border-top: 3px solid var(--warning);
+.synapse-node.artifact.approval-group {
   background: color-mix(in oklab, var(--warning) 6%, var(--card));
-  cursor: pointer;
 }
 
-.synapse-approval-draft-header {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  min-width: 0;
-  gap: 11px;
-  padding: 14px 44px 12px 14px;
-  border-bottom: 1px solid color-mix(in oklab, var(--warning) 24%, var(--border));
-}
-
-.synapse-approval-draft-header > span:last-child {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.synapse-approval-draft-header small {
+.synapse-draft-actions {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 6;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--warning);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
-.synapse-approval-draft-header strong,
-.synapse-approval-draft-header em {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.synapse-approval-draft-header strong {
-  font-size: 14px;
-}
-
-.synapse-approval-draft-header em {
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-style: normal;
-}
-
-.synapse-approval-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 5px;
-  padding: 7px 12px;
-  overflow-x: hidden;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklab, var(--background) 38%, transparent);
-}
-
-.synapse-approval-tabs button {
-  flex: 0 0 auto;
-  min-width: 26px;
-  height: 24px;
-  padding: 0 7px;
+.synapse-draft-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--muted-foreground);
-  background: var(--card);
-  font-size: 10px;
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  box-shadow: var(--console-shadow-sm);
   cursor: pointer;
 }
 
-.synapse-approval-tabs button:hover:not(:disabled),
-.synapse-approval-tabs button.active {
-  border-color: color-mix(in oklab, var(--warning) 58%, var(--border));
-  color: var(--foreground);
-  background: color-mix(in oklab, var(--warning) 13%, var(--card));
+.synapse-draft-actions button:hover:not(:disabled),
+.synapse-draft-actions button:focus-visible {
+  border-color: color-mix(in oklab, var(--success) 62%, var(--border));
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 12%, var(--card));
+  outline: none;
 }
 
-.synapse-approval-tabs button:disabled {
+.synapse-draft-actions button:last-child:hover:not(:disabled),
+.synapse-draft-actions button:last-child:focus-visible {
+  border-color: color-mix(in oklab, var(--destructive) 62%, var(--border));
+  color: var(--destructive);
+  background: color-mix(in oklab, var(--destructive) 10%, var(--card));
+}
+
+.synapse-draft-actions button:disabled {
   cursor: wait;
-  opacity: 0.6;
-}
-
-.synapse-approval-draft-content {
-  flex: 1 1 0;
-  padding: 14px 16px;
-}
-
-.synapse-approval-draft-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 0 0 auto;
-  gap: 10px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklab, var(--background) 52%, transparent);
-}
-
-.synapse-approval-pager {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.synapse-approval-pager > span {
-  min-width: 42px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.synapse-approval-draft-panel-content {
-  min-height: 160px;
-  max-height: 45vh;
-  overflow: auto;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--background);
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.synapse-approval-draft-panel-content .chat-markdown > :first-child {
-  margin-top: 0;
-}
-
-.synapse-approval-draft-panel-content .chat-markdown > :last-child {
-  margin-bottom: 0;
-}
-
-.approval-provider-icon {
-  align-self: center;
-}
-
-.synapse-approval-node-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.synapse-approval-node-actions button {
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.synapse-approval-draft-content pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.synapse-approval-draft-content .chat-markdown {
-  margin: 0;
+  opacity: 0.56;
 }
 
 .synapse-node-icon {
@@ -599,37 +471,12 @@
   flex: 0 0 auto;
 }
 
-.synapse-node-icon.provider {
-  align-self: start;
-  width: 48px;
-  height: 48px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--background);
-}
-
-.synapse-node-icon.provider .provider-icon {
-  width: 32px;
-  height: 32px;
-}
-
-.synapse-node-copy {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  gap: 3px;
-  padding-right: 30px;
-}
-
-.synapse-node-copy strong,
 .synapse-node.artifact > strong {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 14px;
 }
 
-.synapse-node-eyebrow,
 .synapse-node.artifact header {
   color: var(--muted-foreground);
   font-size: 10px;
@@ -646,6 +493,53 @@
   gap: 7px;
   margin-bottom: 10px;
   padding-right: 30px;
+}
+
+.synapse-node-icon.artifact .provider-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+
+.synapse-node-icon.artifact .provider-icon-image,
+.synapse-node-icon.artifact .provider-icon-css-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.synapse-node.artifact .synapse-approval-group-header {
+  padding-right: 100px;
+}
+
+.synapse-node-provider-icons {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.synapse-node-provider-icons .provider-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+.synapse-node-provider-icons .provider-icon + .provider-icon {
+  margin-left: -6px;
+}
+
+.synapse-node-provider-icons .provider-icon-image,
+.synapse-node-provider-icons .provider-icon-css-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.synapse-node-provider-icons small {
+  margin-left: 4px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  letter-spacing: 0;
 }
 
 .synapse-node-kind {
@@ -689,6 +583,44 @@
 .synapse-node.artifact .synapse-node-markdown {
   flex: 1 1 0;
   padding: 0 8px 18px 0;
+}
+
+.synapse-group-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin: 0 0 8px;
+  overflow: hidden;
+}
+
+.synapse-group-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 25px;
+  height: 23px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.synapse-group-tabs button:hover:not(:disabled),
+.synapse-group-tabs button:focus-visible,
+.synapse-group-tabs button.active {
+  border-color: color-mix(in oklab, var(--warning) 58%, var(--border));
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--warning) 13%, var(--card));
+  outline: none;
+}
+
+.synapse-group-tabs button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .synapse-artifact-shortcuts {
@@ -771,10 +703,6 @@
   height: 1px;
   margin: 5px 4px;
   background: var(--border);
-}
-
-.synapse-node-markdown.provider-markdown {
-  max-height: none;
 }
 
 .synapse-node-markdown .chat-markdown {
@@ -935,7 +863,7 @@
 
 .synapse-node-detail-main {
   display: grid;
-  grid-template-columns: minmax(106px, 148px) minmax(260px, 1fr) minmax(106px, 148px);
+  grid-template-columns: minmax(78px, 104px) minmax(260px, 1fr) minmax(78px, 104px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1016,27 +944,31 @@
 }
 
 .synapse-node-detail-rail-label {
-  padding: 0 9px 2px;
+  width: calc(100% - 10px);
+  padding: 0 4px 2px;
   color: var(--muted-foreground);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
+  text-align: center;
   text-transform: uppercase;
 }
 
 .synapse-node-detail-handle {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  width: calc(100% - 8px);
+  justify-content: center;
+  width: calc(100% - 10px);
+  min-height: 118px;
   min-width: 0;
-  gap: 6px;
-  padding: 7px;
+  gap: 7px;
+  padding: 10px 7px;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
   color: var(--foreground);
   box-shadow: var(--console-shadow-sm);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -1046,7 +978,6 @@
 }
 
 .synapse-node-detail-rail.outgoing .synapse-node-detail-handle {
-  grid-template-columns: auto minmax(0, 1fr) auto;
   border-left-color: color-mix(in oklab, var(--brand) 58%, var(--border));
   border-radius: 0 10px 10px 0;
 }
@@ -1059,26 +990,28 @@
 }
 
 .synapse-node-detail-handle-icon {
-  width: 25px;
-  height: 25px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
 }
 
 .synapse-node-detail-handle-icon .provider-icon {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
 }
 
 .synapse-node-detail-handle-copy {
   display: grid;
+  justify-items: center;
   min-width: 0;
+  gap: 2px;
 }
 
 .synapse-node-detail-handle small,
 .synapse-node-detail-handle strong {
   overflow: hidden;
+  max-width: 100%;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .synapse-node-detail-handle small {
@@ -1088,8 +1021,13 @@
 }
 
 .synapse-node-detail-handle strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   font-size: 10px;
   font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .synapse-panel {
@@ -1393,122 +1331,6 @@
   font-size: 11px;
 }
 
-.synapse-approval-panel {
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-}
-
-.synapse-panel-icon.approval {
-  border-color: color-mix(in oklab, var(--warning) 35%, var(--border));
-  background: color-mix(in oklab, var(--warning) 9%, var(--background));
-  color: var(--warning);
-}
-
-.synapse-approval-review {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px;
-}
-
-.synapse-approval-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid color-mix(in oklab, var(--warning) 34%, var(--border));
-  border-radius: 11px;
-  background: color-mix(in oklab, var(--warning) 8%, transparent);
-  color: var(--warning);
-}
-
-.synapse-approval-status > div {
-  display: grid;
-  gap: 3px;
-}
-
-.synapse-approval-status strong {
-  color: var(--foreground);
-  font-size: 12px;
-}
-
-.synapse-approval-status span {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.synapse-approval-review dl {
-  display: grid;
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.synapse-approval-review dl > div {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--background);
-}
-
-.synapse-approval-review dt,
-.synapse-approval-payload > span {
-  color: var(--muted-foreground);
-  font-size: 9px;
-  font-weight: 720;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.synapse-approval-review dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  font-weight: 630;
-}
-
-.synapse-approval-payload {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--background);
-}
-
-.synapse-approval-payload > span {
-  display: block;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.synapse-approval-payload pre {
-  max-height: 320px;
-  overflow: auto;
-  margin: 0;
-  padding: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 10px;
-  line-height: 1.5;
-}
-
-.synapse-approval-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.synapse-approval-actions > span {
-  min-width: 44px;
-  margin-right: auto;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  text-align: center;
-}
-
 .synapse-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1701,8 +1523,9 @@
   .synapse-node-detail-handle,
   .synapse-node-detail-rail.incoming .synapse-node-detail-handle,
   .synapse-node-detail-rail.outgoing .synapse-node-detail-handle {
-    flex: 0 0 180px;
-    width: 180px;
+    flex: 0 0 92px;
+    width: 92px;
+    min-height: 112px;
     border: 1px solid var(--border);
     border-radius: 10px;
   }

@@ -24,10 +24,10 @@ import {
   BrainCircuit,
   Cable,
   Check,
+  CheckCheck,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  Clock3,
   CopyPlus,
   ExternalLink,
   File,
@@ -78,8 +78,6 @@ import { Textarea } from "@/components/ui/textarea";
 const nodeWidth = 264;
 const providerNodeHeight = 118;
 const artifactNodeHeight = 164;
-const approvalNodeWidth = 420;
-const approvalNodeHeight = 360;
 const nodeHorizontalGap = 48;
 const nodeVerticalGap = 32;
 const approvalPollIntervalMs = 2_000;
@@ -181,6 +179,20 @@ function closestMatchingTarget(target: unknown, selector: string): unknown {
 /** Returns whether a node pointer event belongs to a control that must remain independently interactive. */
 export function isSynapseNodeControlTarget(target: unknown): boolean {
   return Boolean(closestMatchingTarget(target, synapseNodeControlSelector));
+}
+
+/** Resolves the connected provider represented by a source node or connector-backed artifact. */
+export function synapseNodeProvider(
+  node: SynapseNode,
+  providersByService: ReadonlyMap<string, ProviderDefinition>,
+): ProviderDefinition | undefined {
+  const service = node.kind === "provider" ? node.service : node.sourceActionId?.split(".")[0];
+  return service ? providersByService.get(service) : undefined;
+}
+
+/** Hides approval controls from chat because Synapse drafts own the approval experience. */
+export function visibleSynapseToolActivities(activities: AgentChatToolActivity[] | undefined): AgentChatToolActivity[] {
+  return (activities ?? []).filter((activity) => !activity.approvalId);
 }
 
 export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactNode {
@@ -677,7 +689,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
           <SynapseNodeDetail
             workspace={workspace}
             node={expandedNode}
-            provider={expandedNode.kind === "provider" ? providersByService.get(expandedNode.service) : undefined}
+            provider={synapseNodeProvider(expandedNode, providersByService)}
             providersByService={providersByService}
             speechAvailable={voiceConfiguration?.enabled === true}
             speaking={speakingNodeId === expandedNode.id}
@@ -752,7 +764,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
             data={props.data}
             workspace={workspace}
             node={selectedNode}
-            provider={selectedNode.kind === "provider" ? providersByService.get(selectedNode.service) : undefined}
+            provider={synapseNodeProvider(selectedNode, providersByService)}
             showNodeContext={expandedNode?.id !== selectedNode.id}
             onClose={() => setSelectedNodeId(undefined)}
             onContinue={() => void continueNodeInNewCanvas(selectedNode.id)}
@@ -1144,7 +1156,7 @@ function SynapseCanvas(props: {
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
             return (
               <path
-                className="synapse-edge approval"
+                className="synapse-edge"
                 d={`M ${startX} ${startY} C ${startX + direction * bend} ${startY}, ${endX - direction * bend} ${endY}, ${endX} ${endY}`}
                 markerEnd="url(#synapse-arrow)"
                 key={`edge-${item.id}`}
@@ -1171,7 +1183,7 @@ function SynapseCanvas(props: {
                   (thread) => thread.nodeId === node.id && pendingSynapseApprovalIds(thread).length > 0,
                 )
               }
-              provider={node.kind === "provider" ? props.providersByService.get(node.service) : undefined}
+              provider={synapseNodeProvider(node, props.providersByService)}
               onPointerDown={(event) => beginDrag(event, node)}
               onPointerMove={moveDrag}
               onPointerUp={finishDrag}
@@ -1188,15 +1200,11 @@ function SynapseCanvas(props: {
             />
           ))}
         {props.approvalItems.map((item) => (
-          <SynapseApprovalNodeCard
+          <SynapseApprovalGroupCard
             item={item}
             providersByService={props.providersByService}
             selected={false}
-            speechAvailable={props.speechAvailable}
-            speaking={props.speakingNodeId === item.id}
-            speechConnecting={props.speakingNodeId === item.id && props.speechConnecting}
             onDecision={(approvalIds, decision) => props.onApprovalDecision(item, approvalIds, decision)}
-            onToggleSpeech={() => props.onToggleSpeech(item.id, synapseApprovalSpeech(item))}
             key={item.id}
           />
         ))}
@@ -1244,70 +1252,18 @@ export function SynapseNodeCard(props: {
     width: size.width,
     height: size.height,
   };
-  if (props.node.kind === "provider") {
-    return (
-      <article
-        className={`synapse-node provider${props.selected ? " selected" : ""}${props.checked ? " multi-selected" : ""}${props.linking ? " link-target" : ""}`}
-        style={style}
-        onClick={props.onSelect}
-        onContextMenu={props.onContextMenu}
-        onDoubleClick={(event) => {
-          if (!isSynapseNodeControlTarget(event.target)) props.onOpen();
-        }}
-      >
-        <SynapseNodeDragHandle
-          label={props.node.title}
-          onPointerDown={props.onPointerDown}
-          onPointerMove={props.onPointerMove}
-          onPointerUp={props.onPointerUp}
-          onPointerCancel={props.onPointerCancel}
-        />
-        <SynapseNodeCheckbox checked={props.checked} label={props.node.title} onCheckedChange={props.onCheckedChange} />
-        <SynapseRefreshButton
-          refreshing={props.refreshing}
-          disabled={props.refreshDisabled}
-          label={props.node.title}
-          onRefresh={props.onRefresh}
-        />
-        <SynapseTtsButton
-          available={props.speechAvailable}
-          speaking={props.speaking}
-          connecting={props.speechConnecting}
-          label={props.node.title}
-          onToggle={props.onToggleSpeech}
-        />
-        <div className="synapse-node-icon provider">
-          {props.provider ? <ProviderIcon provider={props.provider} large /> : <Cable size={22} />}
-        </div>
-        <div className="synapse-node-copy">
-          <span className="synapse-node-eyebrow">Provider source</span>
-          <strong>{props.node.title}</strong>
-          <div className="synapse-node-markdown provider-markdown">
-            <ChatMarkdown>
-              {props.node.instructions ?? "Ask this node to retrieve or act through its connection."}
-            </ChatMarkdown>
-          </div>
-        </div>
-        <span className="synapse-port input" />
-        <span className="synapse-port output" />
-        <span
-          className="synapse-node-resize"
-          role="separator"
-          aria-label={`Resize ${props.node.title}`}
-          onPointerDown={props.onResizePointerDown}
-          onPointerMove={props.onResizePointerMove}
-          onPointerUp={props.onResizePointerUp}
-          onPointerCancel={props.onResizePointerUp}
-        />
-      </article>
-    );
-  }
-  const Icon = artifactIcon(props.node.artifactKind);
-  const markdown = props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.";
-  const previews = props.node.previews ?? [];
+  const artifactKind = props.node.kind === "artifact" ? props.node.artifactKind : "generic";
+  const Icon = artifactIcon(artifactKind);
+  const markdown =
+    props.node.kind === "provider"
+      ? (props.node.instructions ?? "Ask this node to retrieve or act through its connection.")
+      : (props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.");
+  const previews = props.node.kind === "artifact" ? (props.node.previews ?? []) : [];
+  const providerLabel =
+    props.provider?.displayName ?? (props.node.kind === "provider" ? "Connected provider" : undefined);
   return (
     <article
-      className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.checked ? " multi-selected" : ""}${props.linking ? " link-target" : ""}`}
+      className={`synapse-node artifact ${artifactKind}${props.node.kind === "provider" ? " provider-context" : ""}${props.selected ? " selected" : ""}${props.checked ? " multi-selected" : ""}${props.linking ? " link-target" : ""}`}
       style={style}
       onClick={props.onSelect}
       onContextMenu={props.onContextMenu}
@@ -1338,14 +1294,16 @@ export function SynapseNodeCard(props: {
       />
       <header>
         <span className="synapse-node-icon artifact">
-          <Icon size={18} />
+          {props.provider ? <ProviderIcon provider={props.provider} /> : <Icon size={18} />}
         </span>
-        <span className="synapse-node-kind">{artifactLabel(props.node.artifactKind)}</span>
+        <span className="synapse-node-kind">{providerLabel ?? artifactLabel(artifactKind)}</span>
       </header>
       <strong className="synapse-node-title" title={props.node.title}>
         {props.node.title}
       </strong>
-      <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
+      {props.node.kind === "artifact" ? (
+        <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
+      ) : null}
       <div className="synapse-node-markdown">
         <ChatMarkdown>{markdown}</ChatMarkdown>
       </div>
@@ -1514,21 +1472,25 @@ function PreviewIcon({ preview }: { preview: FeedPreview }): ReactNode {
   return <File size={16} />;
 }
 
-export function SynapseApprovalNodeCard(props: {
+export function SynapseApprovalGroupCard(props: {
   item: SynapseApprovalCanvasItem;
-  providersByService: Map<string, ProviderDefinition>;
+  providersByService: ReadonlyMap<string, ProviderDefinition>;
   selected: boolean;
-  speechAvailable: boolean;
-  speaking: boolean;
-  speechConnecting: boolean;
   onDecision(approvalIds: string[], decision: "approve" | "deny"): Promise<void>;
-  onToggleSpeech(): void;
 }): ReactNode {
   const [page, setPage] = useState(0);
   const [decision, setDecision] = useState<{ approvalIds: string[]; decision: "approve" | "deny" }>();
   const request = props.item.requests[Math.min(page, props.item.requests.length - 1)]!;
-  const provider = props.providersByService.get(request.service);
+  const providers = [
+    ...new Map(
+      props.item.requests.flatMap((candidate) => {
+        const provider = props.providersByService.get(candidate.service);
+        return provider ? [[provider.service, provider] as const] : [];
+      }),
+    ).values(),
+  ];
   const markdown = approvalRequestMarkdown(request);
+  const title = request.draftNode?.title ?? request.title;
   const style = {
     transform: `translate(${props.item.position.x}px, ${props.item.position.y}px)`,
     width: props.item.size.width,
@@ -1551,35 +1513,84 @@ export function SynapseApprovalNodeCard(props: {
 
   return (
     <article
-      className={`synapse-node approval${props.selected ? " selected" : ""}`}
+      className={`synapse-node artifact draft approval-group${props.selected ? " selected" : ""}`}
       style={style}
       onPointerDown={(event) => {
         event.stopPropagation();
       }}
     >
-      <SynapseTtsButton
-        available={props.speechAvailable}
-        speaking={props.speaking}
-        connecting={props.speechConnecting}
-        label={request.draftNode?.title ?? request.title}
-        onToggle={props.onToggleSpeech}
-      />
-      <header className="synapse-approval-draft-header">
-        <span className="synapse-node-icon provider approval-provider-icon">
-          {provider ? <ProviderIcon provider={provider} large /> : <Cable size={22} />}
+      <div className="synapse-draft-actions">
+        {props.item.requests.length > 1 ? (
+          <button
+            type="button"
+            disabled={Boolean(decision)}
+            aria-label="Approve all drafts"
+            title="Approve all drafts"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void decide(
+                "approve",
+                props.item.requests.map((candidate) => candidate.approvalId),
+              );
+            }}
+          >
+            {decision?.decision === "approve" && decision.approvalIds.length > 1 ? (
+              <Loader2 className="spin" size={14} />
+            ) : (
+              <CheckCheck size={15} />
+            )}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={Boolean(decision)}
+          aria-label={`Approve ${title}`}
+          title={`Approve ${title}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            void decide("approve");
+          }}
+        >
+          {decision?.decision === "approve" && decision.approvalIds.length === 1 ? (
+            <Loader2 className="spin" size={14} />
+          ) : (
+            <Check size={15} />
+          )}
+        </button>
+        <button
+          type="button"
+          disabled={Boolean(decision)}
+          aria-label={`Deny ${title}`}
+          title={`Deny ${title}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            void decide("deny");
+          }}
+        >
+          {decision?.decision === "deny" ? <Loader2 className="spin" size={14} /> : <X size={15} />}
+        </button>
+      </div>
+      <header className="synapse-approval-group-header">
+        <span className="synapse-node-provider-icons">
+          {providers.length > 0 ? (
+            providers.slice(0, 3).map((provider) => <ProviderIcon provider={provider} key={provider.service} />)
+          ) : (
+            <Cable size={18} />
+          )}
+          {providers.length > 3 ? <small>+{providers.length - 3}</small> : null}
         </span>
-        <span>
-          <small>
-            Draft approval <Clock3 size={11} /> Pending
-          </small>
-          <strong>{request.draftNode?.title ?? request.title}</strong>
-          <em>
-            {provider?.displayName ?? request.service} · {request.connectionDisplayName ?? "Connected provider"}
-          </em>
+        <span className="synapse-node-kind">
+          Draft{props.item.requests.length > 1 ? ` · ${page + 1} of ${props.item.requests.length}` : ""}
         </span>
       </header>
+      <strong className="synapse-node-title" title={title}>
+        {title}
+      </strong>
       {props.item.requests.length > 1 ? (
-        <nav className="synapse-approval-tabs" role="tablist" aria-label="Pending approval drafts">
+        <nav className="synapse-group-tabs" role="tablist" aria-label="Grouped drafts">
           {props.item.requests.map((candidate, index) => (
             <button
               type="button"
@@ -1600,101 +1611,12 @@ export function SynapseApprovalNodeCard(props: {
           ))}
         </nav>
       ) : null}
-      <div className="synapse-approval-draft-content synapse-node-markdown">
+      <div className="synapse-node-markdown">
         <ChatMarkdown>{markdown}</ChatMarkdown>
       </div>
-      <footer className="synapse-approval-draft-footer">
-        <div className="synapse-approval-pager">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            disabled={page === 0 || Boolean(decision)}
-            aria-label="Previous approval"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setPage((current) => Math.max(0, current - 1));
-            }}
-          >
-            <ChevronLeft size={15} />
-          </Button>
-          <span>
-            {page + 1} / {props.item.requests.length}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            disabled={page >= props.item.requests.length - 1 || Boolean(decision)}
-            aria-label="Next approval"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setPage((current) => Math.min(props.item.requests.length - 1, current + 1));
-            }}
-          >
-            <ChevronRight size={15} />
-          </Button>
-        </div>
-        <div className="synapse-approval-node-actions">
-          {props.item.requests.length > 1 ? (
-            <Button
-              size="sm"
-              disabled={Boolean(decision)}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                void decide(
-                  "approve",
-                  props.item.requests.map((candidate) => candidate.approvalId),
-                );
-              }}
-            >
-              {decision?.decision === "approve" && decision.approvalIds.length > 1 ? (
-                <Loader2 className="spin" size={13} />
-              ) : (
-                <Check size={13} />
-              )}{" "}
-              Approve all
-            </Button>
-          ) : null}
-          <Button
-            size="sm"
-            disabled={Boolean(decision)}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void decide("approve");
-            }}
-          >
-            {decision?.decision === "approve" && decision.approvalIds.length === 1 ? (
-              <Loader2 className="spin" size={13} />
-            ) : (
-              <Check size={13} />
-            )}{" "}
-            Approve once
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={Boolean(decision)}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void decide("deny");
-            }}
-          >
-            {decision?.decision === "deny" ? <Loader2 className="spin" size={13} /> : <X size={13} />} Deny
-          </Button>
-        </div>
-      </footer>
       <span className="synapse-port input" />
     </article>
   );
-}
-
-function synapseApprovalSpeech(item: SynapseApprovalCanvasItem): string {
-  const request = item.requests[0]!;
-  return `Approval required. ${request.draftNode?.title ?? request.title}. ${request.connectionDisplayName ?? "Connected provider action"}. Open this draft to approve or deny the request.`;
 }
 
 function approvalRequestMarkdown(request: SynapseApprovalRequestItem): string {
@@ -1842,11 +1764,7 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
     <section className="synapse-node-detail" aria-label={`Expanded node ${props.node.title}`}>
       <header className="synapse-node-detail-header">
         <span className="synapse-node-detail-icon">
-          {props.node.kind === "provider" && props.provider ? (
-            <ProviderIcon provider={props.provider} large />
-          ) : (
-            <DetailIcon size={21} />
-          )}
+          {props.provider ? <ProviderIcon provider={props.provider} large /> : <DetailIcon size={21} />}
         </span>
         <div>
           <span>{kind}</span>
@@ -1934,7 +1852,7 @@ function SynapseConnectedNodeRail(props: SynapseConnectedNodeRailProps): ReactNo
       ) : null}
       {props.nodes.map((node) => {
         const Icon = node.kind === "artifact" ? artifactIcon(node.artifactKind) : Cable;
-        const provider = node.kind === "provider" ? props.providersByService.get(node.service) : undefined;
+        const provider = synapseNodeProvider(node, props.providersByService);
         return (
           <button
             type="button"
@@ -1977,10 +1895,6 @@ function SynapseNodePanel(props: {
   const [sending, setSending] = useState(false);
   const [liveProgress, setLiveProgress] = useState<AgentChatProgress[]>([]);
   const [error, setError] = useState<string>();
-  const [approvalDecision, setApprovalDecision] = useState<{
-    approvalIds: string[];
-    decision: "approve" | "deny";
-  }>();
   const transcriptRef = useRef<HTMLDivElement>(null);
   const thread = props.workspace.threads.find((candidate) => candidate.nodeId === props.node.id);
   const pendingApprovalIds = thread ? pendingSynapseApprovalIds(thread) : [];
@@ -2026,44 +1940,11 @@ function SynapseNodePanel(props: {
     }
   }
 
-  async function decideMany(decision: "approve" | "deny", approvalIds: string[]): Promise<void> {
-    const targetApprovalIds = [...new Set(approvalIds)].filter((approvalId) => pendingApprovalIds.includes(approvalId));
-    if (targetApprovalIds.length === 0 || approvalDecision) return;
-    setApprovalDecision({ approvalIds: targetApprovalIds, decision });
-    setError(undefined);
-    try {
-      await Promise.all(
-        targetApprovalIds.map((approvalId) =>
-          apiPost(`/api/action-approvals/${encodeURIComponent(approvalId)}/${decision}`, {}),
-        ),
-      );
-      const next = await apiGet<SynapseWorkspace>(
-        `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.node.id)}/approval`,
-      );
-      props.onWorkspaceChange(next);
-      props.onRefresh();
-    } catch (caught) {
-      setError(messageFrom(caught, `Could not ${decision} this action.`));
-    } finally {
-      setApprovalDecision(undefined);
-    }
-  }
-
-  async function decide(decision: "approve" | "deny", approvalId?: string): Promise<void> {
-    const targetApprovalId = approvalId ?? pendingApprovalIds[0];
-    if (!targetApprovalId) return;
-    await decideMany(decision, [targetApprovalId]);
-  }
-
   return (
     <aside className={hasArtifactContext ? "synapse-panel has-artifact-context" : "synapse-panel"}>
       <header className="synapse-panel-header">
         <span className="synapse-panel-icon">
-          {props.node.kind === "provider" && props.provider ? (
-            <ProviderIcon provider={props.provider} large />
-          ) : (
-            <BrainCircuit size={20} />
-          )}
+          {props.provider ? <ProviderIcon provider={props.provider} large /> : <BrainCircuit size={20} />}
         </span>
         <div>
           <span>{props.node.kind === "provider" ? "Provider context" : artifactLabel(props.node.artifactKind)}</span>
@@ -2101,25 +1982,20 @@ function SynapseNodePanel(props: {
             </Button>
           </div>
         ) : thread?.messages.length ? (
-          thread.messages.map((message) => (
-            <div className={`synapse-message ${message.role}`} key={message.id}>
-              {message.role === "assistant" ? <Bot size={15} /> : null}
-              <div>
-                {message.toolActivity?.length ? (
-                  <ChatToolActivityList
-                    activities={message.toolActivity}
-                    activeApprovalIds={pendingApprovalIds}
-                    approvalDecision={approvalDecision}
-                    onApprovalDecision={(decision, approvalId) => void decide(decision, approvalId)}
-                    onApprovalAll={(decision, approvalIds) => void decideMany(decision, approvalIds)}
-                  />
-                ) : null}
-                <div className="synapse-message-bubble">
-                  {message.role === "assistant" ? <ChatMarkdown>{message.content}</ChatMarkdown> : message.content}
+          thread.messages.map((message) => {
+            const activities = visibleSynapseToolActivities(message.toolActivity);
+            return (
+              <div className={`synapse-message ${message.role}`} key={message.id}>
+                {message.role === "assistant" ? <Bot size={15} /> : null}
+                <div>
+                  {activities.length > 0 ? <ChatToolActivityList activities={activities} /> : null}
+                  <div className="synapse-message-bubble">
+                    {message.role === "assistant" ? <ChatMarkdown>{message.content}</ChatMarkdown> : message.content}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="synapse-chat-empty">
             <Sparkles size={24} />
@@ -2130,13 +2006,7 @@ function SynapseNodePanel(props: {
         {sending ? (
           <div className="synapse-message assistant thinking">
             <Bot size={15} />
-            <SynapseLiveProgress
-              progress={liveProgress}
-              activeApprovalIds={pendingApprovalIds}
-              approvalDecision={approvalDecision}
-              onApprovalDecision={(decision, approvalId) => void decide(decision, approvalId)}
-              onApprovalAll={(decision, approvalIds) => void decideMany(decision, approvalIds)}
-            />
+            <SynapseLiveProgress progress={liveProgress} />
           </div>
         ) : null}
       </div>
@@ -2176,26 +2046,15 @@ export function mergeSynapseProgress(current: AgentChatProgress[], progress: Age
   return current.map((item, index) => (index === existingIndex ? progress : item));
 }
 
-function SynapseLiveProgress(props: {
-  progress: AgentChatProgress[];
-  activeApprovalIds: string[];
-  approvalDecision?: { approvalIds: string[]; decision: "approve" | "deny" };
-  onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
-  onApprovalAll(decision: "approve" | "deny", approvalIds: string[]): void;
-}): ReactNode {
+function SynapseLiveProgress(props: { progress: AgentChatProgress[] }): ReactNode {
   const latest = props.progress.at(-1);
   return (
     <div className="synapse-live-progress">
       {props.progress.map((progress) =>
         progress.tool?.activity ? (
-          <ChatToolActivityList
-            key={progress.id}
-            activities={[progress.tool.activity]}
-            activeApprovalIds={props.activeApprovalIds}
-            approvalDecision={props.approvalDecision}
-            onApprovalDecision={props.onApprovalDecision}
-            onApprovalAll={props.onApprovalAll}
-          />
+          visibleSynapseToolActivities([progress.tool.activity]).length > 0 ? (
+            <ChatToolActivityList key={progress.id} activities={[progress.tool.activity]} />
+          ) : null
         ) : progress.tool ? (
           <div className="synapse-live-tool" key={progress.id}>
             <Loader2 className="spin" size={14} />
@@ -2593,7 +2452,7 @@ export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprov
         const draftSize = sizeForCanvasNode(draft);
         return { width: Math.max(current.width, draftSize.width), height: Math.max(current.height, draftSize.height) };
       },
-      { width: approvalNodeWidth, height: approvalNodeHeight },
+      { width: nodeWidth, height: artifactNodeHeight },
     );
     const ownerSize = sizeForCanvasNode(owner);
     const position =
@@ -2605,7 +2464,7 @@ export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprov
         size,
       );
     items.push({
-      id: `approval-stack:${thread.nodeId}`,
+      id: `approval-group:${thread.nodeId}`,
       approvalId: requests[0]!.approvalId,
       nodeId: thread.nodeId,
       requests,

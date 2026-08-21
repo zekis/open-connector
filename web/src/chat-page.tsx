@@ -961,7 +961,7 @@ export function ChatToolActivityList(props: {
     | null
     | { approvalId: string; decision: "approve" | "deny" }
     | { approvalIds: string[]; decision: "approve" | "deny" };
-  onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
+  onApprovalDecision?(decision: "approve" | "deny", approvalId?: string): void;
   onApprovalAll?(decision: "approve" | "deny", approvalIds: string[]): void;
 }): ReactNode {
   const activeApprovalIds = new Set([
@@ -972,7 +972,7 @@ export function ChatToolActivityList(props: {
   const otherActivities = props.activities.filter((activity) => !approvalIdFromToolActivity(activity));
   return (
     <div className="chat-tool-list">
-      {approvalActivities.length > 0 ? (
+      {approvalActivities.length > 0 && props.onApprovalDecision ? (
         <ChatApprovalActivityGroup
           activities={approvalActivities}
           activeApprovalIds={activeApprovalIds}

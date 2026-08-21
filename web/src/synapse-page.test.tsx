@@ -1,5 +1,6 @@
 import type {
   AgentChatProgress,
+  AgentChatToolActivity,
   ProviderDefinition,
   SynapseArtifactNode,
   SynapseProviderNode,
@@ -14,12 +15,14 @@ import {
   isSynapseNodeControlTarget,
   mergeSynapseProgress,
   panNodeIntoView,
-  SynapseApprovalNodeCard,
+  SynapseApprovalGroupCard,
   SynapseNodeCard,
   SynapseNodeDetail,
-  synapseNodeSpeech,
   synapseApprovalItems,
   synapseConnectedNodeGroups,
+  synapseNodeProvider,
+  synapseNodeSpeech,
+  visibleSynapseToolActivities,
   zoomCanvasView,
 } from "./synapse-page";
 
@@ -105,6 +108,7 @@ const artifactNode: SynapseArtifactNode = {
   summary: "A new opportunity arrived from the sales team.",
   content: "**Priority:** review the [sales brief](https://example.com/brief).",
   externalUrl: "https://outlook.office.com/mail/message-1",
+  sourceActionId: "outlook.get_message",
   position: { x: 430, y: 120 },
   size: { width: 420, height: 280 },
   previews: [
@@ -127,7 +131,7 @@ const artifactNode: SynapseArtifactNode = {
 };
 
 describe("SynapseNodeCard", () => {
-  it("renders a provider as a draggable source card", () => {
+  it("renders a provider source with the same normal node card shell", () => {
     const html = renderToStaticMarkup(
       <SynapseNodeCard
         node={providerNode}
@@ -156,9 +160,9 @@ describe("SynapseNodeCard", () => {
       />,
     );
 
-    expect(html).toContain("Provider source");
+    expect(html).toContain("artifact generic provider-context");
     expect(html).toContain("Find important messages for this branch.");
-    expect(html).toContain('class="provider-icon large"');
+    expect(html).toContain('class="provider-icon"');
     expect(html).toContain("translate(100px, 120px)");
     expect(html).toContain("Read Outlook aloud");
     expect(html).toContain("Select Outlook");
@@ -171,6 +175,7 @@ describe("SynapseNodeCard", () => {
     const html = renderToStaticMarkup(
       <SynapseNodeCard
         node={artifactNode}
+        provider={provider}
         selected={false}
         linking
         speechAvailable
@@ -209,6 +214,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Stop reading New mining opportunity");
     expect(html).toContain("Ask Claude to refresh New mining opportunity");
     expect(html).toContain("Drag New mining opportunity");
+    expect(html).toContain('class="provider-icon"');
     expect(html).not.toContain("<iframe");
   });
 
@@ -288,24 +294,19 @@ describe("SynapseNodeCard", () => {
     });
 
     const html = renderToStaticMarkup(
-      <SynapseApprovalNodeCard
+      <SynapseApprovalGroupCard
         item={item!}
         providersByService={new Map([[provider.service, provider]])}
         selected
-        speechAvailable
-        speaking={false}
-        speechConnecting={false}
         onDecision={async () => {}}
-        onToggleSpeech={() => {}}
       />,
     );
-    expect(html).toContain("Draft approval");
-    expect(html).toContain("1 / 1");
-    expect(html).toContain("Approve once");
-    expect(html).toContain(" Deny</button>");
-    expect(html).toContain('class="provider-icon large"');
-    expect(html).toContain("Sales inbox");
-    expect(html).toContain("Read outlook.send_message aloud");
+    expect(html).toContain("synapse-node artifact draft approval-group selected");
+    expect(html).toContain('class="provider-icon"');
+    expect(html).toContain('aria-label="Approve outlook.send_message"');
+    expect(html).toContain('aria-label="Deny outlook.send_message"');
+    expect(html).not.toContain("Draft approval");
+    expect(html).not.toContain("Approve once");
   });
 
   it("projects every queued connector approval from one agent turn", () => {
@@ -392,23 +393,53 @@ describe("SynapseNodeCard", () => {
       }),
     ]);
     const html = renderToStaticMarkup(
-      <SynapseApprovalNodeCard
+      <SynapseApprovalGroupCard
         item={items[0]!}
         providersByService={new Map()}
         selected={false}
-        speechAvailable={false}
-        speaking={false}
-        speechConnecting={false}
         onDecision={async () => {}}
-        onToggleSpeech={() => {}}
       />,
     );
     expect(html).toContain("Close selected YardCraft items");
     expect(html).toContain("Close work items 194047 and 194048.");
-    expect(html).toContain("1 / 2");
-    expect(html).toContain("Approve all");
+    expect(html).toContain("1 of 2");
+    expect(html).toContain('aria-label="Approve all drafts"');
+    expect(html).toContain('aria-label="Grouped drafts"');
     expect(html.match(/role="tab"/g)).toHaveLength(2);
-    expect(html).toContain('aria-label="Next approval"');
+    expect(html).not.toContain('aria-label="Next approval"');
+  });
+});
+
+describe("Synapse provider and chat projections", () => {
+  it("resolves provider identity for source and connector-backed artifact nodes", () => {
+    const providers = new Map([[provider.service, provider]]);
+
+    expect(synapseNodeProvider(providerNode, providers)).toBe(provider);
+    expect(synapseNodeProvider(artifactNode, providers)).toBe(provider);
+  });
+
+  it("removes approval activities from chat while retaining ordinary tool results", () => {
+    const activities: AgentChatToolActivity[] = [
+      {
+        id: "approval",
+        type: "action",
+        label: "outlook.send_message",
+        ok: false,
+        approvalId: "approval-1",
+        input: {},
+        output: { status: "pending_approval" },
+      },
+      {
+        id: "query",
+        type: "action",
+        label: "outlook.search_messages",
+        ok: true,
+        input: {},
+        output: { count: 2 },
+      },
+    ];
+
+    expect(visibleSynapseToolActivities(activities)).toEqual([activities[1]]);
   });
 });
 
@@ -462,6 +493,7 @@ describe("SynapseNodeDetail", () => {
       <SynapseNodeDetail
         workspace={workspace}
         node={artifactNode}
+        provider={provider}
         providersByService={new Map([[provider.service, provider]])}
         speechAvailable
         speaking={false}
@@ -481,6 +513,7 @@ describe("SynapseNodeDetail", () => {
     expect(html).toContain('aria-label="Outgoing connected nodes"');
     expect(html).toContain('aria-label="Open connected node Outlook"');
     expect(html).toContain('aria-label="Open connected node Opportunity decision"');
+    expect(html).toContain('class="provider-icon large"');
     expect(html).toContain("<strong>Priority:</strong>");
   });
 });
