@@ -474,6 +474,10 @@ export class SynapseService {
       }
       const parentNodeId = optionalText(input.parentNodeId, "parentNodeId", 200) ?? selectedNode.id;
       const parent = requiredNode(workspace, parentNodeId);
+      const representedNode = connectionNodeForBranch(workspace, parent, connectionId);
+      if (representedNode) {
+        return graphActivity(toolName, input, true, { node: representedNode, reused: true });
+      }
       const title = optionalText(input.title, "title", maximumNodeTitleCharacters);
       const instructions = optionalText(input.instructions, "instructions", maximumNodeTextCharacters);
       const node = await this.addProviderNode(
@@ -529,6 +533,9 @@ export class SynapseService {
       if (input.summary !== undefined) node.summary = optionalText(input.summary, "summary", maximumNodeTextCharacters);
       if (input.content !== undefined) node.content = optionalText(input.content, "content", maximumNodeTextCharacters);
       if (input.artifactKind !== undefined) node.artifactKind = readArtifactKind(input.artifactKind);
+      if (input.sourceActivityId !== undefined) {
+        node.sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
+      }
       if (node.autoSize !== false) {
         node.autoSize = true;
         node.size = automaticNodeSize(node);
@@ -654,6 +661,10 @@ export class SynapseService {
       thread.messages.push(message);
     }
     thread.messages = thread.messages.slice(-maximumThreadMessages);
+    reconcileArtifactProvenance(workspace, response.toolActivity, {
+      selectedNodeId: selectedNode.id,
+      mergeDuplicates: true,
+    });
     const nextApprovalIds = response.status === "waiting_for_approval" ? responseApprovalIds(response) : [];
     reconcileDraftApprovalAssignments(
       workspace,
@@ -687,7 +698,7 @@ export class SynapseService {
     const hasCuratedArtifacts = activities.some(
       (activity) => activity.ok && activity.actionId === "synapse_add_artifacts",
     );
-    const approvedProviders = new Map<string, SynapseProviderNode>();
+    const approvedConnectionNodes = new Map<string, SynapseNode>();
     const approvedActionCounts = new Map<string, number>();
     for (const activity of activities) {
       if (isResolvedApprovalAction(activity, resolvedApprovalIds, legacyApprovedActions) && activity.connectionId) {
@@ -720,8 +731,8 @@ export class SynapseService {
       }
       if (hasCuratedArtifacts && !isApprovedAction) continue;
       let connection = isApprovedAction
-        ? approvedProviders.get(activity.connectionId)
-        : providerNodeForBranch(workspace, selectedNode, activity.connectionId);
+        ? approvedConnectionNodes.get(activity.connectionId)
+        : connectionNodeForBranch(workspace, selectedNode, activity.connectionId);
       if (!connection) {
         const approvedActionCount = approvedActionCounts.get(activity.connectionId) ?? 1;
         connection = await this.addProviderNode(
@@ -738,7 +749,7 @@ export class SynapseService {
             : {},
         );
         if (connection.id !== selectedNode.id) this.connectNodes(workspace, selectedNode.id, connection.id);
-        if (isApprovedAction) approvedProviders.set(activity.connectionId, connection);
+        if (isApprovedAction) approvedConnectionNodes.set(activity.connectionId, connection);
       }
       if (hasCuratedArtifacts) continue;
       const parent = connection;
@@ -790,7 +801,13 @@ export class SynapseService {
     const workspace = await this.options.store.getWorkspace(id);
     if (!workspace) throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
     removeLegacyRawConnectorArtifacts(workspace);
-    if (migratePendingApprovalDrafts(workspace)) await this.options.store.setWorkspace(workspace);
+    let migrated = migratePendingApprovalDrafts(workspace);
+    for (const thread of workspace.threads) {
+      for (const message of thread.messages) {
+        migrated = reconcileArtifactProvenance(workspace, message.toolActivity ?? []) || migrated;
+      }
+    }
+    if (migrated) await this.options.store.setWorkspace(workspace);
     return workspace;
   }
 
@@ -933,6 +950,10 @@ const synapseTools: AgentChatExtensionTool[] = [
         title: { type: "string" },
         summary: { type: "string" },
         content: { type: "string" },
+        sourceActivityId: {
+          type: "string",
+          description: "Connector tool activity id whose result is being written into this artifact.",
+        },
       },
       additionalProperties: false,
     },
@@ -955,12 +976,15 @@ Multi-selection rules:
 Rules:
 - use the selected node and its connected component as your factual canvas context; do not assume unrelated canvas nodes
 - use connector tools whenever current external data or a side effect is needed
-- add a provider node with synapse_add_provider when retrieved information needs a durable source node and that connection is not already represented nearby
+- treat a connector-backed artifact with sourceConnectionId as an existing representation of that connection; do not add a separate provider node for the same connection
+- add a provider node with synapse_add_provider only when retrieved information needs a durable source node and that connection is not already represented by a provider or artifact nearby
 - do not add a provider node for a proposed create, update, send, or delete action; the host puts the provider identity and approval controls directly on its draft card
 - after retrieving useful results, call synapse_add_artifacts and create one concise artifact per useful result; fan-outs are preferred over burying results in chat
 - retrieve attachment metadata for useful emails that report attachments so the canvas can render those files
 - put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
 - include sourceActivityId from connector tool activity when turning that result into artifacts
+- when connector results update or expand the selected artifact, call synapse_update_artifact with its nodeId and sourceActivityId instead of creating a copy with synapse_add_artifacts
+- never recreate the selected artifact as a second card; update it in place when it represents the same external item or working document
 - never create an artifact containing raw JSON, a JSON code fence, an API response dump, or provider field-reference maps; translate structured results into concise human-readable Markdown
 - create exactly one draft artifact for each proposed side effect before requesting its connector action; the host merges pending approval into that draft rather than creating another canvas node
 - use synapse_update_artifact with nodeId to update any earlier artifact card in the connected context, not only the selected card
@@ -1028,17 +1052,174 @@ function connectedNodesByDistance(
   return ordered;
 }
 
-function providerNodeForBranch(
+function connectionNodeForBranch(
   workspace: SynapseWorkspace,
   selectedNode: SynapseNode,
   connectionId: string,
-): SynapseProviderNode | undefined {
+): SynapseNode | undefined {
   const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
   for (const { nodeId } of connectedNodesByDistance(workspace, [selectedNode.id])) {
     const node = nodesById.get(nodeId);
-    if (node?.kind === "provider" && node.connectionId === connectionId) return node;
+    if (
+      (node?.kind === "provider" && node.connectionId === connectionId) ||
+      (node?.kind === "artifact" && node.sourceConnectionId === connectionId)
+    ) {
+      return node;
+    }
   }
   return undefined;
+}
+
+type ConnectorResultActivity = AgentChatToolActivity & { actionId: string; connectionId: string };
+
+interface ReconcileArtifactProvenanceOptions {
+  selectedNodeId?: string;
+  mergeDuplicates?: boolean;
+}
+
+/** Stamps graph-authored artifacts with the connector result that produced them and merges stable duplicates. */
+function reconcileArtifactProvenance(
+  workspace: SynapseWorkspace,
+  activities: AgentChatToolActivity[],
+  options: ReconcileArtifactProvenanceOptions = {},
+): boolean {
+  const connectorActivities = new Map<string, ConnectorResultActivity>();
+  for (const activity of activities) {
+    if (isConnectorResultActivity(activity)) connectorActivities.set(activity.id, activity);
+  }
+
+  let changed = false;
+  let latestConnector: ConnectorResultActivity | undefined;
+  for (const activity of activities) {
+    if (isConnectorResultActivity(activity)) {
+      latestConnector = activity;
+      continue;
+    }
+    const nodeIds = graphArtifactNodeIds(activity);
+    if (nodeIds.length === 0) continue;
+    for (const [index, nodeId] of nodeIds.entries()) {
+      const node = workspace.nodes.find(
+        (candidate): candidate is SynapseArtifactNode => candidate.id === nodeId && candidate.kind === "artifact",
+      );
+      if (!node) continue;
+      const source =
+        (node.sourceActivityId ? connectorActivities.get(node.sourceActivityId) : undefined) ?? latestConnector;
+      if (!source) continue;
+      const boundedSourceInput = boundedData(source.input, 4_000);
+      const sourceInput = isRecord(boundedSourceInput) ? boundedSourceInput : undefined;
+      const candidates = artifactCandidates(source.output, source.actionId, source.connectionId, sourceInput);
+      const provenanceCandidate = artifactProvenanceCandidate(node, candidates, index, nodeIds.length);
+      const before = JSON.stringify({
+        sourceActionId: node.sourceActionId,
+        sourceConnectionId: node.sourceConnectionId,
+        sourceActivityId: node.sourceActivityId,
+        sourceInput: node.sourceInput,
+        itemIdentity: node.itemIdentity,
+        data: node.data,
+        externalUrl: node.externalUrl,
+      });
+      node.sourceActionId = source.actionId;
+      node.sourceConnectionId = source.connectionId;
+      node.sourceActivityId = source.id;
+      node.sourceInput = sourceInput;
+      node.itemIdentity ??= provenanceCandidate?.itemIdentity;
+      node.data ??= provenanceCandidate?.data;
+      node.externalUrl ??= provenanceCandidate?.externalUrl;
+      const after = JSON.stringify({
+        sourceActionId: node.sourceActionId,
+        sourceConnectionId: node.sourceConnectionId,
+        sourceActivityId: node.sourceActivityId,
+        sourceInput: node.sourceInput,
+        itemIdentity: node.itemIdentity,
+        data: node.data,
+        externalUrl: node.externalUrl,
+      });
+      changed = before !== after || changed;
+
+      const identity = artifactIdentity(node);
+      if (!options.mergeDuplicates || !identity || node.id === options.selectedNodeId) continue;
+      const duplicates = workspace.nodes.filter(
+        (candidate): candidate is SynapseArtifactNode =>
+          candidate.kind === "artifact" && candidate.id !== node.id && artifactIdentity(candidate) === identity,
+      );
+      const existing = duplicates.find((candidate) => candidate.id === options.selectedNodeId) ?? duplicates.at(0);
+      if (!existing) continue;
+      mergeCuratedArtifact(existing, node);
+      replaceNodeInEdges(workspace, node.id, existing.id);
+      workspace.nodes = workspace.nodes.filter((candidate) => candidate.id !== node.id);
+      workspace.threads = workspace.threads.filter((thread) => thread.nodeId !== node.id);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function isConnectorResultActivity(activity: AgentChatToolActivity): activity is ConnectorResultActivity {
+  return Boolean(
+    activity.type === "action" &&
+    activity.ok &&
+    activity.actionId &&
+    !activity.actionId.startsWith("synapse_") &&
+    activity.connectionId,
+  );
+}
+
+function graphArtifactNodeIds(activity: AgentChatToolActivity): string[] {
+  if (activity.actionId === "synapse_add_artifacts") {
+    return activityCreatedNodeIds([activity], "synapse_add_artifacts", "nodes");
+  }
+  if (activity.actionId === "synapse_update_artifact") {
+    return activityCreatedNodeIds([activity], "synapse_update_artifact", "node");
+  }
+  return [];
+}
+
+function artifactProvenanceCandidate(
+  node: SynapseArtifactNode,
+  candidates: ArtifactInput[],
+  index: number,
+  nodeCount: number,
+): ArtifactInput | undefined {
+  const externalMatch = node.externalUrl
+    ? candidates.find((candidate) => candidate.externalUrl === node.externalUrl)
+    : undefined;
+  if (externalMatch) return externalMatch;
+  const titleMatch = candidates.find((candidate) => candidate.title.trim() === node.title.trim());
+  if (titleMatch) return titleMatch;
+  if (candidates.length === 1 || candidates.length === nodeCount) return candidates[index] ?? candidates[0];
+  return undefined;
+}
+
+function mergeCuratedArtifact(target: SynapseArtifactNode, source: SynapseArtifactNode): void {
+  target.artifactKind = source.artifactKind;
+  target.title = source.title;
+  target.summary = source.summary ?? target.summary;
+  target.content = source.content ?? target.content;
+  target.externalUrl = source.externalUrl ?? target.externalUrl;
+  target.sourceActionId = source.sourceActionId;
+  target.sourceConnectionId = source.sourceConnectionId;
+  target.sourceActivityId = source.sourceActivityId;
+  target.sourceInput = source.sourceInput;
+  target.itemIdentity = source.itemIdentity ?? target.itemIdentity;
+  target.data = source.data ?? target.data;
+  target.updatedAt = new Date().toISOString();
+  if (target.autoSize !== false) {
+    target.autoSize = true;
+    target.size = automaticNodeSize(target);
+  }
+}
+
+function replaceNodeInEdges(workspace: SynapseWorkspace, removedNodeId: string, retainedNodeId: string): void {
+  const edgeKeys = new Set<string>();
+  workspace.edges = workspace.edges.flatMap((edge) => {
+    const sourceNodeId = edge.sourceNodeId === removedNodeId ? retainedNodeId : edge.sourceNodeId;
+    const targetNodeId = edge.targetNodeId === removedNodeId ? retainedNodeId : edge.targetNodeId;
+    if (sourceNodeId === targetNodeId) return [];
+    const key = `${sourceNodeId}\u0000${targetNodeId}\u0000${edge.label ?? ""}`;
+    if (edgeKeys.has(key)) return [];
+    edgeKeys.add(key);
+    return [{ ...edge, sourceNodeId, targetNodeId }];
+  });
 }
 
 function previewDescriptors(workspaceId: string, node: SynapseArtifactNode): ProviderPreviewDescriptor[] {
@@ -1488,6 +1669,7 @@ function azureDevOpsWorkItemCollectionArtifact(
     sourceActionId: actionId,
     sourceConnectionId: connectionId,
     sourceInput,
+    itemIdentity: providerCollectionIdentity(actionId, connectionId, sourceInput),
     data: boundedData(output),
   };
 }
@@ -1612,6 +1794,21 @@ function providerItemIdentity(
       ? path.toLowerCase()
       : normalizedIdentityUrl(externalUrl);
   return stableValue ? `${connectionId}:${service}:${resource}:${stableValue}` : undefined;
+}
+
+function providerCollectionIdentity(
+  actionId: string,
+  connectionId: string,
+  sourceInput: Record<string, unknown> | undefined,
+): string {
+  const criteria = Object.entries(sourceInput ?? {})
+    .flatMap(([key, value]) => {
+      const scalar = scalarText(value);
+      return scalar ? [`${key}=${scalar}`] : [];
+    })
+    .sort()
+    .join("&");
+  return `${connectionId}:${actionId}:collection:${criteria || "all"}`.slice(0, 1_000);
 }
 
 function artifactIdentity(node: SynapseArtifactNode): string | undefined {

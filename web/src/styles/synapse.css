@@ -865,6 +865,29 @@
     color-mix(in oklab, var(--background) 97%, var(--muted));
 }
 
+.synapse-node-detail.draft {
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--warning) 18%, transparent), transparent 42%),
+    color-mix(in oklab, var(--background) 96%, var(--warning));
+}
+
+.synapse-node-detail.draft .synapse-node-detail-header {
+  border-bottom-color: color-mix(in oklab, var(--warning) 42%, var(--border));
+  background: color-mix(in oklab, var(--warning) 8%, var(--card));
+}
+
+.synapse-node-detail.draft .synapse-node-detail-icon,
+.synapse-node-detail.draft .synapse-node-detail-title > span {
+  color: var(--warning);
+}
+
+.synapse-node-detail.draft .synapse-node-detail-content {
+  border-color: color-mix(in oklab, var(--warning) 58%, var(--border));
+  border-top: 3px solid var(--warning);
+  background: color-mix(in oklab, var(--warning) 6%, var(--card));
+  box-shadow: 0 18px 54px color-mix(in oklab, var(--warning) 12%, transparent);
+}
+
 .synapse-node-detail-header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -917,6 +940,18 @@
   display: flex;
   align-items: center;
   gap: 3px;
+}
+
+.synapse-node-detail-actions .synapse-node-detail-approve:hover:not(:disabled),
+.synapse-node-detail-actions .synapse-node-detail-approve:focus-visible {
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 12%, transparent);
+}
+
+.synapse-node-detail-actions .synapse-node-detail-deny:hover:not(:disabled),
+.synapse-node-detail-actions .synapse-node-detail-deny:focus-visible {
+  color: var(--destructive);
+  background: color-mix(in oklab, var(--destructive) 10%, transparent);
 }
 
 .synapse-node-detail-main {

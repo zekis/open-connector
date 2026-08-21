@@ -301,6 +301,7 @@ describe("SynapseNodeCard", () => {
         providersByService={new Map([[provider.service, provider]])}
         selected
         onDecision={async () => {}}
+        onOpen={() => {}}
       />,
     );
     expect(html).toContain("synapse-node artifact draft approval-group selected");
@@ -400,12 +401,14 @@ describe("SynapseNodeCard", () => {
         providersByService={new Map()}
         selected={false}
         onDecision={async () => {}}
+        onOpen={() => {}}
       />,
     );
     expect(html).toContain("Close selected YardCraft items");
     expect(html).toContain("Close work items 194047 and 194048.");
     expect(html).toContain("1 of 2");
     expect(html).toContain('aria-label="Approve all drafts"');
+    expect(html).toContain('aria-label="Open Close selected YardCraft items full screen"');
     expect(html).toContain('aria-label="Grouped drafts"');
     expect(html.match(/role="tab"/g)).toHaveLength(2);
     expect(html).not.toContain('aria-label="Next approval"');
@@ -545,6 +548,48 @@ describe("SynapseNodeDetail", () => {
     expect(html).toContain('aria-label="Open connected node Opportunity decision"');
     expect(html).toContain('class="provider-icon large"');
     expect(html).toContain("<strong>Priority:</strong>");
+  });
+
+  it("keeps a pending draft orange in fullscreen and exposes its approval actions", () => {
+    const draft: SynapseArtifactNode = {
+      ...artifactNode,
+      id: "draft-1",
+      artifactKind: "draft",
+      title: "Create YardCraft task",
+      approvalIds: ["approval-1"],
+    };
+    const html = renderToStaticMarkup(
+      <SynapseNodeDetail
+        workspace={{ ...workspace, nodes: [...workspace.nodes, draft] }}
+        node={draft}
+        provider={provider}
+        approvalRequest={{
+          approvalId: "approval-1",
+          service: provider.service,
+          title: "outlook.send_message",
+          input: { subject: "Opportunity" },
+          draftNode: draft,
+        }}
+        providersByService={new Map([[provider.service, provider]])}
+        speechAvailable
+        speaking={false}
+        speechConnecting={false}
+        refreshing={false}
+        refreshDisabled
+        onClose={() => {}}
+        onNavigate={() => {}}
+        onTextContextMenu={() => {}}
+        onRefresh={() => {}}
+        onApprovalDecision={async () => {}}
+        onToggleSpeech={() => {}}
+      />,
+    );
+
+    expect(html).toContain('class="synapse-node-detail draft"');
+    expect(html).toContain("Draft awaiting approval");
+    expect(html).toContain('aria-label="Approve Create YardCraft task"');
+    expect(html).toContain('aria-label="Deny Create YardCraft task"');
+    expect(html).toContain('class="provider-icon large"');
   });
 });
 

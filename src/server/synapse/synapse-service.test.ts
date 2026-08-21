@@ -5,6 +5,7 @@ import type {
   AgentChatApprovalResult,
   AgentChatProgressListener,
   AgentChatResponse,
+  AgentChatToolActivity,
 } from "../chat/agent-chat-types.ts";
 import type { ISynapseStore, SynapseArtifactNode, SynapseSize, SynapseWorkspace } from "./synapse-types.ts";
 
@@ -217,6 +218,7 @@ describe("SynapseService", () => {
       artifactKind: "note",
       title: "Yardcraft work items (1)",
       summary: "1 work item returned by Azure DevOps.",
+      itemIdentity: "azure-devops-1:azure_devops.query_work_items:collection:project=Yardcraft",
     });
     expect(artifacts[0]?.content).toContain("| ID | Type | Title | State | Assigned to |");
     expect(artifacts[0]?.content).toContain(
@@ -296,7 +298,12 @@ describe("SynapseService", () => {
     const artifacts = result.nodes.filter((node) => node.kind === "artifact");
 
     expect(artifacts).toHaveLength(1);
-    expect(artifacts[0]?.title).toBe("#194047 Commissioning checklist");
+    expect(artifacts[0]).toMatchObject({
+      title: "#194047 Commissioning checklist",
+      sourceActionId: "azure_devops.query_work_items",
+      sourceConnectionId: "azure-devops-1",
+      sourceActivityId: "connector-activity",
+    });
   });
 
   it("removes legacy raw connector JSON projection nodes", async () => {
@@ -373,6 +380,66 @@ describe("SynapseService", () => {
     ]);
   });
 
+  it("keeps conversation history and tool activity isolated to the node that owns the turn", async () => {
+    const conversations: Array<Array<{ role: string; content: string }>> = [];
+    const activities: AgentChatToolActivity[] = [
+      {
+        id: "outlook-tool",
+        type: "action",
+        label: "outlook.search_messages",
+        actionId: "outlook.search_messages",
+        ok: true,
+        input: { query: "sales" },
+        output: { count: 2 },
+      },
+      {
+        id: "devops-tool",
+        type: "action",
+        label: "azure_devops.query_work_items",
+        actionId: "azure_devops.query_work_items",
+        ok: true,
+        input: { state: "Active" },
+        output: { count: 4 },
+      },
+    ];
+    let responseIndex = 0;
+    const service = createService({
+      respondWithExtension: vi.fn(async (input: unknown) => {
+        conversations.push((input as { messages: Array<{ role: string; content: string }> }).messages);
+        return completedResponse([activities[responseIndex++]!]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Independent node chats" });
+    const withFirst = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Sales note",
+      content: "Sales context.",
+      position: { x: 100, y: 100 },
+    });
+    const withSecond = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "task",
+      title: "Delivery task",
+      content: "Delivery context.",
+      position: { x: 500, y: 100 },
+    });
+    const firstNode = withFirst.nodes[0]!;
+    const secondNode = withSecond.nodes.find((node) => node.title === "Delivery task")!;
+
+    await service.chat(workspace.id, firstNode.id, { content: "Search sales mail." });
+    const result = await service.chat(workspace.id, secondNode.id, { content: "Find active delivery tasks." });
+
+    expect(conversations[1]?.slice(1)).toEqual([{ role: "user", content: "Find active delivery tasks." }]);
+    expect(result.threads.find((thread) => thread.nodeId === firstNode.id)?.messages[1]?.toolActivity).toEqual([
+      activities[0],
+    ]);
+    expect(result.threads.find((thread) => thread.nodeId === secondNode.id)?.messages[1]?.toolActivity).toEqual([
+      activities[1],
+    ]);
+  });
+
   it("continues one node and its conversation in a new independent canvas", async () => {
     const service = createService({
       respondWithExtension: vi.fn(async () => completedResponse([])),
@@ -418,6 +485,105 @@ describe("SynapseService", () => {
       position: { x: 460, y: -120 },
     });
     expect(await service.list()).toHaveLength(2);
+  });
+
+  it("treats a copied connector-backed artifact as the existing connection instead of adding a provider", async () => {
+    let graphActivity: AgentChatToolActivity | undefined;
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        graphActivity = await extension.runTool("synapse_add_provider", { connectionId: "outlook-1" });
+        return completedResponse(graphActivity ? [graphActivity] : []);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const source = await service.create({ name: "Message follow-up" });
+    const seeded = await service.addNode(source.id, {
+      kind: "artifact",
+      artifactKind: "email",
+      title: "Project update",
+      content: "Current status",
+      sourceActionId: "outlook.get_message",
+      sourceConnectionId: "outlook-1",
+      sourceActivityId: "message-activity",
+      itemIdentity: "outlook-1:outlook:message:message-1",
+      position: { x: 100, y: 100 },
+    });
+    const copied = await service.continueNodeInNewWorkspace(source.id, seeded.nodes[0]!.id, {});
+
+    const result = await service.chat(copied.workspace.id, copied.resultNodeId, {
+      content: "Use Outlook to update this card.",
+    });
+
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({ id: copied.resultNodeId, sourceConnectionId: "outlook-1" });
+    expect(result.nodes.some((node) => node.kind === "provider")).toBe(false);
+    expect(graphActivity).toMatchObject({
+      ok: true,
+      output: { node: { id: copied.resultNodeId }, reused: true },
+    });
+  });
+
+  it("merges a refreshed curated result into its copied card and restores connector provenance", async () => {
+    const connectorActivity: AgentChatToolActivity = {
+      id: "message-refresh",
+      type: "action",
+      label: "outlook.get_message",
+      ok: true,
+      actionId: "outlook.get_message",
+      connectionId: "outlook-1",
+      input: { messageId: "message-1" },
+      output: {
+        message: {
+          id: "message-1",
+          subject: "Project update",
+          bodyPreview: "Refreshed current status",
+          webLink: "https://outlook.office.com/mail/message-1",
+        },
+      },
+    };
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const curated = await extension.runTool("synapse_add_artifacts", {
+          artifacts: [
+            {
+              artifactKind: "email",
+              title: "Project update",
+              content: "Refreshed current status",
+              externalUrl: "https://outlook.office.com/mail/message-1",
+            },
+          ],
+        });
+        return completedResponse([connectorActivity, ...(curated ? [curated] : [])]);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const source = await service.create({ name: "Message refresh" });
+    const seeded = await service.addNode(source.id, {
+      kind: "artifact",
+      artifactKind: "email",
+      title: "Project update",
+      content: "Old status",
+      sourceActionId: "outlook.get_message",
+      sourceConnectionId: "outlook-1",
+      sourceActivityId: "message-original",
+      itemIdentity: "outlook-1:outlook:message:message-1",
+      position: { x: 100, y: 100 },
+    });
+    const copied = await service.continueNodeInNewWorkspace(source.id, seeded.nodes[0]!.id, {});
+
+    const result = await service.chat(copied.workspace.id, copied.resultNodeId, { content: "Refresh this message." });
+
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({
+      id: copied.resultNodeId,
+      title: "Project update",
+      content: "Refreshed current status",
+      sourceActionId: "outlook.get_message",
+      sourceConnectionId: "outlook-1",
+      sourceActivityId: "message-refresh",
+      itemIdentity: "outlook-1:outlook:message:message-1",
+    });
+    expect(result.nodes.some((node) => node.kind === "provider")).toBe(false);
   });
 
   it("streams tool progress and preserves a readable assistant failure after an agent timeout", async () => {
