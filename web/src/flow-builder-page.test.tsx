@@ -201,7 +201,8 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain("flow-direction-track");
     expect(html).toContain("https://example.com/outlook.svg");
     expect(html).toContain("https://example.com/sharepoint.svg");
-    expect(html).toContain('aria-label="Choose source connector"');
+    expect(html).toContain("1 selected");
+    expect(html).toContain("Add source");
     expect(html).toContain('aria-label="Choose destination connector"');
   });
 
@@ -221,6 +222,35 @@ describe("FlowBuilderPage", () => {
     expect(destinationIndex).toBeLessThan(destinationActionIndex);
     expect(html).toContain("1/1 allowed");
     expect(html).toContain("0/1 allowed");
+  });
+
+  it("renders independent permission groups for multiple source connectors", () => {
+    const multiSourceFlow: FlowDefinition = {
+      ...flow,
+      sourceConnectionId: undefined,
+      sourceConnectionIds: ["outlook-1", "sharepoint-1"],
+      tools: [
+        { ...flow.tools[0]!, role: "source" },
+        {
+          actionId: "sharepoint.create_file",
+          connectionId: "sharepoint-1",
+          role: "source",
+          approval: "always_allow",
+        },
+      ],
+    };
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route
+        path="/flows/:flowId/edit"
+        element={<FlowBuilderPage data={{ ...editorData, flows: [multiSourceFlow] }} onRefresh={() => {}} />}
+      />,
+    );
+
+    expect(html).toContain("2 selected");
+    expect(html.match(/Source permissions/g)).toHaveLength(2);
+    expect(html).toContain("zeke@example.com");
+    expect(html).toContain("Projects");
   });
 
   it("shows the connector-wide default while preserving Flow overrides", () => {

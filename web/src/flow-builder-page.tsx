@@ -11,12 +11,13 @@ import type {
 } from "./model";
 import type { FormEvent, ReactNode } from "react";
 
-import { ArrowLeft, ArrowRight, BrainCircuit, Cable, Clock3, Workflow } from "lucide-react";
+import { ArrowLeft, ArrowRight, BrainCircuit, Cable, Clock3, Workflow, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { apiGet, apiPost, apiPut } from "./api";
 import { FlowConnectionPicker, flowConnectionDisplayName } from "./flow-connection-picker";
 import { FlowToolPermissionGroup } from "./flow-tool-permission-group";
+import { flowSourceConnectionIds } from "./model";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ interface FlowBuilderPageProps {
 
 const defaultFlowMaxSteps = 20;
 const maximumFlowMaxSteps = 50;
+const maximumFlowSourceConnections = 16;
 
 interface AgentChoice {
   id: string;
@@ -39,7 +41,7 @@ interface AgentChoice {
 interface FlowDraft {
   name: string;
   status: "active" | "paused";
-  sourceConnectionId: string;
+  sourceConnectionIds: string[];
   destinationConnectionId?: string;
   destinationSynapseId?: string;
   destinationSynapseName?: string;
@@ -95,7 +97,9 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   ];
   const editing = props.flow !== undefined;
   const [name, setName] = useState(props.flow?.name ?? "");
-  const [sourceId, setSourceId] = useState(props.flow?.sourceConnectionId ?? connections[0]?.id ?? "");
+  const [sourceIds, setSourceIds] = useState<string[]>(
+    props.flow ? flowSourceConnectionIds(props.flow) : connections[0]?.id ? [connections[0].id] : [],
+  );
   const [destinationId, setDestinationId] = useState(
     props.flow?.destinationConnectionId ?? connections[1]?.id ?? connections[0]?.id ?? "",
   );
@@ -137,8 +141,8 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   }, []);
 
   const choices = useMemo(
-    () => createToolChoices(props.data, sourceId, destinationKind === "connection" ? destinationId : undefined),
-    [props.data, sourceId, destinationId, destinationKind],
+    () => createToolChoices(props.data, sourceIds, destinationKind === "connection" ? destinationId : undefined),
+    [props.data, sourceIds, destinationId, destinationKind],
   );
   const visibleChoices = choices.filter((choice) => {
     const query = toolSearch.trim().toLowerCase();
@@ -155,9 +159,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
       ? [{ actionId: choice.actionId, connectionId: choice.connectionId, role: choice.role, approval }]
       : [];
   });
-  const sourceConnection = connections.find((connection) => connection.id === sourceId);
   const destinationConnection = connections.find((connection) => connection.id === destinationId);
-  const sourceProvider = props.data.providers.find((provider) => provider.service === sourceConnection?.service);
   const destinationProvider = props.data.providers.find(
     (provider) => provider.service === destinationConnection?.service,
   );
@@ -168,11 +170,11 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const existingTrigger = props.flow?.trigger;
   const sourceChangedWithConnectorTrigger =
     props.flow !== undefined &&
-    props.flow.sourceConnectionId !== sourceId &&
     existingTrigger !== undefined &&
     (existingTrigger.type === "event" ||
       existingTrigger.type === "new_email" ||
-      existingTrigger.type === "file_created");
+      existingTrigger.type === "file_created") &&
+    !sourceIds.includes(existingTrigger.connectionId);
   const trigger: FlowTrigger = sourceChangedWithConnectorTrigger
     ? { type: "manual" }
     : (props.flow?.trigger ?? { type: "manual" });
@@ -199,6 +201,19 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
     setSelectedTools((current) => ({ ...current, [key]: approval }));
   }
 
+  function addSource(connectionId: string): void {
+    if (!connectionId) return;
+    setSourceIds((current) =>
+      current.includes(connectionId) || current.length >= maximumFlowSourceConnections
+        ? current
+        : [...current, connectionId],
+    );
+  }
+
+  function removeSource(connectionId: string): void {
+    setSourceIds((current) => current.filter((id) => id !== connectionId));
+  }
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     setSaving(true);
@@ -206,7 +221,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
     const draft: FlowDraft = {
       name,
       status: props.flow?.status ?? "active",
-      sourceConnectionId: sourceId,
+      sourceConnectionIds: sourceIds,
       ...(destinationKind === "connection" ? { destinationConnectionId: destinationId } : {}),
       ...(destinationKind === "existing_synapse" ? { destinationSynapseId } : {}),
       ...(destinationKind === "new_synapse" ? { destinationSynapseName: destinationSynapseName.trim() } : {}),
@@ -248,7 +263,10 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
         <div className="flow-builder-heading">
           <div>
             <h2>{props.flow ? `Edit ${props.flow.name}` : "Create a Flow"}</h2>
-            <p>Choose a source and a connector or canvas destination, then expose only the tools this agent needs.</p>
+            <p>
+              Choose one or more sources and a connector or canvas destination, then expose only the tools this agent
+              needs.
+            </p>
           </div>
           <Badge>{grants.length} tools</Badge>
         </div>
@@ -273,14 +291,12 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
             />
           </Label>
           <div className="flow-composer">
-            <ConnectionNode
-              role="source"
-              value={sourceId}
-              connection={sourceConnection}
-              provider={sourceProvider}
+            <SourceNode
+              sourceIds={sourceIds}
               connections={connections}
               providers={props.data.providers}
-              onChange={setSourceId}
+              onAdd={addSource}
+              onRemove={removeSource}
             />
             <FlowDirection label="Read" />
             <section className="flow-instruction-node">
@@ -367,16 +383,23 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
             />
           </div>
           <div className="flow-permission-groups">
-            <FlowToolPermissionGroup
-              role="source"
-              connection={sourceConnection}
-              provider={sourceProvider}
-              choices={sourceChoices}
-              visibleChoices={visibleSourceChoices}
-              selectedTools={selectedTools}
-              onToggle={toggleTool}
-              onApprovalChange={changeApproval}
-            />
+            {sourceIds.map((sourceId) => {
+              const connection = connections.find((candidate) => candidate.id === sourceId);
+              const provider = props.data.providers.find((candidate) => candidate.service === connection?.service);
+              return (
+                <FlowToolPermissionGroup
+                  role="source"
+                  connection={connection}
+                  provider={provider}
+                  choices={sourceChoices.filter((choice) => choice.connectionId === sourceId)}
+                  visibleChoices={visibleSourceChoices.filter((choice) => choice.connectionId === sourceId)}
+                  selectedTools={selectedTools}
+                  onToggle={toggleTool}
+                  onApprovalChange={changeApproval}
+                  key={sourceId}
+                />
+              );
+            })}
             {destinationKind === "connection" ? (
               <FlowToolPermissionGroup
                 role="destination"
@@ -405,7 +428,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
                 saving ||
                 connections.length < 1 ||
                 !agentConnectionId ||
-                !sourceId ||
+                sourceIds.length === 0 ||
                 !destinationReady ||
                 grants.length === 0
               }
@@ -422,41 +445,77 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   );
 }
 
-function ConnectionNode(props: {
-  role: "source" | "destination";
-  value: string;
-  connection: (ConnectionRecord & { id: string }) | undefined;
-  provider: ProviderDefinition | undefined;
+function SourceNode(props: {
+  sourceIds: string[];
   connections: Array<ConnectionRecord & { id: string }>;
   providers: ProviderDefinition[];
-  onChange(value: string): void;
+  onAdd(connectionId: string): void;
+  onRemove(connectionId: string): void;
 }): ReactNode {
-  const title = props.role === "source" ? "Source connector" : "Destination connector";
+  const selected = props.sourceIds.flatMap((id) => {
+    const connection = props.connections.find((candidate) => candidate.id === id);
+    return connection
+      ? [{ connection, provider: props.providers.find((item) => item.service === connection.service) }]
+      : [];
+  });
+  const available = props.connections.filter((connection) => !props.sourceIds.includes(connection.id));
+  const sourceLimitReached = props.sourceIds.length >= maximumFlowSourceConnections;
   return (
-    <section className={`flow-connector-node ${props.role}`}>
+    <section className="flow-connector-node source multi-source">
       <div className="flow-connector-heading">
-        {props.provider ? (
-          <ProviderIcon provider={props.provider} large />
-        ) : (
-          <span className="flow-connector-placeholder" aria-hidden="true">
-            <Cable size={20} />
-          </span>
-        )}
+        <span className="flow-connector-placeholder" aria-hidden="true">
+          <Cable size={20} />
+        </span>
         <div>
-          <span>{title}</span>
-          <strong>{props.connection ? flowConnectionDisplayName(props.connection) : "Choose a connection"}</strong>
-          <small>{props.provider?.displayName ?? "Connected application"}</small>
+          <span>Source connectors</span>
+          <strong>{selected.length > 0 ? `${selected.length} selected` : "Choose at least one source"}</strong>
+          <small>The agent can read through every selected connection.</small>
         </div>
       </div>
-      <div className="field">
-        <span>Connection</span>
-        <FlowConnectionPicker
-          role={props.role}
-          value={props.value}
-          connections={props.connections}
-          providers={props.providers}
-          onChange={props.onChange}
-        />
+      <div className="flow-source-list">
+        {selected.map(({ connection, provider }) => (
+          <div className="flow-source-item" key={connection.id}>
+            {provider ? <ProviderIcon provider={provider} /> : <Cable size={16} />}
+            <span>
+              <strong>{flowConnectionDisplayName(connection)}</strong>
+              <small>{provider?.displayName ?? connection.service}</small>
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label={`Remove source ${flowConnectionDisplayName(connection)}`}
+              onClick={() => props.onRemove(connection.id)}
+            >
+              <X size={13} />
+            </Button>
+          </div>
+        ))}
+        <Label className="field flow-source-add">
+          <span>Add source</span>
+          <select
+            className="flow-native-select flow-connection-select"
+            value=""
+            disabled={available.length === 0 || sourceLimitReached}
+            onChange={(event) => props.onAdd(event.target.value)}
+          >
+            <option value="">
+              {sourceLimitReached
+                ? `${maximumFlowSourceConnections} source limit reached`
+                : available.length > 0
+                  ? "Choose another connection"
+                  : "All connections selected"}
+            </option>
+            {available.map((connection) => {
+              const provider = props.providers.find((item) => item.service === connection.service);
+              return (
+                <option key={connection.id} value={connection.id}>
+                  {provider?.displayName ?? connection.service} · {flowConnectionDisplayName(connection)}
+                </option>
+              );
+            })}
+          </select>
+        </Label>
       </div>
     </section>
   );
@@ -606,11 +665,11 @@ function AgentSelect(props: { value: string; choices: AgentChoice[]; onChange(ch
 
 function createToolChoices(
   data: AppData,
-  sourceId: string,
+  sourceIds: string[],
   destinationId: string | undefined,
 ): FlowToolPermissionChoice[] {
   return [
-    ...choicesForConnection(data, sourceId, "source"),
+    ...sourceIds.flatMap((sourceId) => choicesForConnection(data, sourceId, "source")),
     ...(destinationId ? choicesForConnection(data, destinationId, "destination") : []),
   ];
 }
@@ -646,5 +705,5 @@ export function flowToolSelectionKey(role: "source" | "destination", connectionI
 }
 
 function flowToolRole(flow: FlowDefinition, tool: FlowToolGrant): "source" | "destination" {
-  return tool.role ?? (tool.connectionId === flow.sourceConnectionId ? "source" : "destination");
+  return tool.role ?? (flowSourceConnectionIds(flow).includes(tool.connectionId) ? "source" : "destination");
 }

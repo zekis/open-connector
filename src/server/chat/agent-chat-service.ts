@@ -781,6 +781,7 @@ Rules:
 Flow rules:
 - OOMOL Connect itself owns Flow scheduling; never search connected applications for a scheduler
 - list existing Flows before creating persistent automation so you can avoid accidental duplicates
+- include every connector the Flow reads from in sourceConnectionIds; multi-source Flows may grant source tools from any listed connection
 - search for each connector action before granting it to a Flow unless its exact action id and schema already appear in this turn's tool history
 - use schedule triggers with a five-field cron expression and an IANA time zone for recurring Flows
 - set a Flow confirmation field true only when the latest user message explicitly authorizes that exact persistent change; a direct request to create and run a described recurring Flow counts as confirmation

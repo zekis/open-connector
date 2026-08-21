@@ -12,6 +12,7 @@ import { AlarmClock, Braces, CalendarClock, Copy, Pencil, Plus, Radio, Trash2, W
 import { useState } from "react";
 import { apiDelete, apiPut } from "./api";
 import { flowConnectionDisplayName } from "./flow-connection-picker";
+import { flowSourceConnectionIds } from "./model";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +40,7 @@ interface TriggerEditorState {
   mode: TriggerMode;
   cron: string;
   timeZone: string;
+  sourceConnectionId: string;
   eventId: string;
   pollIntervalSeconds: number;
 }
@@ -56,7 +58,17 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
   const [error, setError] = useState<string | null>(null);
 
   const targetFlow = flows.find((flow) => flow.id === editor?.flowId);
-  const sourceConnection = findConnection(props.data, targetFlow?.sourceConnectionId);
+  const sourceChoices = targetFlow
+    ? flowSourceConnectionIds(targetFlow).flatMap((id) => {
+        const connection = findConnection(props.data, id);
+        return connection
+          ? [{ connection, provider: props.data.providers.find((provider) => provider.service === connection.service) }]
+          : [];
+      })
+    : [];
+  const sourceConnection = sourceChoices.find(
+    ({ connection }) => connection.id === editor?.sourceConnectionId,
+  )?.connection;
   const sourceProvider = props.data.providers.find((provider) => provider.service === sourceConnection?.service);
   const providerEvents = executableProviderEvents(sourceProvider);
   const selectedEventId =
@@ -78,6 +90,13 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
     if (flow) {
       setEditor(createEditorState(flow, props.data.providers, props.data.connections, editor?.intent ?? "create"));
     }
+  }
+
+  function selectSource(sourceConnectionId: string): void {
+    if (!editor) return;
+    const choice = sourceChoices.find(({ connection }) => connection.id === sourceConnectionId);
+    const eventId = executableProviderEvents(choice?.provider)[0]?.id ?? "";
+    setEditor({ ...editor, sourceConnectionId, eventId });
   }
 
   async function save(event: FormEvent): Promise<void> {
@@ -124,7 +143,8 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
         <div>
           <h2>Triggers</h2>
           <p>
-            Start an existing Flow on a schedule, through the API, or from an event declared by its source connector.
+            Start an existing Flow on a schedule, through the API, or from an event declared by one of its source
+            connectors.
           </p>
         </div>
         <Button
@@ -153,12 +173,14 @@ export function TriggersPage(props: TriggersPageProps): ReactNode {
               targetFlow={targetFlow}
               sourceConnection={sourceConnection}
               sourceProvider={sourceProvider}
+              sourceChoices={sourceChoices}
               providerEvents={providerEvents}
               selectedEventId={selectedEventId}
               saving={saving}
               error={error}
               onChange={setEditor}
               onFlowChange={selectFlow}
+              onSourceChange={selectSource}
               onSubmit={save}
               onCancel={() => setEditor(null)}
             />
@@ -195,12 +217,17 @@ function TriggerEditor(props: {
   targetFlow: FlowDefinition;
   sourceConnection: (ConnectionRecord & { id: string }) | undefined;
   sourceProvider: ProviderDefinition | undefined;
+  sourceChoices: Array<{
+    connection: ConnectionRecord & { id: string };
+    provider: ProviderDefinition | undefined;
+  }>;
   providerEvents: ProviderEventDefinition[];
   selectedEventId: string;
   saving: boolean;
   error: string | null;
   onChange(state: TriggerEditorState): void;
   onFlowChange(flowId: string): void;
+  onSourceChange(connectionId: string): void;
   onSubmit(event: FormEvent): Promise<void>;
   onCancel(): void;
 }): ReactNode {
@@ -232,7 +259,9 @@ function TriggerEditor(props: {
             <span>1</span>
             <div>
               <strong>Choose the Flow</strong>
-              <small>The trigger watches the Flow’s source connection and starts its existing instructions.</small>
+              <small>
+                An event trigger watches one selected source; schedules and API calls run the complete Flow.
+              </small>
             </div>
           </div>
           <div className="trigger-context-grid">
@@ -262,16 +291,19 @@ function TriggerEditor(props: {
               )}
             </div>
             <div className="field">
-              <span>Source connector</span>
-              <div className="trigger-source-summary">
-                {props.sourceProvider ? <ProviderIcon provider={props.sourceProvider} /> : <Radio size={18} />}
-                <div>
-                  <strong>{props.sourceProvider?.displayName ?? "Unavailable"}</strong>
-                  <small>
-                    {props.sourceConnection ? flowConnectionDisplayName(props.sourceConnection) : "Missing connection"}
-                  </small>
-                </div>
-              </div>
+              <span>Event source connector</span>
+              <Select value={props.state.sourceConnectionId} onValueChange={props.onSourceChange}>
+                <SelectTrigger className="trigger-select" aria-label="Event source connector">
+                  <SelectValue placeholder="Choose a source" />
+                </SelectTrigger>
+                <SelectContent className="trigger-select-content" position="popper" align="start" sideOffset={6}>
+                  {props.sourceChoices.map(({ connection, provider }) => (
+                    <SelectItem key={connection.id} value={connection.id}>
+                      {provider?.displayName ?? connection.service} · {flowConnectionDisplayName(connection)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </section>
@@ -425,7 +457,13 @@ function TriggerEditor(props: {
         <Button variant="outline" type="button" disabled={props.saving} onClick={props.onCancel}>
           Cancel
         </Button>
-        <Button type="submit" disabled={props.saving || (props.state.mode === "event" && !props.selectedEventId)}>
+        <Button
+          type="submit"
+          disabled={
+            props.saving ||
+            (props.state.mode === "event" && (!props.state.sourceConnectionId || !props.selectedEventId))
+          }
+        >
           {props.saving ? "Saving…" : props.state.intent === "create" ? "Create trigger" : "Save changes"}
         </Button>
       </DialogFooter>
@@ -465,7 +503,13 @@ function TriggerCard(props: {
   onEdit(): void;
   onDelete(): void;
 }): ReactNode {
-  const connection = findConnection(props.data, props.flow.sourceConnectionId);
+  const triggerConnectionId =
+    props.flow.trigger.type === "event" ||
+    props.flow.trigger.type === "new_email" ||
+    props.flow.trigger.type === "file_created"
+      ? props.flow.trigger.connectionId
+      : flowSourceConnectionIds(props.flow)[0];
+  const connection = findConnection(props.data, triggerConnectionId);
   const provider = props.data.providers.find((candidate) => candidate.service === connection?.service);
   const eventId = props.flow.trigger.type === "event" ? props.flow.trigger.eventId : undefined;
   const event = eventId === undefined ? undefined : provider?.events?.find((candidate) => candidate.id === eventId);
@@ -537,7 +581,12 @@ function createEditorState(
   connections: ConnectionRecord[],
   intent: TriggerEditorState["intent"],
 ): TriggerEditorState {
-  const source = connections.find((connection) => connection.id === flow.sourceConnectionId);
+  const triggerSourceId =
+    flow.trigger.type === "event" || flow.trigger.type === "new_email" || flow.trigger.type === "file_created"
+      ? flow.trigger.connectionId
+      : undefined;
+  const sourceConnectionId = triggerSourceId ?? flowSourceConnectionIds(flow)[0] ?? "";
+  const source = connections.find((connection) => connection.id === sourceConnectionId);
   const provider = providers.find((candidate) => candidate.service === source?.service);
   const providerEvents = executableProviderEvents(provider);
   const trigger = flow.trigger;
@@ -551,6 +600,7 @@ function createEditorState(
   return {
     intent,
     flowId: flow.id,
+    sourceConnectionId,
     mode:
       trigger.type === "api" || trigger.type === "schedule" || trigger.type === "event"
         ? trigger.type
@@ -579,7 +629,7 @@ function buildTrigger(state: TriggerEditorState, flow: FlowDefinition, eventId: 
   }
   return {
     type: "event",
-    connectionId: flow.sourceConnectionId,
+    connectionId: state.sourceConnectionId,
     eventId,
     pollIntervalSeconds: state.pollIntervalSeconds,
   };

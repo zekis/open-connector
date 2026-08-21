@@ -11,29 +11,20 @@ import { describe, expect, it } from "vitest";
 import {
   fitCanvasView,
   appendSynapseUserMessage,
-  isSynapseCardTarget,
   isSynapseNodeControlTarget,
   mergeSynapseProgress,
   panNodeIntoView,
   SynapseApprovalNodeCard,
   SynapseNodeCard,
+  SynapseNodeDetail,
   synapseNodeSpeech,
   synapseApprovalItems,
+  synapseConnectedNodeGroups,
   zoomCanvasView,
 } from "./synapse-page";
 
 describe("Synapse canvas pointer routing", () => {
-  it("keeps wheel input over a card out of canvas zoom", () => {
-    const cardContent = {
-      closest: (selector: string) => (selector === ".synapse-node" ? { id: "card" } : null),
-    };
-    const canvasBackground = { closest: () => null };
-
-    expect(isSynapseCardTarget(cardContent)).toBe(true);
-    expect(isSynapseCardTarget(canvasBackground)).toBe(false);
-  });
-
-  it("allows node content to drag while preserving independent controls", () => {
+  it("keeps node content independent from the dedicated drag control", () => {
     const markdownContent = {
       closest: (selector: string) => (selector.includes(".synapse-node-markdown") ? { id: "markdown" } : null),
     };
@@ -43,10 +34,14 @@ describe("Synapse canvas pointer routing", () => {
     const resizeHandle = {
       closest: (selector: string) => (selector.includes(".synapse-node-resize") ? { id: "resize" } : null),
     };
+    const dragHandle = {
+      closest: (selector: string) => (selector.includes("button") ? { id: "drag" } : null),
+    };
 
     expect(isSynapseNodeControlTarget(markdownContent)).toBe(false);
     expect(isSynapseNodeControlTarget(button)).toBe(true);
     expect(isSynapseNodeControlTarget(resizeHandle)).toBe(true);
+    expect(isSynapseNodeControlTarget(dragHandle)).toBe(true);
   });
 });
 
@@ -154,6 +149,7 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onOpen={() => {}}
         onRefresh={() => {}}
         onToggleSpeech={() => {}}
         onCheckedChange={() => {}}
@@ -166,6 +162,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("translate(100px, 120px)");
     expect(html).toContain("Read Outlook aloud");
     expect(html).toContain("Select Outlook");
+    expect(html).toContain("Drag Outlook");
     expect(html).toContain("multi-selected");
     expect(synapseNodeSpeech(providerNode)).toContain("Find important messages for this branch.");
   });
@@ -191,6 +188,7 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onOpen={() => {}}
         onRefresh={() => {}}
         onToggleSpeech={() => {}}
         onCheckedChange={() => {}}
@@ -210,6 +208,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Sales brief.pdf");
     expect(html).toContain("Stop reading New mining opportunity");
     expect(html).toContain("Ask Claude to refresh New mining opportunity");
+    expect(html).toContain("Drag New mining opportunity");
     expect(html).not.toContain("<iframe");
   });
 
@@ -410,6 +409,79 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Approve all");
     expect(html.match(/role="tab"/g)).toHaveLength(2);
     expect(html).toContain('aria-label="Next approval"');
+  });
+});
+
+describe("SynapseNodeDetail", () => {
+  const downstreamNode: SynapseArtifactNode = {
+    ...artifactNode,
+    id: "artifact-2",
+    artifactKind: "note",
+    title: "Opportunity decision",
+    content: "Proceed after the sales brief is reviewed.",
+    position: { x: 900, y: 220 },
+  };
+  const workspace: SynapseWorkspace = {
+    id: "synapse-1",
+    name: "Sales research",
+    nodes: [providerNode, artifactNode, downstreamNode],
+    edges: [
+      {
+        id: "edge-1",
+        sourceNodeId: providerNode.id,
+        targetNodeId: artifactNode.id,
+        createdAt: "2026-08-15T01:01:00.000Z",
+      },
+      {
+        id: "edge-2",
+        sourceNodeId: artifactNode.id,
+        targetNodeId: downstreamNode.id,
+        createdAt: "2026-08-15T01:02:00.000Z",
+      },
+      {
+        id: "edge-2-duplicate",
+        sourceNodeId: artifactNode.id,
+        targetNodeId: downstreamNode.id,
+        createdAt: "2026-08-15T01:03:00.000Z",
+      },
+    ],
+    threads: [],
+    createdAt: "2026-08-15T01:00:00.000Z",
+    updatedAt: "2026-08-15T01:03:00.000Z",
+  };
+
+  it("groups every directly attached node by edge direction without duplicates", () => {
+    expect(synapseConnectedNodeGroups(workspace, artifactNode.id)).toEqual({
+      incoming: [providerNode],
+      outgoing: [downstreamNode],
+    });
+  });
+
+  it("renders the expanded artifact beside directional navigation handles", () => {
+    const html = renderToStaticMarkup(
+      <SynapseNodeDetail
+        workspace={workspace}
+        node={artifactNode}
+        providersByService={new Map([[provider.service, provider]])}
+        speechAvailable
+        speaking={false}
+        speechConnecting={false}
+        refreshing={false}
+        refreshDisabled={false}
+        onClose={() => {}}
+        onNavigate={() => {}}
+        onRefresh={() => {}}
+        onToggleSpeech={() => {}}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Expanded node New mining opportunity"');
+    expect(html).toContain('aria-label="Return to Synapse canvas"');
+    expect(html).toContain('aria-label="Incoming connected nodes"');
+    expect(html).toContain('aria-label="Outgoing connected nodes"');
+    expect(html).toContain('aria-label="Open connected node Outlook"');
+    expect(html).toContain('aria-label="Open connected node Opportunity decision"');
+    expect(html).toContain("<strong>Priority:</strong>");
   });
 });
 

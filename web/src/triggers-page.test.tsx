@@ -103,4 +103,43 @@ describe("TriggersPage", () => {
 
     expect(html).toContain("No automatic triggers");
   });
+
+  it("shows the selected event source for a multi-source Flow", () => {
+    const multiSourceFlow: FlowDefinition = {
+      ...flow,
+      sourceConnectionId: undefined,
+      sourceConnectionIds: ["outlook-1", "outlook-2"],
+      trigger: {
+        type: "event",
+        connectionId: "outlook-2",
+        eventId: "outlook.new_sent_email",
+        pollIntervalSeconds: 60,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <TriggersPage
+          data={{
+            ...data,
+            flows: [multiSourceFlow],
+            connections: [
+              ...data.connections,
+              {
+                id: "outlook-2",
+                service: "outlook",
+                connectionName: "operations",
+                authType: "oauth2",
+                profile: { displayName: "operations@example.com" },
+                metadata: {},
+              },
+            ],
+          }}
+          onRefresh={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("operations@example.com");
+    expect(html).not.toContain("zeke@example.com");
+  });
 });

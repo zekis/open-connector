@@ -3329,7 +3329,7 @@ describe("ConnectServer", () => {
     const input = {
       name: "Archive project messages",
       status: "active",
-      sourceConnectionId: "source-connection",
+      sourceConnectionIds: ["source-connection", "secondary-source-connection"],
       destinationConnectionId: "destination-connection",
       instructions: "Read new messages from the source and archive them in the destination.",
       agent: {
@@ -3372,6 +3372,21 @@ describe("ConnectServer", () => {
     expect(created.id).toBeTruthy();
     expect(created.revision).toBeTruthy();
 
+    const legacyCreateResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Legacy single-source request",
+        sourceConnectionIds: undefined,
+        sourceConnectionId: "source-connection",
+      }),
+    });
+    expect(legacyCreateResponse.status).toBe(200);
+    await expect(legacyCreateResponse.json()).resolves.toMatchObject({
+      sourceConnectionIds: ["source-connection"],
+    });
+
     const updateInput = {
       ...input,
       name: "Archive priority project messages",
@@ -3408,7 +3423,9 @@ describe("ConnectServer", () => {
 
     const listResponse = await app.request("/api/flows", { headers: { authorization } });
     expect(listResponse.status).toBe(200);
-    await expect(listResponse.json()).resolves.toMatchObject([{ id: created.id, revision: updated.revision }]);
+    await expect(listResponse.json()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: created.id, revision: updated.revision })]),
+    );
 
     const invalidUpdate = await app.request(`/api/flows/${created.id}`, {
       method: "PUT",
@@ -3440,7 +3457,7 @@ describe("ConnectServer", () => {
       body: JSON.stringify({
         ...input,
         name: "Review and update one account",
-        destinationConnectionId: input.sourceConnectionId,
+        destinationConnectionId: input.sourceConnectionIds[0],
         tools: [
           { ...input.tools[0], role: "source", approval: "always_allow" },
           { ...input.tools[0], role: "destination", approval: "require_approval" },
@@ -3449,13 +3466,83 @@ describe("ConnectServer", () => {
     });
     expect(sameConnectionResponse.status).toBe(200);
     await expect(sameConnectionResponse.json()).resolves.toMatchObject({
-      sourceConnectionId: "source-connection",
+      sourceConnectionIds: ["source-connection", "secondary-source-connection"],
       destinationConnectionId: "source-connection",
       tools: [
         { role: "source", approval: "always_allow" },
         { role: "destination", approval: "require_approval" },
       ],
     });
+
+    const multiSourceResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Combine four source accounts",
+        sourceConnectionIds: [
+          "source-connection",
+          "secondary-source-connection",
+          "third-source-connection",
+          "fourth-source-connection",
+        ],
+        tools: [
+          ...input.tools,
+          {
+            actionId: "example.echo",
+            connectionId: "secondary-source-connection",
+            role: "source",
+            approval: "inherit",
+          },
+          {
+            actionId: "example.echo",
+            connectionId: "third-source-connection",
+            role: "source",
+            approval: "inherit",
+          },
+          {
+            actionId: "example.echo",
+            connectionId: "fourth-source-connection",
+            role: "source",
+            approval: "inherit",
+          },
+        ],
+      }),
+    });
+    expect(multiSourceResponse.status).toBe(200);
+    await expect(multiSourceResponse.json()).resolves.toMatchObject({
+      sourceConnectionIds: [
+        "source-connection",
+        "secondary-source-connection",
+        "third-source-connection",
+        "fourth-source-connection",
+      ],
+      tools: [
+        { connectionId: "source-connection", role: "source" },
+        { connectionId: "secondary-source-connection", role: "source" },
+        { connectionId: "third-source-connection", role: "source" },
+        { connectionId: "fourth-source-connection", role: "source" },
+      ],
+    });
+
+    const unlistedSourceResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        sourceConnectionIds: ["source-connection"],
+        tools: [
+          {
+            actionId: "example.echo",
+            connectionId: "secondary-source-connection",
+            role: "source",
+            approval: "inherit",
+          },
+        ],
+      }),
+    });
+    expect(unlistedSourceResponse.status).toBe(400);
+    await expect(unlistedSourceResponse.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
 
     const newCanvasResponse = await app.request("/api/flows", {
       method: "POST",
@@ -3506,7 +3593,7 @@ describe("ConnectServer", () => {
       headers: { authorization, "content-type": "application/json" },
       body: JSON.stringify({
         type: "event",
-        connectionId: "source-connection",
+        connectionId: "secondary-source-connection",
         eventId: "example.item_created",
         pollIntervalSeconds: 60,
       }),
@@ -3514,7 +3601,7 @@ describe("ConnectServer", () => {
     expect(eventResponse.status).toBe(200);
     await expect(eventResponse.json()).resolves.toMatchObject({
       id: created.id,
-      trigger: { type: "event", eventId: "example.item_created" },
+      trigger: { type: "event", connectionId: "secondary-source-connection", eventId: "example.item_created" },
     });
 
     const removeTriggerResponse = await app.request(`/api/flow-triggers/${created.id}`, {
@@ -3714,6 +3801,9 @@ function createTestFlowService(): FlowService {
   );
   const connections: ConnectionSummary[] = [
     createFlowConnection("source-connection", "source"),
+    createFlowConnection("secondary-source-connection", "secondary source"),
+    createFlowConnection("third-source-connection", "third source"),
+    createFlowConnection("fourth-source-connection", "fourth source"),
     createFlowConnection("destination-connection", "destination"),
   ];
   return new FlowService({

@@ -18,7 +18,12 @@ import type {
 import { defaultAgentModel } from "../agents/agent-settings-service.ts";
 import { validateCronExpression, validateTimeZone } from "./cron-schedule.ts";
 import { createFlowPollPlan, supportsConnectionFlowTrigger } from "./flow-trigger-adapters.ts";
-import { defaultFlowMaxSteps, maximumFlowMaxSteps } from "./flow-types.ts";
+import {
+  defaultFlowMaxSteps,
+  flowSourceConnectionIds,
+  maximumFlowMaxSteps,
+  maximumFlowSourceConnections,
+} from "./flow-types.ts";
 
 const defaultReasoningEffort: FlowReasoningEffort = "medium";
 
@@ -61,6 +66,7 @@ export class FlowService {
     const flow: FlowDefinition = {
       ...current,
       ...normalized,
+      sourceConnectionId: undefined,
       destinationConnectionId: normalized.destinationConnectionId,
       destinationSynapseId: normalized.destinationSynapseId,
       revision: crypto.randomUUID(),
@@ -112,8 +118,8 @@ export class FlowService {
   async updateTrigger(id: string, input: unknown): Promise<FlowDefinition> {
     const current = await this.getRequired(id);
     const connections = await this.connectionMap();
-    const source = requiredConnection(connections, current.sourceConnectionId, "sourceConnectionId");
-    const trigger = this.normalizeTrigger(input, source);
+    const sources = requiredConnections(connections, flowSourceConnectionIds(current), "sourceConnectionIds");
+    const trigger = this.normalizeTrigger(input, sources);
     const flow: FlowDefinition = {
       ...current,
       trigger,
@@ -134,7 +140,7 @@ export class FlowService {
     const value = requiredObject(input, "Flow request body");
     const name = requiredText(value.name, "name", 120);
     const instructions = requiredText(value.instructions, "instructions", 20_000);
-    const sourceConnectionId = requiredText(value.sourceConnectionId, "sourceConnectionId", 200);
+    const sourceConnectionIds = readSourceConnectionIds(value);
     const destinationConnectionId = optionalText(value.destinationConnectionId, "destinationConnectionId", 200);
     const requestedSynapseId = optionalText(value.destinationSynapseId, "destinationSynapseId", 200);
     const destinationSynapseName = optionalText(value.destinationSynapseName, "destinationSynapseName", 120);
@@ -145,7 +151,7 @@ export class FlowService {
       );
     }
     const connections = await this.connectionMap();
-    const source = requiredConnection(connections, sourceConnectionId, "sourceConnectionId");
+    const sources = requiredConnections(connections, sourceConnectionIds, "sourceConnectionIds");
     const destination = destinationConnectionId
       ? requiredConnection(connections, destinationConnectionId, "destinationConnectionId")
       : undefined;
@@ -157,13 +163,13 @@ export class FlowService {
     }
     const agentModel = (await this.options.agentSettings?.get(agentProvider))?.model ?? defaultAgentModel();
 
-    const tools = this.normalizeTools(value.tools, connections, source, destination);
-    const trigger = this.normalizeTrigger(value.trigger, source);
+    const tools = this.normalizeTools(value.tools, connections, sources, destination);
+    const trigger = this.normalizeTrigger(value.trigger, sources);
     const destinationSynapseId = await this.resolveDestinationSynapse(requestedSynapseId, destinationSynapseName);
     return {
       name,
       status: readStatus(value.status),
-      sourceConnectionId,
+      sourceConnectionIds,
       ...(destinationConnectionId ? { destinationConnectionId } : {}),
       ...(destinationSynapseId ? { destinationSynapseId } : {}),
       instructions,
@@ -179,7 +185,7 @@ export class FlowService {
     };
   }
 
-  private normalizeTrigger(input: unknown, source: ConnectionSummary): FlowTrigger {
+  private normalizeTrigger(input: unknown, sources: Map<string, ConnectionSummary>): FlowTrigger {
     if (input === undefined) {
       return { type: "manual" };
     }
@@ -200,9 +206,8 @@ export class FlowService {
     }
     if (value.type === "event") {
       const connectionId = requiredText(value.connectionId, "trigger.connectionId", 200);
-      if (connectionId !== source.id) {
-        throw new FlowError("invalid_flow", "Provider-event triggers must use the Flow source connection.");
-      }
+      const source = sources.get(connectionId);
+      if (!source) throw new FlowError("invalid_flow", "Provider-event triggers must use a Flow source connection.");
       const eventId = requiredText(value.eventId, "trigger.eventId", 200);
       const pollIntervalSeconds = readPollInterval(value.pollIntervalSeconds);
       const trigger: FlowTrigger = { type: "event", connectionId, eventId, pollIntervalSeconds };
@@ -221,9 +226,8 @@ export class FlowService {
     }
     if (value.type === "new_email" || value.type === "file_created") {
       const connectionId = requiredText(value.connectionId, "trigger.connectionId", 200);
-      if (connectionId !== source.id) {
-        throw new FlowError("invalid_flow", "Connection-event triggers must use the Flow source connection.");
-      }
+      const source = sources.get(connectionId);
+      if (!source) throw new FlowError("invalid_flow", "Connection-event triggers must use a Flow source connection.");
       const pollIntervalSeconds = readPollInterval(value.pollIntervalSeconds);
       const trigger: FlowTrigger =
         value.type === "new_email"
@@ -258,7 +262,7 @@ export class FlowService {
   private normalizeTools(
     input: unknown,
     connections: Map<string, ConnectionSummary>,
-    source: ConnectionSummary,
+    sources: Map<string, ConnectionSummary>,
     destination: ConnectionSummary | undefined,
   ): FlowToolGrant[] {
     if (!Array.isArray(input) || input.length === 0) {
@@ -273,7 +277,7 @@ export class FlowService {
       const value = requiredObject(item, `tools[${index}]`);
       const actionId = requiredText(value.actionId, `tools[${index}].actionId`, 200);
       const connectionId = requiredText(value.connectionId, `tools[${index}].connectionId`, 200);
-      const role = readToolRole(value.role, connectionId, source, destination, index);
+      const role = readToolRole(value.role, connectionId, sources, destination, index);
       const approval = readApprovalMode(value.approval, index);
       const action = this.options.catalog.actionsById.get(actionId);
       if (!action) {
@@ -285,9 +289,14 @@ export class FlowService {
       if (action.inputSchema.type !== "object") {
         throw new FlowError("invalid_flow", `Action does not expose an object input schema: ${actionId}.`);
       }
-      const endpoint = role === "source" ? source : destination;
+      const endpoint = role === "source" ? sources.get(connectionId) : destination;
       if (!endpoint) {
-        throw new FlowError("invalid_flow", "Synapse destination Flows can grant source connector tools only.");
+        throw new FlowError(
+          "invalid_flow",
+          role === "source"
+            ? `Tool ${actionId} does not use any Flow source connection.`
+            : "Synapse destination Flows can grant source connector tools only.",
+        );
       }
       if (connectionId !== endpoint.id) {
         throw new FlowError("invalid_flow", `Tool ${actionId} does not use the Flow ${role} connection.`);
@@ -369,6 +378,37 @@ function requiredConnection(connections: Map<string, ConnectionSummary>, id: str
   return connection;
 }
 
+function requiredConnections(
+  connections: Map<string, ConnectionSummary>,
+  ids: string[],
+  field: string,
+): Map<string, ConnectionSummary> {
+  return new Map(ids.map((id, index) => [id, requiredConnection(connections, id, `${field}[${index}]`)]));
+}
+
+function readSourceConnectionIds(value: Record<string, unknown>): string[] {
+  if (value.sourceConnectionIds !== undefined && value.sourceConnectionId !== undefined) {
+    throw new FlowError("invalid_flow", "Set sourceConnectionIds without the legacy sourceConnectionId field.");
+  }
+  if (value.sourceConnectionIds === undefined) {
+    return [requiredText(value.sourceConnectionId, "sourceConnectionId", 200)];
+  }
+  if (!Array.isArray(value.sourceConnectionIds) || value.sourceConnectionIds.length === 0) {
+    throw new FlowError("invalid_flow", "sourceConnectionIds must contain at least one connection.");
+  }
+  if (value.sourceConnectionIds.length > maximumFlowSourceConnections) {
+    throw new FlowError(
+      "invalid_flow",
+      `sourceConnectionIds must not contain more than ${maximumFlowSourceConnections} connections.`,
+    );
+  }
+  const ids = value.sourceConnectionIds.map((id, index) => requiredText(id, `sourceConnectionIds[${index}]`, 200));
+  if (new Set(ids).size !== ids.length) {
+    throw new FlowError("invalid_flow", "sourceConnectionIds must not contain duplicate connections.");
+  }
+  return ids;
+}
+
 function readStatus(value: unknown): FlowStatus {
   if (value === undefined || value === "active") {
     return "active";
@@ -389,7 +429,7 @@ function readApprovalMode(value: unknown, index: number): FlowApprovalSetting {
 function readToolRole(
   value: unknown,
   connectionId: string,
-  source: ConnectionSummary,
+  sources: Map<string, ConnectionSummary>,
   destination: ConnectionSummary | undefined,
   index: number,
 ): FlowConnectionRole {
@@ -400,16 +440,16 @@ function readToolRole(
     throw new FlowError("invalid_flow", `tools[${index}].role must be source or destination.`);
   }
   if (!destination) {
-    if (connectionId === source.id) return "source";
-    throw new FlowError("invalid_flow", `tools[${index}] must use the source connection for a Synapse destination.`);
+    if (sources.has(connectionId)) return "source";
+    throw new FlowError("invalid_flow", `tools[${index}] must use a source connection for a Synapse destination.`);
   }
-  if (source.id === destination.id) {
+  if (sources.has(destination.id) && connectionId === destination.id) {
     throw new FlowError(
       "invalid_flow",
-      `tools[${index}].role is required when the source and destination use the same connection.`,
+      `tools[${index}].role is required when a source and destination use the same connection.`,
     );
   }
-  return connectionId === source.id ? "source" : "destination";
+  return sources.has(connectionId) ? "source" : "destination";
 }
 
 function readReasoningEffort(value: unknown): FlowReasoningEffort {
@@ -451,11 +491,14 @@ function readPollInterval(value: unknown): number {
 
 function normalizeStoredFlow(flow: FlowDefinition): FlowDefinition {
   const normalized = flow.trigger ? flow : { ...flow, trigger: { type: "manual" as const } };
+  const sourceConnectionIds = flowSourceConnectionIds(normalized);
   return {
     ...normalized,
+    sourceConnectionIds,
+    sourceConnectionId: undefined,
     tools: normalized.tools.map((tool) => ({
       ...tool,
-      role: tool.role ?? (tool.connectionId === normalized.sourceConnectionId ? "source" : "destination"),
+      role: tool.role ?? (sourceConnectionIds.includes(tool.connectionId) ? "source" : "destination"),
     })),
   };
 }

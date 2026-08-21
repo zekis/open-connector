@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiPost, apiPut } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
+import { flowSourceConnectionIds } from "./model";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,7 +71,7 @@ export function FlowsPage(props: FlowsPageProps): ReactNode {
     <div className="flows-page">
       <div className="flows-toolbar">
         <div>
-          <strong>One source. One destination. One agent.</strong>
+          <strong>Many sources. One destination. One agent.</strong>
           <p>Select a Flow to run it or open its dedicated builder to make changes.</p>
         </div>
         <Button asChild>
@@ -92,7 +93,7 @@ export function FlowsPage(props: FlowsPageProps): ReactNode {
         {flows.length === 0 ? (
           <EmptyState
             title="No Flows yet"
-            description="Create a Flow to connect a source, a destination, and a Claude agent."
+            description="Create a Flow to connect one or more sources, a destination, and a Claude agent."
           />
         ) : (
           <div className="flow-card-grid">
@@ -138,9 +139,20 @@ function FlowCard(props: {
   onToggle(): void;
   onDelete(): void;
 }): ReactNode {
-  const source = props.data.connections.find((connection) => connection.id === props.flow.sourceConnectionId);
+  const sources = flowSourceConnectionIds(props.flow).flatMap((id) => {
+    const connection = props.data.connections.find((candidate) => candidate.id === id);
+    return connection
+      ? [{ connection, provider: props.data.providers.find((provider) => provider.service === connection.service) }]
+      : [];
+  });
   const destination = props.data.connections.find((connection) => connection.id === props.flow.destinationConnectionId);
-  const sourceProvider = props.data.providers.find((provider) => provider.service === source?.service);
+  const triggerConnectionId =
+    props.flow.trigger.type === "event" ||
+    props.flow.trigger.type === "new_email" ||
+    props.flow.trigger.type === "file_created"
+      ? props.flow.trigger.connectionId
+      : undefined;
+  const triggerSource = sources.find(({ connection }) => connection.id === triggerConnectionId) ?? sources[0];
   const destinationProvider = props.data.providers.find((provider) => provider.service === destination?.service);
   const latestRun = props.latestRun;
   const tone = latestRun ? flowRunTone(latestRun.status) : undefined;
@@ -155,7 +167,11 @@ function FlowCard(props: {
         <Badge tone={props.flow.status === "active" ? "success" : "warning"}>{props.flow.status}</Badge>
       </div>
       <div className="flow-path">
-        <FlowEndpoint role="source" connection={source} provider={sourceProvider} />
+        <div className="flow-source-endpoints">
+          {sources.map(({ connection, provider }) => (
+            <FlowEndpoint role="source" connection={connection} provider={provider} key={connection.id} />
+          ))}
+        </div>
         <div className="flow-path-direction" aria-label="Flows from source to destination">
           <span />
           <ArrowRight size={16} />
@@ -169,7 +185,7 @@ function FlowCard(props: {
         />
       </div>
       <div className="flow-card-meta">
-        <FlowTriggerBadge flow={props.flow} sourceProvider={sourceProvider} />
+        <FlowTriggerBadge flow={props.flow} sourceProvider={triggerSource?.provider} />
         <span>{props.flow.tools.length} tools</span>
         <span>Claude Code</span>
         {latestRun ? (

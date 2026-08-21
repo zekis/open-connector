@@ -105,6 +105,51 @@
   gap: 12px;
 }
 
+.flow-source-list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.flow-source-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+.flow-source-item > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.flow-source-item strong,
+.flow-source-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-source-item strong {
+  font-size: 12px;
+}
+
+.flow-source-item small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.flow-source-add {
+  margin-top: 3px;
+}
+
 .flow-canvas-permission-summary {
   display: flex;
   align-items: flex-start;
@@ -775,6 +820,13 @@
   background:
     radial-gradient(circle at center, color-mix(in oklab, var(--brand) 8%, transparent), transparent 42%),
     color-mix(in oklab, var(--muted) 76%, var(--card));
+}
+
+.flow-source-endpoints {
+  display: grid;
+  gap: 7px;
+  max-height: 168px;
+  overflow-y: auto;
 }
 
 .flow-endpoint {

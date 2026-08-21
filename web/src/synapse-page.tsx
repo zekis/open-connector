@@ -34,10 +34,12 @@ import {
   FileImage,
   FileText,
   GitBranch,
+  GripVertical,
   Link2,
   Loader2,
   Mail,
   MessageSquareText,
+  Minimize2,
   Network,
   Plus,
   RefreshCw,
@@ -162,6 +164,11 @@ interface NewNodePlacement {
   parentNodeId?: string;
 }
 
+export interface SynapseConnectedNodeGroups {
+  incoming: SynapseNode[];
+  outgoing: SynapseNode[];
+}
+
 const synapseNodeControlSelector =
   "button,a,input,textarea,select,[contenteditable='true'],.synapse-node-select,.synapse-node-resize";
 
@@ -169,11 +176,6 @@ function closestMatchingTarget(target: unknown, selector: string): unknown {
   if ((typeof target !== "object" && typeof target !== "function") || target === null) return undefined;
   const closest = Reflect.get(target, "closest");
   return typeof closest === "function" ? Reflect.apply(closest, target, [selector]) : undefined;
-}
-
-/** Returns whether a pointer target is inside a Synapse card. */
-export function isSynapseCardTarget(target: unknown): boolean {
-  return Boolean(closestMatchingTarget(target, ".synapse-node"));
 }
 
 /** Returns whether a node pointer event belongs to a control that must remain independently interactive. */
@@ -185,6 +187,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   const [summaries, setSummaries] = useState<SynapseWorkspaceSummary[]>([]);
   const [workspace, setWorkspace] = useState<SynapseWorkspace>();
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
+  const [expandedNodeId, setExpandedNodeId] = useState<string>();
   const [refreshingNodeId, setRefreshingNodeId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
@@ -262,7 +265,17 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   useEffect(() => {
     setWorkspaceNameDraft(workspace?.name ?? "");
     setSelectedNodeIds([]);
+    setExpandedNodeId(undefined);
   }, [workspace?.id]);
+
+  useEffect(() => {
+    if (!expandedNodeId) return;
+    const closeExpandedNode = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setExpandedNodeId(undefined);
+    };
+    window.addEventListener("keydown", closeExpandedNode);
+    return () => window.removeEventListener("keydown", closeExpandedNode);
+  }, [expandedNodeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +352,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     const next = await apiPost<SynapseWorkspace>("/api/synapses", { name });
     setWorkspace(next);
     setSelectedNodeId(undefined);
+    setExpandedNodeId(undefined);
     setSelectedNodeIds([]);
     setSummaries((current) => [workspaceSummary(next), ...current]);
     setCreateOpen(false);
@@ -351,6 +365,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     setSummaries(remaining);
     setWorkspace(undefined);
     setSelectedNodeId(undefined);
+    setExpandedNodeId(undefined);
     setSelectedNodeIds([]);
     if (remaining[0]) await loadWorkspace(remaining[0].id);
   }
@@ -364,6 +379,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     );
     applyWorkspace(next);
     setSelectedNodeId(next.nodes[0]?.id);
+    setExpandedNodeId((current) => (current === nodeId ? undefined : current));
     setSelectedNodeIds((current) => current.filter((selectedId) => selectedId !== nodeId));
   }
 
@@ -553,6 +569,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   }
 
   const selectedNode = workspace?.nodes.find((node) => node.id === selectedNodeId);
+  const expandedNode = workspace?.nodes.find((node) => node.id === expandedNodeId);
   const synthesisNodes = workspace?.nodes.filter((node) => selectedNodeIdSet.has(node.id)) ?? [];
   const agentConfigured =
     props.data.agentConnections?.some((connection) => connection.provider === "claude_code") ?? false;
@@ -656,7 +673,31 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
       ) : null}
 
       <div className={selectedNode ? "synapse-stage with-panel" : "synapse-stage"}>
-        {workspace ? (
+        {workspace && expandedNode ? (
+          <SynapseNodeDetail
+            workspace={workspace}
+            node={expandedNode}
+            provider={expandedNode.kind === "provider" ? providersByService.get(expandedNode.service) : undefined}
+            providersByService={providersByService}
+            speechAvailable={voiceConfiguration?.enabled === true}
+            speaking={speakingNodeId === expandedNode.id}
+            speechConnecting={speakingNodeId === expandedNode.id && voiceState === "connecting"}
+            refreshing={refreshingNodeId === expandedNode.id}
+            refreshDisabled={
+              refreshingNodeId !== undefined ||
+              workspace.threads.some(
+                (thread) => thread.nodeId === expandedNode.id && pendingSynapseApprovalIds(thread).length > 0,
+              )
+            }
+            onClose={() => setExpandedNodeId(undefined)}
+            onNavigate={(nodeId) => {
+              setExpandedNodeId(nodeId);
+              setSelectedNodeId(nodeId);
+            }}
+            onRefresh={() => void refreshNode(expandedNode.id)}
+            onToggleSpeech={() => toggleNodeSpeech(expandedNode.id, synapseNodeSpeech(expandedNode))}
+          />
+        ) : workspace ? (
           <SynapseCanvas
             workspace={workspace}
             approvalItems={approvalItems}
@@ -677,6 +718,11 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
                 setSelectedNodeId(nodeId);
               }
             }}
+            onNodeOpen={(nodeId) => {
+              if (linkingFrom) return;
+              setSelectedNodeId(nodeId);
+              setExpandedNodeId(nodeId);
+            }}
             onApprovalDecision={decideCanvasApprovals}
             onRefreshNode={(nodeId) => void refreshNode(nodeId)}
             onContextRequest={(request) => {
@@ -691,7 +737,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
         ) : (
           <SynapseEmpty loading={loading} onCreate={() => setCreateOpen(true)} />
         )}
-        {workspace && synthesisNodes.length > 0 ? (
+        {workspace && !expandedNode && synthesisNodes.length > 0 ? (
           <SynapseSelectionComposer
             nodes={synthesisNodes}
             configured={agentConfigured}
@@ -702,14 +748,19 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
         ) : null}
         {workspace && selectedNode ? (
           <SynapseNodePanel
+            key={selectedNode.id}
             data={props.data}
             workspace={workspace}
             node={selectedNode}
             provider={selectedNode.kind === "provider" ? providersByService.get(selectedNode.service) : undefined}
+            showNodeContext={expandedNode?.id !== selectedNode.id}
             onClose={() => setSelectedNodeId(undefined)}
             onContinue={() => void continueNodeInNewCanvas(selectedNode.id)}
             onDelete={() => void deleteNode(selectedNode.id)}
-            onLink={() => setLinkingFrom(selectedNode.id)}
+            onLink={() => {
+              setLinkingFrom(selectedNode.id);
+              setExpandedNodeId(undefined);
+            }}
             onWorkspaceChange={applyWorkspace}
             onRefresh={props.onRefresh}
           />
@@ -801,6 +852,7 @@ function SynapseCanvas(props: {
   onWorkspaceChange(workspace: SynapseWorkspace): void;
   onWorkspaceSaved(workspace: SynapseWorkspace): void;
   onNodeSelect(nodeId: string): void;
+  onNodeOpen(nodeId: string): void;
   onApprovalDecision(
     item: SynapseApprovalCanvasItem,
     approvalIds: string[],
@@ -870,19 +922,6 @@ function SynapseCanvas(props: {
     const canvas = scrollRef.current;
     if (!canvas) return;
     const zoom = (event: WheelEvent): void => {
-      const card = closestMatchingTarget(event.target, ".synapse-node");
-      if (card) {
-        event.preventDefault();
-        if (card instanceof HTMLElement) {
-          const scroller = card.querySelector<HTMLElement>(".synapse-node-markdown");
-          if (scroller) {
-            const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller.clientHeight : 1;
-            scroller.scrollTop += event.deltaY * multiplier;
-            scroller.scrollLeft += event.deltaX * multiplier;
-          }
-        }
-        return;
-      }
       event.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const deltaY = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1);
@@ -929,7 +968,7 @@ function SynapseCanvas(props: {
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void {
-    if (event.button !== 0 || isSynapseNodeControlTarget(event.target)) return;
+    if (event.button !== 0) return;
     event.preventDefault();
     if (props.linkingFrom) {
       props.onNodeSelect(node.id);
@@ -1142,6 +1181,7 @@ function SynapseCanvas(props: {
               onResizePointerMove={moveResize}
               onResizePointerUp={finishResize}
               onSelect={() => props.onNodeSelect(node.id)}
+              onOpen={() => props.onNodeOpen(node.id)}
               onRefresh={() => props.onRefreshNode(node.id)}
               onToggleSpeech={() => props.onToggleSpeech(node.id, synapseNodeSpeech(node))}
               onCheckedChange={(checked) => props.onNodeCheckedChange(node.id, checked)}
@@ -1193,6 +1233,7 @@ export function SynapseNodeCard(props: {
   onResizePointerMove(event: ReactPointerEvent<HTMLElement>): void;
   onResizePointerUp(event: ReactPointerEvent<HTMLElement>): void;
   onSelect(): void;
+  onOpen(): void;
   onRefresh(): void;
   onToggleSpeech(): void;
   onCheckedChange(checked: boolean): void;
@@ -1208,13 +1249,19 @@ export function SynapseNodeCard(props: {
       <article
         className={`synapse-node provider${props.selected ? " selected" : ""}${props.checked ? " multi-selected" : ""}${props.linking ? " link-target" : ""}`}
         style={style}
-        onPointerDown={props.onPointerDown}
-        onPointerMove={props.onPointerMove}
-        onPointerUp={props.onPointerUp}
-        onPointerCancel={props.onPointerCancel}
+        onClick={props.onSelect}
         onContextMenu={props.onContextMenu}
-        onDoubleClick={props.onSelect}
+        onDoubleClick={(event) => {
+          if (!isSynapseNodeControlTarget(event.target)) props.onOpen();
+        }}
       >
+        <SynapseNodeDragHandle
+          label={props.node.title}
+          onPointerDown={props.onPointerDown}
+          onPointerMove={props.onPointerMove}
+          onPointerUp={props.onPointerUp}
+          onPointerCancel={props.onPointerCancel}
+        />
         <SynapseNodeCheckbox checked={props.checked} label={props.node.title} onCheckedChange={props.onCheckedChange} />
         <SynapseRefreshButton
           refreshing={props.refreshing}
@@ -1262,13 +1309,19 @@ export function SynapseNodeCard(props: {
     <article
       className={`synapse-node artifact ${props.node.artifactKind}${props.selected ? " selected" : ""}${props.checked ? " multi-selected" : ""}${props.linking ? " link-target" : ""}`}
       style={style}
-      onPointerDown={props.onPointerDown}
-      onPointerMove={props.onPointerMove}
-      onPointerUp={props.onPointerUp}
-      onPointerCancel={props.onPointerCancel}
+      onClick={props.onSelect}
       onContextMenu={props.onContextMenu}
-      onDoubleClick={props.onSelect}
+      onDoubleClick={(event) => {
+        if (!isSynapseNodeControlTarget(event.target)) props.onOpen();
+      }}
     >
+      <SynapseNodeDragHandle
+        label={props.node.title}
+        onPointerDown={props.onPointerDown}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      />
       <SynapseNodeCheckbox checked={props.checked} label={props.node.title} onCheckedChange={props.onCheckedChange} />
       <SynapseRefreshButton
         refreshing={props.refreshing}
@@ -1308,6 +1361,31 @@ export function SynapseNodeCard(props: {
         onPointerCancel={props.onResizePointerUp}
       />
     </article>
+  );
+}
+
+function SynapseNodeDragHandle(props: {
+  label: string;
+  onPointerDown(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerCancel(event: ReactPointerEvent<HTMLElement>): void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className="synapse-node-drag"
+      aria-label={`Drag ${props.label}`}
+      title={`Drag ${props.label}`}
+      onPointerDown={props.onPointerDown}
+      onPointerMove={props.onPointerMove}
+      onPointerUp={props.onPointerUp}
+      onPointerCancel={props.onPointerCancel}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <GripVertical size={14} />
+    </button>
   );
 }
 
@@ -1699,11 +1777,195 @@ function SynapseSelectionComposer(props: {
   );
 }
 
+/** Returns the directly connected nodes grouped by the direction of their edge. */
+export function synapseConnectedNodeGroups(
+  workspace: Pick<SynapseWorkspace, "nodes" | "edges">,
+  nodeId: string,
+): SynapseConnectedNodeGroups {
+  const nodesById = new Map(workspace.nodes.map((node) => [node.id, node]));
+  const incoming: SynapseNode[] = [];
+  const outgoing: SynapseNode[] = [];
+  const incomingIds = new Set<string>();
+  const outgoingIds = new Set<string>();
+
+  for (const edge of workspace.edges) {
+    if (edge.targetNodeId === nodeId && !incomingIds.has(edge.sourceNodeId)) {
+      const node = nodesById.get(edge.sourceNodeId);
+      if (node) {
+        incomingIds.add(node.id);
+        incoming.push(node);
+      }
+    }
+    if (edge.sourceNodeId === nodeId && !outgoingIds.has(edge.targetNodeId)) {
+      const node = nodesById.get(edge.targetNodeId);
+      if (node) {
+        outgoingIds.add(node.id);
+        outgoing.push(node);
+      }
+    }
+  }
+
+  const byCanvasPosition = (left: SynapseNode, right: SynapseNode): number =>
+    left.position.y - right.position.y || left.position.x - right.position.x || left.title.localeCompare(right.title);
+  incoming.sort(byCanvasPosition);
+  outgoing.sort(byCanvasPosition);
+  return { incoming, outgoing };
+}
+
+export interface SynapseNodeDetailProps {
+  workspace: SynapseWorkspace;
+  node: SynapseNode;
+  provider?: ProviderDefinition;
+  providersByService: ReadonlyMap<string, ProviderDefinition>;
+  speechAvailable: boolean;
+  speaking: boolean;
+  speechConnecting: boolean;
+  refreshing: boolean;
+  refreshDisabled: boolean;
+  onClose(): void;
+  onNavigate(nodeId: string): void;
+  onRefresh(): void;
+  onToggleSpeech(): void;
+}
+
+export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
+  const connections = synapseConnectedNodeGroups(props.workspace, props.node.id);
+  const kind = props.node.kind === "provider" ? "Provider source" : artifactLabel(props.node.artifactKind);
+  const markdown =
+    props.node.kind === "provider"
+      ? (props.node.instructions ?? "Ask this node to retrieve or act through its connection.")
+      : (props.node.content ?? props.node.summary ?? "Ask Claude to develop this artifact.");
+  const previews = props.node.kind === "artifact" ? (props.node.previews ?? []) : [];
+  const DetailIcon = props.node.kind === "artifact" ? artifactIcon(props.node.artifactKind) : Cable;
+
+  return (
+    <section className="synapse-node-detail" aria-label={`Expanded node ${props.node.title}`}>
+      <header className="synapse-node-detail-header">
+        <span className="synapse-node-detail-icon">
+          {props.node.kind === "provider" && props.provider ? (
+            <ProviderIcon provider={props.provider} large />
+          ) : (
+            <DetailIcon size={21} />
+          )}
+        </span>
+        <div>
+          <span>{kind}</span>
+          <strong>{props.node.title}</strong>
+        </div>
+        <div className="synapse-node-detail-actions">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={props.refreshDisabled}
+            aria-label={`Ask Claude to refresh ${props.node.title}`}
+            title={`Ask Claude to refresh ${props.node.title}`}
+            onClick={props.onRefresh}
+          >
+            <RefreshCw className={props.refreshing ? "spin" : undefined} size={15} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={!props.speechAvailable || props.speechConnecting}
+            aria-label={`${props.speaking ? "Stop reading" : "Read"} ${props.node.title} aloud`}
+            title={`${props.speaking ? "Stop reading" : "Read"} ${props.node.title} aloud`}
+            onClick={props.onToggleSpeech}
+          >
+            {props.speechConnecting ? <Loader2 className="spin" size={15} /> : <Volume2 size={15} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Return to Synapse canvas"
+            title="Return to canvas (Esc)"
+            onClick={props.onClose}
+          >
+            <Minimize2 size={16} />
+          </Button>
+        </div>
+      </header>
+      <div className="synapse-node-detail-main">
+        <SynapseConnectedNodeRail
+          direction="incoming"
+          nodes={connections.incoming}
+          providersByService={props.providersByService}
+          onNavigate={props.onNavigate}
+        />
+        <article className="synapse-node-detail-content">
+          <div className="synapse-node-detail-title">
+            <span>{kind}</span>
+            <h1>{props.node.title}</h1>
+          </div>
+          {props.node.kind === "artifact" ? (
+            <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
+          ) : null}
+          <div className="synapse-node-detail-markdown">
+            <ChatMarkdown>{markdown}</ChatMarkdown>
+          </div>
+        </article>
+        <SynapseConnectedNodeRail
+          direction="outgoing"
+          nodes={connections.outgoing}
+          providersByService={props.providersByService}
+          onNavigate={props.onNavigate}
+        />
+      </div>
+    </section>
+  );
+}
+
+interface SynapseConnectedNodeRailProps {
+  direction: "incoming" | "outgoing";
+  nodes: SynapseNode[];
+  providersByService: ReadonlyMap<string, ProviderDefinition>;
+  onNavigate(nodeId: string): void;
+}
+
+function SynapseConnectedNodeRail(props: SynapseConnectedNodeRailProps): ReactNode {
+  return (
+    <nav
+      className={`synapse-node-detail-rail ${props.direction}${props.nodes.length === 0 ? " empty" : ""}`}
+      aria-label={`${props.direction === "incoming" ? "Incoming" : "Outgoing"} connected nodes`}
+    >
+      {props.nodes.length > 0 ? (
+        <span className="synapse-node-detail-rail-label">
+          {props.direction === "incoming" ? "From" : "To"} · {props.nodes.length}
+        </span>
+      ) : null}
+      {props.nodes.map((node) => {
+        const Icon = node.kind === "artifact" ? artifactIcon(node.artifactKind) : Cable;
+        const provider = node.kind === "provider" ? props.providersByService.get(node.service) : undefined;
+        return (
+          <button
+            type="button"
+            className="synapse-node-detail-handle"
+            aria-label={`Open connected node ${node.title}`}
+            title={node.title}
+            onClick={() => props.onNavigate(node.id)}
+            key={node.id}
+          >
+            {props.direction === "incoming" ? <ChevronLeft size={15} /> : null}
+            <span className="synapse-node-detail-handle-icon">
+              {provider ? <ProviderIcon provider={provider} /> : <Icon size={15} />}
+            </span>
+            <span className="synapse-node-detail-handle-copy">
+              <small>{node.kind === "provider" ? "Provider" : artifactLabel(node.artifactKind)}</small>
+              <strong>{node.title}</strong>
+            </span>
+            {props.direction === "outgoing" ? <ChevronRight size={15} /> : null}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 function SynapseNodePanel(props: {
   data: AppData;
   workspace: SynapseWorkspace;
   node: SynapseNode;
   provider?: ProviderDefinition;
+  showNodeContext: boolean;
   onWorkspaceChange(workspace: SynapseWorkspace): void;
   onClose(): void;
   onContinue(): void;
@@ -1723,7 +1985,8 @@ function SynapseNodePanel(props: {
   const thread = props.workspace.threads.find((candidate) => candidate.nodeId === props.node.id);
   const pendingApprovalIds = thread ? pendingSynapseApprovalIds(thread) : [];
   const configured = props.data.agentConnections?.some((connection) => connection.provider === "claude_code");
-  const hasArtifactContext = props.node.kind === "artifact" && Boolean(props.node.summary || props.node.content);
+  const hasArtifactContext =
+    props.showNodeContext && props.node.kind === "artifact" && Boolean(props.node.summary || props.node.content);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });

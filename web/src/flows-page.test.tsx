@@ -115,6 +115,24 @@ describe("FlowsPage", () => {
     expect(html).toContain("synapse-1");
     expect(html).not.toContain("Choose a connection to repair");
   });
+
+  it("renders every source connector on a multi-source Flow", () => {
+    const multiSourceFlow: FlowDefinition = {
+      ...flow,
+      sourceConnectionId: undefined,
+      sourceConnectionIds: ["outlook-1", "sharepoint-1"],
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <FlowsPage data={{ ...emptyData, providers, connections, flows: [multiSourceFlow] }} onRefresh={() => {}} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("Many sources. One destination. One agent.");
+    expect(html.match(/class="flow-endpoint source"/g)).toHaveLength(2);
+    expect(html).toContain("zeke@example.com");
+    expect(html).toContain("SGC Projects");
+  });
 });
 
 const connections = [

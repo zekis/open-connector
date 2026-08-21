@@ -15,6 +15,7 @@ import type {
   IFeedStore,
 } from "./feed-types.ts";
 
+import { flowSourceConnectionIds } from "../flows/flow-types.ts";
 import {
   createProviderPreviews,
   ProviderPreviewError,
@@ -325,7 +326,8 @@ function summarizeTrigger(run: FlowRun): {
 }
 
 function inferFlowProviderService(run: FlowRun): string | undefined {
-  const sourceTool = run.flowSnapshot.tools.find((tool) => tool.connectionId === run.flowSnapshot.sourceConnectionId);
+  const sourceIds = new Set(flowSourceConnectionIds(run.flowSnapshot));
+  const sourceTool = run.flowSnapshot.tools.find((tool) => sourceIds.has(tool.connectionId));
   return sourceTool?.actionId.split(".")[0];
 }
 

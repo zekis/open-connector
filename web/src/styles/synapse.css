@@ -221,12 +221,43 @@
   box-shadow:
     0 8px 28px color-mix(in oklab, black 12%, transparent),
     var(--console-shadow-sm);
-  cursor: grab;
+  cursor: pointer;
   user-select: none;
   touch-action: none;
 }
 
-.synapse-node:active {
+.synapse-node-drag {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  box-shadow: var(--console-shadow-sm);
+  cursor: grab;
+  opacity: 0.72;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.synapse-node-drag:hover,
+.synapse-node-drag:focus-visible {
+  border-color: color-mix(in oklab, var(--brand) 62%, var(--border));
+  background: color-mix(in oklab, var(--brand) 10%, var(--card));
+  color: var(--brand);
+  outline: none;
+  opacity: 1;
+}
+
+.synapse-node-drag:active {
   cursor: grabbing;
 }
 
@@ -454,7 +485,7 @@
   flex: 0 0 auto;
   gap: 5px;
   padding: 7px 12px;
-  overflow-x: auto;
+  overflow-x: hidden;
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--background) 38%, transparent);
 }
@@ -646,15 +677,13 @@
 
 .synapse-node-markdown {
   min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: hidden;
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
   user-select: text;
-  touch-action: pan-y;
+  touch-action: none;
 }
 
 .synapse-node.artifact .synapse-node-markdown {
@@ -667,7 +696,7 @@
   gap: 5px;
   flex: 0 0 auto;
   margin: 0 0 8px;
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 .synapse-artifact-shortcuts a,
@@ -744,12 +773,6 @@
   background: var(--border);
 }
 
-.synapse-node-markdown::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
-}
-
 .synapse-node-markdown.provider-markdown {
   max-height: none;
 }
@@ -781,7 +804,7 @@
 }
 
 .synapse-node-markdown .chat-markdown pre {
-  overflow-x: auto;
+  overflow: hidden;
   padding: 7px;
   border-radius: 7px;
   background: var(--background);
@@ -843,6 +866,230 @@
 }
 .synapse-canvas-hint svg {
   color: var(--brand);
+}
+
+.synapse-node-detail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--brand) 10%, transparent), transparent 38%),
+    color-mix(in oklab, var(--background) 97%, var(--muted));
+}
+
+.synapse-node-detail-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 11px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+.synapse-node-detail-icon,
+.synapse-node-detail-handle-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--brand);
+}
+
+.synapse-node-detail-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.synapse-node-detail-header > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.synapse-node-detail-header > div:nth-child(2) > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.synapse-node-detail-header > div:nth-child(2) > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.synapse-node-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.synapse-node-detail-main {
+  display: grid;
+  grid-template-columns: minmax(106px, 148px) minmax(260px, 1fr) minmax(106px, 148px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.synapse-node-detail-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 22px 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--card) 97%, transparent);
+  box-shadow: 0 18px 54px color-mix(in oklab, black 14%, transparent);
+}
+
+.synapse-node-detail-title {
+  display: grid;
+  gap: 5px;
+  padding: clamp(22px, 4vw, 48px) clamp(22px, 5vw, 58px) 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.synapse-node-detail-title > span {
+  color: var(--brand);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.synapse-node-detail-title h1 {
+  margin: 0;
+  font-size: clamp(22px, 3vw, 34px);
+  line-height: 1.16;
+  letter-spacing: -0.025em;
+}
+
+.synapse-node-detail-content > .synapse-artifact-shortcuts {
+  margin: 18px clamp(22px, 5vw, 58px) 0;
+}
+
+.synapse-node-detail-markdown {
+  padding: 24px clamp(22px, 5vw, 58px) 52px;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.synapse-node-detail-markdown .chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.synapse-node-detail-markdown .chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.synapse-node-detail-markdown .chat-markdown pre {
+  overflow-x: auto;
+}
+
+.synapse-node-detail-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  gap: 7px;
+  padding: 18px 0;
+}
+
+.synapse-node-detail-rail.incoming {
+  align-items: flex-end;
+}
+
+.synapse-node-detail-rail.outgoing {
+  align-items: flex-start;
+}
+
+.synapse-node-detail-rail-label {
+  padding: 0 9px 2px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.synapse-node-detail-handle {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  width: calc(100% - 8px);
+  min-width: 0;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+  color: var(--foreground);
+  box-shadow: var(--console-shadow-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.synapse-node-detail-rail.incoming .synapse-node-detail-handle {
+  border-right-color: color-mix(in oklab, var(--brand) 58%, var(--border));
+  border-radius: 10px 0 0 10px;
+}
+
+.synapse-node-detail-rail.outgoing .synapse-node-detail-handle {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  border-left-color: color-mix(in oklab, var(--brand) 58%, var(--border));
+  border-radius: 0 10px 10px 0;
+}
+
+.synapse-node-detail-handle:hover,
+.synapse-node-detail-handle:focus-visible {
+  border-color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 9%, var(--card));
+  outline: none;
+}
+
+.synapse-node-detail-handle-icon {
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
+}
+
+.synapse-node-detail-handle-icon .provider-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.synapse-node-detail-handle-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.synapse-node-detail-handle small,
+.synapse-node-detail-handle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-node-detail-handle small {
+  color: var(--muted-foreground);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.synapse-node-detail-handle strong {
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .synapse-panel {
@@ -1431,5 +1678,35 @@
   }
   .synapse-linking-hint {
     order: 3;
+  }
+  .synapse-node-detail-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .synapse-node-detail-content {
+    margin: 0 12px;
+  }
+  .synapse-node-detail-rail {
+    flex-direction: row;
+    justify-content: flex-start;
+    min-height: 60px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 12px;
+  }
+  .synapse-node-detail-rail.incoming,
+  .synapse-node-detail-rail.outgoing {
+    align-items: center;
+  }
+  .synapse-node-detail-handle,
+  .synapse-node-detail-rail.incoming .synapse-node-detail-handle,
+  .synapse-node-detail-rail.outgoing .synapse-node-detail-handle {
+    flex: 0 0 180px;
+    width: 180px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .synapse-node-detail-rail-label {
+    flex: 0 0 auto;
   }
 }

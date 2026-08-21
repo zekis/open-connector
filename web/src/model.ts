@@ -276,7 +276,9 @@ export interface FlowDefinition {
   revision: string;
   name: string;
   status: "active" | "paused";
-  sourceConnectionId: string;
+  sourceConnectionIds?: string[];
+  /** Legacy field returned only by runtimes that predate multi-source Flows. */
+  sourceConnectionId?: string;
   destinationConnectionId?: string;
   destinationSynapseId?: string;
   instructions: string;
@@ -291,6 +293,13 @@ export interface FlowDefinition {
   maxSteps: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export function flowSourceConnectionIds(
+  flow: Pick<FlowDefinition, "sourceConnectionIds" | "sourceConnectionId">,
+): string[] {
+  if (flow.sourceConnectionIds?.length) return [...flow.sourceConnectionIds];
+  return flow.sourceConnectionId ? [flow.sourceConnectionId] : [];
 }
 
 export interface AgentConnectionSummary {

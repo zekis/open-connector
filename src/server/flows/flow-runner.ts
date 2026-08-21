@@ -30,6 +30,7 @@ import type {
 import { hashActionRequest } from "../actions/action-idempotency.ts";
 import { FlowAgentError } from "./flow-agent.ts";
 import { FlowError, FlowService } from "./flow-service.ts";
+import { flowSourceConnectionIds } from "./flow-types.ts";
 
 interface FlowToolBinding {
   grant: FlowToolGrant;
@@ -402,7 +403,14 @@ export class FlowRunner {
   }
 
   private async createToolBindings(flow: FlowDefinition): Promise<FlowToolBinding[]> {
-    const source = await this.requiredConnection(flow.sourceConnectionId);
+    const sources = new Map(
+      await Promise.all(
+        flowSourceConnectionIds(flow).map(async (id) => [id, await this.requiredConnection(id)] as const),
+      ),
+    );
+    if (sources.size === 0) {
+      throw new FlowError("invalid_flow", "Flow must have at least one source connection.");
+    }
     const destination = flow.destinationConnectionId
       ? await this.requiredConnection(flow.destinationConnectionId)
       : undefined;
@@ -410,7 +418,7 @@ export class FlowRunner {
       flow.tools.map(async (grant, index) => {
         const action = this.options.catalog.actionsById.get(grant.actionId);
         const role = flowToolRole(flow, grant);
-        const connection = role === "source" ? source : destination;
+        const connection = role === "source" ? sources.get(grant.connectionId) : destination;
         if (!action || !connection || grant.connectionId !== connection.id) {
           throw new FlowError("invalid_flow", `Flow tool is no longer available: ${grant.actionId}.`);
         }
@@ -560,7 +568,7 @@ function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding
   const destination = flow.destinationSynapseId
     ? `the Synapse canvas ${flow.destinationSynapseId}. Your final response is published there automatically; do not create a duplicate canvas card`
     : "the destination connection";
-  return `Role: Execute a one-way synchronization from the source connection to ${destination}.
+  return `Role: Execute a one-way synchronization from the source connections to ${destination}.
 
 Authoritative Flow instructions:
 <flow_instructions>
@@ -570,7 +578,7 @@ ${flow.instructions}
 Goal: Complete the authoritative Flow instructions exactly using only the supplied function tools.
 
 Success criteria:
-- inspect the source data needed for this run
+- inspect the source data needed for this run across every relevant source connection
 - apply every selection, filtering, destination, naming, and content requirement in the Flow instructions
 - make only the requested destination changes${flow.destinationSynapseId ? "; for a Synapse destination, return the complete canvas-ready result in your final response" : ""}
 - return a concise summary of completed work and any blockers
@@ -589,7 +597,7 @@ ${toolRules}`;
 }
 
 function flowToolRole(flow: FlowDefinition, grant: FlowToolGrant): FlowConnectionRole {
-  return grant.role ?? (grant.connectionId === flow.sourceConnectionId ? "source" : "destination");
+  return grant.role ?? (flowSourceConnectionIds(flow).includes(grant.connectionId) ? "source" : "destination");
 }
 
 function createAgentToolName(index: number, actionId: string): string {

@@ -221,6 +221,24 @@ describe("FlowRunner", () => {
     expect(harness.agent.inputs[0]?.instructions).toContain("published there automatically");
     expect(harness.actions.toolCalls[0]?.connectionId).toBe("source-connection");
   });
+
+  it("executes tools through any configured source connection", async () => {
+    const harness = createHarness("always_allow");
+    harness.flow.sourceConnectionIds = ["source-connection", "secondary-source-connection"];
+    delete harness.flow.sourceConnectionId;
+    harness.flow.tools[0] = {
+      ...harness.flow.tools[0]!,
+      connectionId: "secondary-source-connection",
+      role: "source",
+    };
+
+    const detail = await harness.runner.start(harness.flow.id);
+
+    expect(detail.run.status).toBe("completed");
+    expect(harness.actions.toolCalls[0]?.connectionId).toBe("secondary-source-connection");
+    expect(harness.agent.inputs[0]?.tools[0]?.description).toContain('source connection "Secondary source"');
+    expect(harness.agent.inputs[0]?.instructions).toContain("across every relevant source connection");
+  });
 });
 
 function createHarness(
@@ -456,6 +474,7 @@ function createFlow(approval: FlowApprovalSetting): FlowDefinition {
 function createConnections(): ConnectionSummary[] {
   return [
     connection("source-connection", "source", "Source"),
+    connection("secondary-source-connection", "source", "Secondary source"),
     connection("destination-connection", "destination", "Destination"),
   ];
 }

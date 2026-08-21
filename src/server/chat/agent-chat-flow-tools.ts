@@ -4,7 +4,7 @@ import type { AgentChatExtensionTool } from "./agent-chat-service.ts";
 import type { AgentChatToolActivity } from "./agent-chat-types.ts";
 
 import { FlowError } from "../flows/flow-service.ts";
-import { maximumFlowMaxSteps } from "../flows/flow-types.ts";
+import { flowSourceConnectionIds, maximumFlowMaxSteps, maximumFlowSourceConnections } from "../flows/flow-types.ts";
 
 export interface AgentChatFlowToolOptions {
   flows: Pick<FlowService, "create" | "delete" | "getRequired" | "list" | "update">;
@@ -83,7 +83,14 @@ const flowToolGrantSchema = objectSchema(
 const editableFlowProperties = {
   name: { type: "string", maxLength: 120 },
   status: { type: "string", enum: ["active", "paused"] },
-  sourceConnectionId: { type: "string" },
+  sourceConnectionIds: {
+    type: "array",
+    minItems: 1,
+    maxItems: maximumFlowSourceConnections,
+    uniqueItems: true,
+    items: { type: "string" },
+    description: "Every connector the Flow can read from. Tools may use any listed source connection.",
+  },
   destinationConnectionId: { type: "string", description: "Existing connector destination." },
   destinationSynapseId: { type: "string", description: "Existing Synapse canvas destination." },
   destinationSynapseName: {
@@ -114,7 +121,7 @@ export const agentChatFlowTools: AgentChatExtensionTool[] = [
   {
     name: createFlowToolName,
     description:
-      "Create an OOMOL Connect Flow into a connector, an existing Synapse canvas, or a newly created canvas. Set exactly one destination field. Scheduling is supplied by OOMOL Connect through trigger.type schedule; it is not a connected-app action. Active Flows require explicit user authorization.",
+      "Create an OOMOL Connect Flow using one or more source connectors and a connector, existing Synapse canvas, or newly created canvas destination. Include every source connection in sourceConnectionIds and set exactly one destination field. Scheduling is supplied by OOMOL Connect through trigger.type schedule; it is not a connected-app action. Active Flows require explicit user authorization.",
     inputSchema: objectSchema(
       {
         ...editableFlowProperties,
@@ -124,7 +131,7 @@ export const agentChatFlowTools: AgentChatExtensionTool[] = [
             "True only when the latest user message explicitly authorizes creating this exact active persistent automation. A direct request to create and run a recurring Flow counts as confirmation.",
         },
       },
-      ["name", "status", "sourceConnectionId", "instructions", "trigger", "tools", "userConfirmedActivation"],
+      ["name", "status", "sourceConnectionIds", "instructions", "trigger", "tools", "userConfirmedActivation"],
     ),
   },
   {
@@ -211,7 +218,7 @@ async function listFlows(
     id: flow.id,
     name: flow.name,
     status: flow.status,
-    sourceConnectionId: flow.sourceConnectionId,
+    sourceConnectionIds: flowSourceConnectionIds(flow),
     destinationConnectionId: flow.destinationConnectionId,
     destinationSynapseId: flow.destinationSynapseId,
     trigger: flow.trigger,
@@ -313,7 +320,7 @@ async function deleteFlow(
 function readFlowFields(input: Record<string, unknown>): Omit<FlowDefinitionInput, "agent" | "status"> {
   return {
     name: input.name as string,
-    sourceConnectionId: input.sourceConnectionId as string,
+    sourceConnectionIds: input.sourceConnectionIds as string[],
     destinationConnectionId: input.destinationConnectionId as string | undefined,
     destinationSynapseId: input.destinationSynapseId as string | undefined,
     destinationSynapseName: input.destinationSynapseName as string | undefined,
@@ -346,7 +353,7 @@ function mergeFlowInput(current: FlowDefinition, changes: Record<string, unknown
   return {
     name: changedValue(changes, "name", current.name) as string,
     status: changedValue(changes, "status", current.status) as FlowStatus,
-    sourceConnectionId: changedValue(changes, "sourceConnectionId", current.sourceConnectionId) as string,
+    sourceConnectionIds: changedValue(changes, "sourceConnectionIds", flowSourceConnectionIds(current)) as string[],
     ...destination,
     instructions: changedValue(changes, "instructions", current.instructions) as string,
     trigger: changedValue(changes, "trigger", current.trigger) as FlowDefinitionInput["trigger"],

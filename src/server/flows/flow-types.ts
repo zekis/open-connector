@@ -71,6 +71,7 @@ export interface FlowToolGrant {
 
 export const defaultFlowMaxSteps = 20;
 export const maximumFlowMaxSteps = 50;
+export const maximumFlowSourceConnections = 16;
 
 /** Durable definition for one directional agent flow into a connector or Synapse canvas. */
 export interface FlowDefinition {
@@ -78,7 +79,10 @@ export interface FlowDefinition {
   revision: string;
   name: string;
   status: FlowStatus;
-  sourceConnectionId: string;
+  /** Source connections available to the Flow agent. Present on all newly saved definitions. */
+  sourceConnectionIds?: string[];
+  /** Legacy single-source field retained only while reading definitions saved before multi-source Flows. */
+  sourceConnectionId?: string;
   destinationConnectionId?: string;
   destinationSynapseId?: string;
   instructions: string;
@@ -93,7 +97,9 @@ export interface FlowDefinition {
 export interface FlowDefinitionInput {
   name: string;
   status?: FlowStatus;
-  sourceConnectionId: string;
+  sourceConnectionIds?: string[];
+  /** Legacy input accepted for backward compatibility. Prefer sourceConnectionIds. */
+  sourceConnectionId?: string;
   destinationConnectionId?: string;
   destinationSynapseId?: string;
   /** Creates a Synapse canvas and stores its resolved ID on the Flow. */
@@ -103,6 +109,14 @@ export interface FlowDefinitionInput {
   agent: Pick<FlowAgentConfig, "connectionId"> & Partial<Pick<FlowAgentConfig, "provider" | "reasoningEffort">>;
   tools: FlowToolGrant[];
   maxSteps?: number;
+}
+
+/** Resolve the canonical source list while retaining compatibility with legacy stored definitions. */
+export function flowSourceConnectionIds(
+  flow: Pick<FlowDefinition, "sourceConnectionIds" | "sourceConnectionId">,
+): string[] {
+  if (flow.sourceConnectionIds?.length) return [...flow.sourceConnectionIds];
+  return flow.sourceConnectionId ? [flow.sourceConnectionId] : [];
 }
 
 /** Trigger configuration projected with the Flow fields needed by trigger-management clients. */

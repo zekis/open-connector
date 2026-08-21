@@ -176,7 +176,7 @@ describe("AgentChatService", () => {
         arguments: {
           name: "Daily record check",
           status: "active",
-          sourceConnectionId: connection.id,
+          sourceConnectionIds: [connection.id],
           destinationConnectionId: connection.id,
           instructions: "Look up record 42 and report whether it is active.",
           trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
@@ -210,7 +210,7 @@ describe("AgentChatService", () => {
       {
         name: "Daily record check",
         status: "active",
-        sourceConnectionId: connection.id,
+        sourceConnectionIds: [connection.id],
         destinationConnectionId: connection.id,
         instructions: "Look up record 42 and report whether it is active.",
         trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
@@ -238,7 +238,7 @@ describe("AgentChatService", () => {
         arguments: {
           name: "Unconfirmed automation",
           status: "active",
-          sourceConnectionId: connection.id,
+          sourceConnectionIds: [connection.id],
           destinationConnectionId: connection.id,
           instructions: "Look up a record every day.",
           trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
@@ -279,7 +279,7 @@ describe("AgentChatService", () => {
         arguments: {
           name: "Daily canvas digest",
           status: "active",
-          sourceConnectionId: connection.id,
+          sourceConnectionIds: [connection.id],
           destinationSynapseName: "Daily digest",
           instructions: "Look up record 42 and publish a concise canvas digest.",
           trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
@@ -305,9 +305,47 @@ describe("AgentChatService", () => {
 
     expect(flows.createInputs[0]).toMatchObject({
       destinationSynapseName: "Daily digest",
-      sourceConnectionId: connection.id,
+      sourceConnectionIds: [connection.id],
     });
     expect(flows.createInputs[0]?.destinationConnectionId).toBeUndefined();
+  });
+
+  it("passes every requested source connection into a multi-source Flow", async () => {
+    const sourceConnectionIds = ["azure-devops-1", "outlook-calendar-1", "outlook-mail-1", "granola-1"];
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "create_flow",
+        arguments: {
+          name: "Daily multi-source briefing",
+          status: "paused",
+          sourceConnectionIds,
+          destinationSynapseName: "Daily briefing",
+          instructions: "Combine work items, meetings, mail, and meeting notes into one briefing.",
+          trigger: { type: "manual" },
+          tools: [
+            {
+              actionId: "example.lookup",
+              connectionId: connection.id,
+              role: "source",
+              approval: "inherit",
+            },
+          ],
+          userConfirmedActivation: false,
+        },
+      },
+      { kind: "final", text: "Created the multi-source Flow draft." },
+    ]);
+    const flows = new FakeFlowService();
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    await service.respond({
+      messages: [{ role: "user", content: "Create one Flow using these four source connections." }],
+    });
+
+    expect(flows.createInputs[0]?.sourceConnectionIds).toEqual(sourceConnectionIds);
+    expect(claude.inputs[0]?.systemPrompt).toContain("multi-source Flows");
+    expect(claude.inputs[0]?.prompt).toContain('"sourceConnectionIds"');
   });
 
   it("lists, reads, updates, activates, and deletes Flows through Chat", async () => {
@@ -315,7 +353,7 @@ describe("AgentChatService", () => {
     await flows.create({
       name: "Record check draft",
       status: "paused",
-      sourceConnectionId: connection.id,
+      sourceConnectionIds: [connection.id],
       destinationConnectionId: connection.id,
       instructions: "Look up record 42.",
       trigger: { type: "manual" },
@@ -750,7 +788,8 @@ function createFlowDefinition(id: string, input: FlowDefinitionInput): FlowDefin
     revision: crypto.randomUUID(),
     name: input.name,
     status: input.status ?? "active",
-    sourceConnectionId: input.sourceConnectionId,
+    ...(input.sourceConnectionIds ? { sourceConnectionIds: input.sourceConnectionIds } : {}),
+    ...(input.sourceConnectionId ? { sourceConnectionId: input.sourceConnectionId } : {}),
     ...(input.destinationConnectionId ? { destinationConnectionId: input.destinationConnectionId } : {}),
     ...(input.destinationSynapseId ? { destinationSynapseId: input.destinationSynapseId } : {}),
     instructions: input.instructions,

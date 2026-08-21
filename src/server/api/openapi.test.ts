@@ -132,6 +132,7 @@ describe("action execution OpenAPI", () => {
     const input = document.components.schemas.FlowDefinitionInput as {
       required: string[];
       properties: Record<string, unknown>;
+      oneOf: Array<{ required: string[] }>;
     };
     const agent = document.components.schemas.FlowAgentInput as {
       required: string[];
@@ -163,9 +164,10 @@ describe("action execution OpenAPI", () => {
     expect(flowPath.put.parameters).toContainEqual(expect.objectContaining({ name: "id", required: true }));
     expect(flowPath.put.responses["404"]).toBeDefined();
     expect(flowPath.put.description).toContain("Replaces all editable fields");
-    expect(input.required).toEqual(
-      expect.arrayContaining(["name", "sourceConnectionId", "instructions", "agent", "tools"]),
-    );
+    expect(input.required).toEqual(expect.arrayContaining(["name", "instructions", "agent", "tools"]));
+    expect(input.oneOf).toEqual([{ required: ["sourceConnectionIds"] }, { required: ["sourceConnectionId"] }]);
+    expect(input.properties).toHaveProperty("sourceConnectionIds");
+    expect(input.properties).toHaveProperty("sourceConnectionId");
     expect(input.required).not.toContain("destinationConnectionId");
     expect(input.properties).toHaveProperty("destinationConnectionId");
     expect(input.properties).toHaveProperty("destinationSynapseId");
@@ -175,6 +177,7 @@ describe("action execution OpenAPI", () => {
     expect(agent.properties).not.toHaveProperty("model");
     expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
     expect(definition.required).toContain("trigger");
+    expect(definition.required).toContain("sourceConnectionIds");
     expect(definition.required).not.toContain("destinationConnectionId");
     expect(definition.properties).toHaveProperty("destinationSynapseId");
     expect(definition.properties).not.toHaveProperty("destinationSynapseName");

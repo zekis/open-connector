@@ -6,7 +6,7 @@ import {
   idempotencyKeyMaxBytes,
   idempotencyRetentionHours,
 } from "../actions/action-idempotency.ts";
-import { defaultFlowMaxSteps, maximumFlowMaxSteps } from "../flows/flow-types.ts";
+import { defaultFlowMaxSteps, maximumFlowMaxSteps, maximumFlowSourceConnections } from "../flows/flow-types.ts";
 import { policyRequestMaxBytes, policyRuleListMaxItems, policyRuleMaxBytes } from "./policy-input.ts";
 
 /**
@@ -704,7 +704,7 @@ function createFlowsPath(): Record<string, unknown> {
       tags: ["Flows"],
       summary: "Create a Flow definition.",
       description:
-        "Creates one directional Flow between two connector connections. The agent model is selected globally on the Agents page and is not accepted in this request. Requires local admin authentication when configured.",
+        "Creates one directional Flow from one or more source connectors into a connector or Synapse canvas destination. The agent model is selected globally on the Agents page and is not accepted in this request. Requires local admin authentication when configured.",
       requestBody: flowDefinitionRequestBody(),
       responses: {
         200: jsonResponse({ $ref: "#/components/schemas/FlowDefinition" }, "Created Flow definition."),
@@ -1166,11 +1166,13 @@ function flowAgentProperties(): Record<string, JsonSchema> {
 }
 
 function createFlowDefinitionInputSchema(): JsonSchema {
-  return jsonSchema.object(flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentInput" }, true), {
-    required: ["name", "sourceConnectionId", "instructions", "agent", "tools"],
+  const schema = jsonSchema.object(flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentInput" }, true), {
+    required: ["name", "instructions", "agent", "tools"],
     description:
-      "Complete set of editable Flow fields. Set exactly one destinationConnectionId, destinationSynapseId, or destinationSynapseName. POST creates a Flow and PUT replaces the editable fields of an existing Flow.",
+      "Complete set of editable Flow fields. sourceConnectionIds accepts one or more source connectors. Set exactly one destinationConnectionId, destinationSynapseId, or destinationSynapseName. POST creates a Flow and PUT replaces the editable fields of an existing Flow.",
   });
+  schema.oneOf = [{ required: ["sourceConnectionIds"] }, { required: ["sourceConnectionId"] }];
+  return schema;
 }
 
 function createFlowDefinitionSchema(): JsonSchema {
@@ -1188,7 +1190,7 @@ function createFlowDefinitionSchema(): JsonSchema {
         "revision",
         "name",
         "status",
-        "sourceConnectionId",
+        "sourceConnectionIds",
         "instructions",
         "trigger",
         "agent",
@@ -1206,7 +1208,10 @@ function flowDefinitionProperties(agent: JsonSchema, acceptsNewSynapse = false):
   const properties: Record<string, JsonSchema> = {
     name: jsonSchema.nonWhitespaceString("User-facing Flow name.", { maxLength: 120 }),
     status: jsonSchema.stringEnum("Flow availability. Defaults to active when omitted.", ["active", "paused"]),
-    sourceConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow reads from.", { maxLength: 200 }),
+    sourceConnectionIds: jsonSchema.array(
+      jsonSchema.nonWhitespaceString("Source connection identifier.", { maxLength: 200 }),
+      { minItems: 1, maxItems: maximumFlowSourceConnections },
+    ),
     destinationConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow writes to.", {
       maxLength: 200,
     }),
@@ -1225,6 +1230,10 @@ function flowDefinitionProperties(agent: JsonSchema, acceptsNewSynapse = false):
     }),
   };
   if (acceptsNewSynapse) {
+    properties.sourceConnectionId = jsonSchema.nonWhitespaceString(
+      "Deprecated single-source input. Use sourceConnectionIds for new integrations.",
+      { maxLength: 200 },
+    );
     properties.destinationSynapseName = jsonSchema.nonWhitespaceString(
       "Creates a new Synapse canvas with this name and uses it as the Flow destination.",
       { maxLength: 120 },
