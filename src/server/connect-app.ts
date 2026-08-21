@@ -90,11 +90,18 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     const record = await options.runtimeDatabase.runtimePolicyStore.get();
     return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
   };
+  let synapse: SynapseService;
+  const flowSynapses = {
+    create: (input: unknown) => synapse.create(input),
+    get: (id: string) => synapse.get(id),
+    addNode: (workspaceId: string, input: unknown) => synapse.addNode(workspaceId, input),
+  };
   const flows = new FlowService({
     catalog: options.catalog,
     connections,
     agents: agentCredentials,
     agentSettings,
+    synapses: flowSynapses,
     store: options.runtimeDatabase.flowStore,
   });
   const flowRunner = new FlowRunner({
@@ -105,6 +112,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     actions,
     agentSettings,
     connectionApprovals,
+    synapses: flowSynapses,
     claudeCodeAgent: new ClaudeCodeFlowAgent(agentCredentials, claudeCode),
     getPolicySnapshot,
     logger: options.logger,
@@ -128,7 +136,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     getPolicySnapshot,
     store: options.runtimeDatabase.feedStore,
   });
-  const synapse = new SynapseService({
+  synapse = new SynapseService({
     catalog: options.catalog,
     connections,
     agentChat,

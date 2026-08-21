@@ -98,6 +98,23 @@ describe("FlowsPage", () => {
     expect(html).not.toMatch(/>Pause</);
     expect(html).not.toContain(run.finalOutput);
   });
+
+  it("renders a Synapse canvas as a Flow destination", () => {
+    const canvasFlow: FlowDefinition = {
+      ...flow,
+      destinationConnectionId: undefined,
+      destinationSynapseId: "synapse-1",
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <FlowsPage data={{ ...emptyData, providers, connections, flows: [canvasFlow] }} onRefresh={() => {}} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("Synapse canvas");
+    expect(html).toContain("synapse-1");
+    expect(html).not.toContain("Choose a connection to repair");
+  });
 });
 
 const connections = [

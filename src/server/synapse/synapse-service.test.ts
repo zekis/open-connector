@@ -711,6 +711,94 @@ describe("SynapseService", () => {
     });
   });
 
+  it("lets the agent update a connected artifact other than the selected node", async () => {
+    let targetNodeId = "";
+    let updateTool: AgentChatExtension["tools"][number] | undefined;
+    const agentChat = {
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        updateTool = extension.tools.find((tool) => tool.name === "synapse_update_artifact");
+        const activity = await extension.runTool("synapse_update_artifact", {
+          nodeId: targetNodeId,
+          content: "- ~~#194047 closed~~\n- #194048 remains open",
+        });
+        return completedResponse(activity ? [activity] : []);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    };
+    const service = createService(agentChat);
+    const workspace = await service.create({ name: "Living lists" });
+    const providerResult = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+    const providerNode = providerResult.nodes[0]!;
+    const listResult = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Open YardCraft items",
+      content: "- #194047 open\n- #194048 open",
+      position: { x: 430, y: 100 },
+    });
+    targetNodeId = listResult.nodes.at(-1)!.id;
+    await service.addEdge(workspace.id, { sourceNodeId: providerNode.id, targetNodeId });
+
+    const updated = await service.chat(workspace.id, providerNode.id, { content: "Update the previous list." });
+
+    expect(updateTool?.description).toContain("any existing artifact card");
+    expect(updated.nodes.find((node) => node.id === targetNodeId)).toMatchObject({
+      content: "- ~~#194047 closed~~\n- #194048 remains open",
+    });
+  });
+
+  it("strikes matching rows on earlier cards after a successful close action", async () => {
+    const agentChat = {
+      respondWithExtension: vi.fn(async () =>
+        completedResponse([
+          {
+            id: "close-194047",
+            type: "action",
+            label: "azure_devops.update_work_item",
+            ok: true,
+            actionId: "azure_devops.update_work_item",
+            connectionId: "azure-devops-1",
+            input: { id: 194047, fields: [{ path: "System.State", value: "Done" }] },
+            output: { id: 194047, title: "Commissioning checklist", state: "Done" },
+          },
+        ]),
+      ),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    };
+    const service = createService(agentChat);
+    const workspace = await service.create({ name: "Tracked work" });
+    const providerResult = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+    const providerNode = providerResult.nodes[0]!;
+    const listResult = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Open YardCraft items",
+      content: [
+        "| ID | Type | Title | State |",
+        "| --- | --- | --- | --- |",
+        "| 194047 | Bug | Commissioning checklist | New |",
+        "| 194048 | Task | Certificate review | To Do |",
+      ].join("\n"),
+      position: { x: 430, y: 100 },
+    });
+    const listNodeId = listResult.nodes.at(-1)!.id;
+    await service.addEdge(workspace.id, { sourceNodeId: providerNode.id, targetNodeId: listNodeId });
+
+    const updated = await service.chat(workspace.id, providerNode.id, { content: "Close item 194047." });
+    const list = updated.nodes.find((node): node is SynapseArtifactNode => node.id === listNodeId)!;
+
+    expect(list.content).toContain("| ~~194047~~ | ~~Bug~~ | ~~Commissioning checklist~~ | ~~New~~ |");
+    expect(list.content).toContain("| 194048 | Task | Certificate review | To Do |");
+  });
+
   it("accepts coordinates in every direction and moves new cards out of occupied space", async () => {
     const service = createService({
       respondWithExtension: vi.fn(async () => completedResponse([])),

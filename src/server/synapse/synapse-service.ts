@@ -707,6 +707,7 @@ export class SynapseService {
       const isApprovedAction = isResolvedApprovalAction(activity, resolvedApprovalIds, legacyApprovedActions);
       if (activity.approvalId && !isApprovedAction) continue;
       const approvalDraft = activity.approvalId ? approvalDrafts.get(activity.approvalId) : undefined;
+      reconcileCompletedArtifactItems(workspace, selectedNode, activity, approvalDraft?.id);
       if (isApprovedAction && approvalDraft) {
         updateApprovedDraft(approvalDraft, activity);
         continue;
@@ -917,11 +918,14 @@ const synapseTools: AgentChatExtensionTool[] = [
   {
     name: "synapse_update_artifact",
     description:
-      "Rewrite an existing artifact card, especially a draft, after discussing changes with the user. Omit nodeId to update the selected artifact.",
+      "Rewrite any existing artifact card in the connected Synapse context. Pass nodeId to update a card other than the selected artifact, or omit it to update the selected artifact.",
     inputSchema: {
       type: "object",
       properties: {
-        nodeId: { type: "string" },
+        nodeId: {
+          type: "string",
+          description: "ID of any artifact card in the connected canvas context that should be updated in place.",
+        },
         artifactKind: {
           type: "string",
           enum: ["email", "draft", "document", "search_result", "note", "task", "generic"],
@@ -959,7 +963,9 @@ Rules:
 - include sourceActivityId from connector tool activity when turning that result into artifacts
 - never create an artifact containing raw JSON, a JSON code fence, an API response dump, or provider field-reference maps; translate structured results into concise human-readable Markdown
 - create exactly one draft artifact for each proposed side effect before requesting its connector action; the host merges pending approval into that draft rather than creating another canvas node
-- update the selected draft or artifact in place with synapse_update_artifact when the user requests revisions
+- use synapse_update_artifact with nodeId to update any earlier artifact card in the connected context, not only the selected card
+- after a connector mutation succeeds, update every earlier artifact card whose visible content is changed by that mutation; mark completed or closed list entries with Markdown strikethrough such as ~~completed item~~
+- never mark an item completed before its connector mutation succeeds or while it is still waiting for approval
 - connect nodes whose relationship helps explain the work
 - keep chat concise because durable detail belongs in artifact cards
 - never claim a graph mutation or connector side effect succeeded unless its host tool succeeded${selectionRules}`;
@@ -1326,6 +1332,103 @@ function completedDraftMarkdown(
   markdown = replaced === markdown && !/\*\*Status:\*\*/i.test(markdown) ? `${markdown}\n\n${status}` : replaced;
   if (externalUrl && !markdown.includes(externalUrl)) markdown += `\n\n[Open created item](${externalUrl})`;
   return markdown;
+}
+
+function reconcileCompletedArtifactItems(
+  workspace: SynapseWorkspace,
+  selectedNode: SynapseNode,
+  activity: AgentChatToolActivity,
+  excludedNodeId?: string,
+): void {
+  if (!isCompletionMutation(activity)) return;
+  const identifiers = completionItemIdentifiers(activity.input);
+  if (identifiers.length === 0) return;
+  const connectedIds = new Set(connectedNodesByDistance(workspace, [selectedNode.id]).map(({ nodeId }) => nodeId));
+  const now = new Date().toISOString();
+  for (const node of workspace.nodes) {
+    if (node.kind !== "artifact" || node.id === excludedNodeId || !connectedIds.has(node.id)) continue;
+    const content = strikeCompletedMarkdownLines(node.content, identifiers);
+    const summary = strikeCompletedMarkdownLines(node.summary, identifiers);
+    if (content === node.content && summary === node.summary) continue;
+    node.content = content;
+    node.summary = summary;
+    node.updatedAt = now;
+    if (node.autoSize !== false) {
+      node.autoSize = true;
+      node.size = automaticNodeSize(node);
+    }
+  }
+}
+
+function isCompletionMutation(activity: AgentChatToolActivity): boolean {
+  const actionId = activity.actionId?.toLowerCase() ?? "";
+  if (/(?:^|[._-])(?:archive|close|complete|delete|resolve)(?:$|[._-])/u.test(actionId)) return true;
+  return containsCompletionState(activity.input);
+}
+
+function containsCompletionState(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsCompletionState);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, candidate]) => {
+    if (isRecord(candidate) || Array.isArray(candidate)) return containsCompletionState(candidate);
+    if (!/(?:state|status|value)$/iu.test(key) || typeof candidate !== "string") return false;
+    return /^(?:archived|closed|complete|completed|deleted|done|resolved)$/iu.test(candidate.trim());
+  });
+}
+
+function completionItemIdentifiers(value: unknown): string[] {
+  const identifiers = new Set<string>();
+  const collect = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(collect);
+      return;
+    }
+    if (!isRecord(candidate)) return;
+    for (const [key, nested] of Object.entries(candidate)) {
+      if (isRecord(nested) || Array.isArray(nested)) {
+        collect(nested);
+      } else if (/(?:^|[_-])(?:id|key|number)$|(?:Id|ID|Key|Number)$/u.test(key)) {
+        if ((typeof nested === "string" || typeof nested === "number") && String(nested).trim()) {
+          identifiers.add(String(nested).trim());
+        }
+      }
+    }
+  };
+  collect(value);
+  return [...identifiers].sort((left, right) => right.length - left.length);
+}
+
+function strikeCompletedMarkdownLines(markdown: string | undefined, identifiers: string[]): string | undefined {
+  if (!markdown) return markdown;
+  return markdown
+    .split("\n")
+    .map((line) =>
+      identifiers.some((identifier) => markdownLineContainsIdentifier(line, identifier))
+        ? strikeMarkdownLine(line)
+        : line,
+    )
+    .join("\n");
+}
+
+function markdownLineContainsIdentifier(line: string, identifier: string): boolean {
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp("(?:^|[^\\p{L}\\p{N}])" + escaped + "(?=$|[^\\p{L}\\p{N}])", "u").test(line);
+}
+
+function strikeMarkdownLine(line: string): string {
+  if (/^\s*~~.*~~\s*$/u.test(line)) return line;
+  if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+    return line
+      .split("|")
+      .map((cell, index, cells) => {
+        if (index === 0 || index === cells.length - 1 || !cell.trim() || /^\s*:?-+:?\s*$/u.test(cell)) return cell;
+        const match = /^(\s*)(.*?)(\s*)$/u.exec(cell)!;
+        return `${match[1]}~~${match[2]}~~${match[3]}`;
+      })
+      .join("|");
+  }
+  const list = /^(\s*(?:[-*+] |\d+\. ))(.*)$/u.exec(line);
+  return list ? `${list[1]}~~${list[2]}~~` : `~~${line}~~`;
 }
 
 function artifactCandidates(

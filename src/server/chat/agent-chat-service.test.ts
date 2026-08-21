@@ -271,6 +271,45 @@ describe("AgentChatService", () => {
     expect(response.message.content).toContain("confirm");
   });
 
+  it("creates a Flow with a new Synapse canvas destination through Chat", async () => {
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "create_flow",
+        arguments: {
+          name: "Daily canvas digest",
+          status: "active",
+          sourceConnectionId: connection.id,
+          destinationSynapseName: "Daily digest",
+          instructions: "Look up record 42 and publish a concise canvas digest.",
+          trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+          tools: [
+            {
+              actionId: "example.lookup",
+              connectionId: connection.id,
+              role: "source",
+              approval: "inherit",
+            },
+          ],
+          userConfirmedActivation: true,
+        },
+      },
+      { kind: "final", text: "Created the daily canvas digest." },
+    ]);
+    const flows = new FakeFlowService();
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    await service.respond({
+      messages: [{ role: "user", content: "Create a daily Flow and put its result on a new canvas." }],
+    });
+
+    expect(flows.createInputs[0]).toMatchObject({
+      destinationSynapseName: "Daily digest",
+      sourceConnectionId: connection.id,
+    });
+    expect(flows.createInputs[0]?.destinationConnectionId).toBeUndefined();
+  });
+
   it("lists, reads, updates, activates, and deletes Flows through Chat", async () => {
     const flows = new FakeFlowService();
     await flows.create({
@@ -712,7 +751,8 @@ function createFlowDefinition(id: string, input: FlowDefinitionInput): FlowDefin
     name: input.name,
     status: input.status ?? "active",
     sourceConnectionId: input.sourceConnectionId,
-    destinationConnectionId: input.destinationConnectionId,
+    ...(input.destinationConnectionId ? { destinationConnectionId: input.destinationConnectionId } : {}),
+    ...(input.destinationSynapseId ? { destinationSynapseId: input.destinationSynapseId } : {}),
     instructions: input.instructions,
     trigger: input.trigger ?? { type: "manual" },
     agent: {

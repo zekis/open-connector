@@ -413,53 +413,55 @@ function AppShell(props: {
 
   return (
     <div className={isSynapsePage ? "app-shell synapse-shell" : "app-shell"} aria-busy={props.loading}>
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
-          <div>
-            <div className="brand-name">OOMOL Connect</div>
-            <div className="brand-subtitle">{t("brand.subtitle")}</div>
+      {!isSynapsePage ? (
+        <aside className="sidebar">
+          <div className="brand">
+            <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
+            <div>
+              <div className="brand-name">OOMOL Connect</div>
+              <div className="brand-subtitle">{t("brand.subtitle")}</div>
+            </div>
           </div>
-        </div>
 
-        <nav className="sidebar-nav" aria-label={t("shell.primaryNav")}>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.path}
-                className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
-                to={item.path}
-              >
-                <Icon size={16} />
-                <span>{t(item.labelKey)}</span>
-                {item.path === "/approvals" && pendingApprovalCount > 0 ? (
-                  <strong className="nav-count">{pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}</strong>
-                ) : null}
-              </NavLink>
-            );
-          })}
-        </nav>
+          <nav className="sidebar-nav" aria-label={t("shell.primaryNav")}>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <NavLink
+                  key={item.path}
+                  className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+                  to={item.path}
+                >
+                  <Icon size={16} />
+                  <span>{t(item.labelKey)}</span>
+                  {item.path === "/approvals" && pendingApprovalCount > 0 ? (
+                    <strong className="nav-count">{pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}</strong>
+                  ) : null}
+                </NavLink>
+              );
+            })}
+          </nav>
 
-        <div className="sidebar-footer">
-          <LanguageSelect />
-          <ThemeControl theme={props.theme} onThemeChange={props.onThemeChange} />
-          <div className="runtime-status">
-            <StatusDot ok={!props.error} />
-            <span>{props.error ? t("common.apiUnavailable") : t("common.runtimeReady")}</span>
-          </div>
-          <div className="button-row tight">
-            <Button variant="outline" size="icon-sm" onClick={props.onRefresh} aria-label={t("shell.refreshData")}>
-              {props.loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-            </Button>
-            {props.showLogout ? (
-              <Button variant="outline" size="sm" onClick={props.onLogout}>
-                {t("shell.logout")}
+          <div className="sidebar-footer">
+            <LanguageSelect />
+            <ThemeControl theme={props.theme} onThemeChange={props.onThemeChange} />
+            <div className="runtime-status">
+              <StatusDot ok={!props.error} />
+              <span>{props.error ? t("common.apiUnavailable") : t("common.runtimeReady")}</span>
+            </div>
+            <div className="button-row tight">
+              <Button variant="outline" size="icon-sm" onClick={props.onRefresh} aria-label={t("shell.refreshData")}>
+                {props.loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
               </Button>
-            ) : null}
+              {props.showLogout ? (
+                <Button variant="outline" size="sm" onClick={props.onLogout}>
+                  {t("shell.logout")}
+                </Button>
+              ) : null}
+            </div>
           </div>
-        </div>
-      </aside>
+        </aside>
+      ) : null}
 
       <div
         className={

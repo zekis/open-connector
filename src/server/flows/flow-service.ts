@@ -2,6 +2,7 @@ import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionService, ConnectionSummary } from "../../connection-service.ts";
 import type { AgentCredentialService } from "../agents/agent-credential-service.ts";
 import type { AgentSettingsService } from "../agents/agent-settings-service.ts";
+import type { SynapseService } from "../synapse/synapse-service.ts";
 import type {
   FlowApprovalSetting,
   FlowConnectionRole,
@@ -26,6 +27,7 @@ export interface FlowServiceOptions {
   connections: Pick<ConnectionService, "listConnections">;
   agents?: Pick<AgentCredentialService, "getSummaryById">;
   agentSettings?: Pick<AgentSettingsService, "get">;
+  synapses?: Pick<SynapseService, "create" | "get">;
   store: IFlowStore;
 }
 
@@ -59,6 +61,8 @@ export class FlowService {
     const flow: FlowDefinition = {
       ...current,
       ...normalized,
+      destinationConnectionId: normalized.destinationConnectionId,
+      destinationSynapseId: normalized.destinationSynapseId,
       revision: crypto.randomUUID(),
       updatedAt: new Date().toISOString(),
     };
@@ -131,10 +135,20 @@ export class FlowService {
     const name = requiredText(value.name, "name", 120);
     const instructions = requiredText(value.instructions, "instructions", 20_000);
     const sourceConnectionId = requiredText(value.sourceConnectionId, "sourceConnectionId", 200);
-    const destinationConnectionId = requiredText(value.destinationConnectionId, "destinationConnectionId", 200);
+    const destinationConnectionId = optionalText(value.destinationConnectionId, "destinationConnectionId", 200);
+    const requestedSynapseId = optionalText(value.destinationSynapseId, "destinationSynapseId", 200);
+    const destinationSynapseName = optionalText(value.destinationSynapseName, "destinationSynapseName", 120);
+    if ([destinationConnectionId, requestedSynapseId, destinationSynapseName].filter(Boolean).length !== 1) {
+      throw new FlowError(
+        "invalid_flow",
+        "Set exactly one of destinationConnectionId, destinationSynapseId, or destinationSynapseName.",
+      );
+    }
     const connections = await this.connectionMap();
     const source = requiredConnection(connections, sourceConnectionId, "sourceConnectionId");
-    const destination = requiredConnection(connections, destinationConnectionId, "destinationConnectionId");
+    const destination = destinationConnectionId
+      ? requiredConnection(connections, destinationConnectionId, "destinationConnectionId")
+      : undefined;
     const agentInput = requiredObject(value.agent, "agent");
     const agentProvider = readAgentProvider(agentInput.provider);
     const agentConnectionId = requiredText(agentInput.connectionId, "agent.connectionId", 200);
@@ -145,11 +159,13 @@ export class FlowService {
 
     const tools = this.normalizeTools(value.tools, connections, source, destination);
     const trigger = this.normalizeTrigger(value.trigger, source);
+    const destinationSynapseId = await this.resolveDestinationSynapse(requestedSynapseId, destinationSynapseName);
     return {
       name,
       status: readStatus(value.status),
       sourceConnectionId,
-      destinationConnectionId,
+      ...(destinationConnectionId ? { destinationConnectionId } : {}),
+      ...(destinationSynapseId ? { destinationSynapseId } : {}),
       instructions,
       trigger,
       agent: {
@@ -243,7 +259,7 @@ export class FlowService {
     input: unknown,
     connections: Map<string, ConnectionSummary>,
     source: ConnectionSummary,
-    destination: ConnectionSummary,
+    destination: ConnectionSummary | undefined,
   ): FlowToolGrant[] {
     if (!Array.isArray(input) || input.length === 0) {
       throw new FlowError("invalid_flow", "tools must contain at least one tool grant.");
@@ -270,6 +286,9 @@ export class FlowService {
         throw new FlowError("invalid_flow", `Action does not expose an object input schema: ${actionId}.`);
       }
       const endpoint = role === "source" ? source : destination;
+      if (!endpoint) {
+        throw new FlowError("invalid_flow", "Synapse destination Flows can grant source connector tools only.");
+      }
       if (connectionId !== endpoint.id) {
         throw new FlowError("invalid_flow", `Tool ${actionId} does not use the Flow ${role} connection.`);
       }
@@ -288,6 +307,24 @@ export class FlowService {
 
   private async connectionMap(): Promise<Map<string, ConnectionSummary>> {
     return new Map((await this.options.connections.listConnections()).map((connection) => [connection.id, connection]));
+  }
+
+  private async resolveDestinationSynapse(
+    requestedId: string | undefined,
+    requestedName: string | undefined,
+  ): Promise<string | undefined> {
+    if (!requestedId && !requestedName) return undefined;
+    if (!this.options.synapses) {
+      throw new FlowError("invalid_flow", "Synapse canvas destinations are unavailable in this runtime.");
+    }
+    if (requestedId) {
+      try {
+        return (await this.options.synapses.get(requestedId)).id;
+      } catch {
+        throw new FlowError("invalid_flow", `Synapse canvas not found: ${requestedId}.`);
+      }
+    }
+    return (await this.options.synapses.create({ name: requestedName })).id;
   }
 }
 
@@ -353,7 +390,7 @@ function readToolRole(
   value: unknown,
   connectionId: string,
   source: ConnectionSummary,
-  destination: ConnectionSummary,
+  destination: ConnectionSummary | undefined,
   index: number,
 ): FlowConnectionRole {
   if (value === "source" || value === "destination") {
@@ -361,6 +398,10 @@ function readToolRole(
   }
   if (value !== undefined) {
     throw new FlowError("invalid_flow", `tools[${index}].role must be source or destination.`);
+  }
+  if (!destination) {
+    if (connectionId === source.id) return "source";
+    throw new FlowError("invalid_flow", `tools[${index}] must use the source connection for a Synapse destination.`);
   }
   if (source.id === destination.id) {
     throw new FlowError(

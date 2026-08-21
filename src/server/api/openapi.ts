@@ -1166,10 +1166,10 @@ function flowAgentProperties(): Record<string, JsonSchema> {
 }
 
 function createFlowDefinitionInputSchema(): JsonSchema {
-  return jsonSchema.object(flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentInput" }), {
-    required: ["name", "sourceConnectionId", "destinationConnectionId", "instructions", "agent", "tools"],
+  return jsonSchema.object(flowDefinitionProperties({ $ref: "#/components/schemas/FlowAgentInput" }, true), {
+    required: ["name", "sourceConnectionId", "instructions", "agent", "tools"],
     description:
-      "Complete set of editable Flow fields. POST creates a Flow and PUT replaces the editable fields of an existing Flow.",
+      "Complete set of editable Flow fields. Set exactly one destinationConnectionId, destinationSynapseId, or destinationSynapseName. POST creates a Flow and PUT replaces the editable fields of an existing Flow.",
   });
 }
 
@@ -1189,7 +1189,6 @@ function createFlowDefinitionSchema(): JsonSchema {
         "name",
         "status",
         "sourceConnectionId",
-        "destinationConnectionId",
         "instructions",
         "trigger",
         "agent",
@@ -1203,12 +1202,15 @@ function createFlowDefinitionSchema(): JsonSchema {
   );
 }
 
-function flowDefinitionProperties(agent: JsonSchema): Record<string, JsonSchema> {
-  return {
+function flowDefinitionProperties(agent: JsonSchema, acceptsNewSynapse = false): Record<string, JsonSchema> {
+  const properties: Record<string, JsonSchema> = {
     name: jsonSchema.nonWhitespaceString("User-facing Flow name.", { maxLength: 120 }),
     status: jsonSchema.stringEnum("Flow availability. Defaults to active when omitted.", ["active", "paused"]),
     sourceConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow reads from.", { maxLength: 200 }),
     destinationConnectionId: jsonSchema.nonWhitespaceString("Connection the Flow writes to.", {
+      maxLength: 200,
+    }),
+    destinationSynapseId: jsonSchema.nonWhitespaceString("Synapse canvas where the Flow publishes its final result.", {
       maxLength: 200,
     }),
     instructions: jsonSchema.nonWhitespaceString("Instructions given to the Flow agent.", { maxLength: 20_000 }),
@@ -1222,6 +1224,13 @@ function flowDefinitionProperties(agent: JsonSchema): Record<string, JsonSchema>
       description: `Maximum connector tool calls for one Flow run. Defaults to ${defaultFlowMaxSteps} when omitted.`,
     }),
   };
+  if (acceptsNewSynapse) {
+    properties.destinationSynapseName = jsonSchema.nonWhitespaceString(
+      "Creates a new Synapse canvas with this name and uses it as the Flow destination.",
+      { maxLength: 120 },
+    );
+  }
+  return properties;
 }
 
 function createTransitFilesPath(): Record<string, unknown> {

@@ -6,6 +6,7 @@ import type { IActionRunner } from "../actions/action-runner.ts";
 import type { AgentSettingsService } from "../agents/agent-settings-service.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { Logger } from "../logger.ts";
+import type { SynapseService } from "../synapse/synapse-service.ts";
 import type {
   FlowAgentFunctionCall,
   FlowAgentHistoryItem,
@@ -52,6 +53,7 @@ export interface FlowRunnerOptions {
   actions: IActionRunner;
   agentSettings?: Pick<AgentSettingsService, "get">;
   connectionApprovals?: Pick<ConnectionApprovalService, "getApprovalMode">;
+  synapses?: Pick<SynapseService, "addNode">;
   claudeCodeAgent?: IFlowAgent;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
   logger?: Logger;
@@ -332,6 +334,7 @@ export class FlowRunner {
       });
 
       if (!turn.functionCall) {
+        await this.publishSynapseDestination(flow, run, turn.text);
         await this.updateRun(run, {
           status: "completed",
           completedAt: new Date().toISOString(),
@@ -400,13 +403,15 @@ export class FlowRunner {
 
   private async createToolBindings(flow: FlowDefinition): Promise<FlowToolBinding[]> {
     const source = await this.requiredConnection(flow.sourceConnectionId);
-    const destination = await this.requiredConnection(flow.destinationConnectionId);
+    const destination = flow.destinationConnectionId
+      ? await this.requiredConnection(flow.destinationConnectionId)
+      : undefined;
     return await Promise.all(
       flow.tools.map(async (grant, index) => {
         const action = this.options.catalog.actionsById.get(grant.actionId);
         const role = flowToolRole(flow, grant);
         const connection = role === "source" ? source : destination;
-        if (!action || grant.connectionId !== connection.id) {
+        if (!action || !connection || grant.connectionId !== connection.id) {
           throw new FlowError("invalid_flow", `Flow tool is no longer available: ${grant.actionId}.`);
         }
         return {
@@ -426,6 +431,25 @@ export class FlowRunner {
         };
       }),
     );
+  }
+
+  private async publishSynapseDestination(
+    flow: FlowDefinition,
+    run: FlowRun,
+    finalOutput: string | undefined,
+  ): Promise<void> {
+    if (!flow.destinationSynapseId) return;
+    if (!this.options.synapses) {
+      throw new FlowError("synapse_unavailable", "Synapse canvas destinations are unavailable in this runtime.");
+    }
+    await this.options.synapses.addNode(flow.destinationSynapseId, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: flow.name,
+      summary: `Completed Flow run ${run.id}.`,
+      content: finalOutput?.trim() || "Flow completed without a written summary.",
+      position: { x: 0, y: 0 },
+    });
   }
 
   private async requiredConnection(id: string): Promise<ConnectionSummary> {
@@ -533,7 +557,10 @@ function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding
         `- ${binding.agentTool.name}: ${binding.action.id} on ${flowToolRole(flow, binding.grant)}; approval policy ${binding.approval}${binding.grant.approval === "inherit" ? " (inherited from connector settings)" : " (Flow override)"}.`,
     )
     .join("\n");
-  return `Role: Execute a one-way synchronization from the source connection to the destination connection.
+  const destination = flow.destinationSynapseId
+    ? `the Synapse canvas ${flow.destinationSynapseId}. Your final response is published there automatically; do not create a duplicate canvas card`
+    : "the destination connection";
+  return `Role: Execute a one-way synchronization from the source connection to ${destination}.
 
 Authoritative Flow instructions:
 <flow_instructions>
@@ -545,7 +572,7 @@ Goal: Complete the authoritative Flow instructions exactly using only the suppli
 Success criteria:
 - inspect the source data needed for this run
 - apply every selection, filtering, destination, naming, and content requirement in the Flow instructions
-- make only the requested destination changes
+- make only the requested destination changes${flow.destinationSynapseId ? "; for a Synapse destination, return the complete canvas-ready result in your final response" : ""}
 - return a concise summary of completed work and any blockers
 
 Constraints:

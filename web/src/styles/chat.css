@@ -634,8 +634,14 @@
   gap: 6px;
 }
 
+.chat-approval-group {
+  display: grid;
+  gap: 6px;
+}
+
 .chat-approval-request {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   padding: 10px;
@@ -651,7 +657,6 @@
 
 .chat-approval-request > span {
   display: grid;
-  flex: 1;
   gap: 2px;
   min-width: 0;
 }
@@ -667,10 +672,71 @@
 
 .chat-approval-actions {
   display: flex;
-  flex: none;
+  grid-column: 1 / -1;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.chat-approval-items {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 5px;
+  margin: 2px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-approval-items li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklab, var(--warning) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+}
+
+.chat-approval-items li > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-approval-items li > span strong,
+.chat-approval-items li > span small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-approval-items li > div {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.chat-approval-payloads {
+  grid-column: 1 / -1;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in oklab, var(--warning) 22%, var(--border));
+}
+
+.chat-approval-payloads > summary {
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.chat-approval-payloads > .chat-tool-detail {
+  margin-top: 8px;
+  padding: 8px 0 0;
+  border-top-color: color-mix(in oklab, var(--warning) 18%, var(--border));
+}
+
+.chat-approval-payloads .chat-tool-detail-grouped section > header > svg {
+  color: var(--warning);
 }
 
 .chat-tool-call {
@@ -686,6 +752,51 @@
 
 .chat-tool-call.pending {
   border-color: color-mix(in oklab, var(--warning) 40%, var(--border));
+}
+
+.chat-tool-call.grouped summary small {
+  margin-left: auto;
+}
+
+.chat-tool-detail-grouped {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-tool-detail-grouped > section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-tool-detail-grouped > section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.chat-tool-detail-grouped section > header {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.chat-tool-detail-grouped section > header > svg {
+  flex: none;
+  color: var(--success);
+}
+
+.chat-tool-detail-grouped section > header > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tool-detail-grouped section > header > small {
+  margin-left: auto;
+  color: var(--muted-foreground);
 }
 
 .chat-tool-call summary {

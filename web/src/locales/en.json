@@ -97,7 +97,7 @@
       },
       "flows": {
         "title": "Flows",
-        "subtitle": "Run focused agent synchronizations between two connections."
+        "subtitle": "Run focused agent synchronizations into a connector or Synapse canvas."
       },
       "triggers": {
         "title": "Triggers",

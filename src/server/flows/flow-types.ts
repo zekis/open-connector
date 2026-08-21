@@ -72,16 +72,15 @@ export interface FlowToolGrant {
 export const defaultFlowMaxSteps = 20;
 export const maximumFlowMaxSteps = 50;
 
-/**
- * Durable definition for one directional, two-connection agent flow.
- */
+/** Durable definition for one directional agent flow into a connector or Synapse canvas. */
 export interface FlowDefinition {
   id: string;
   revision: string;
   name: string;
   status: FlowStatus;
   sourceConnectionId: string;
-  destinationConnectionId: string;
+  destinationConnectionId?: string;
+  destinationSynapseId?: string;
   instructions: string;
   trigger: FlowTrigger;
   agent: FlowAgentConfig;
@@ -95,7 +94,10 @@ export interface FlowDefinitionInput {
   name: string;
   status?: FlowStatus;
   sourceConnectionId: string;
-  destinationConnectionId: string;
+  destinationConnectionId?: string;
+  destinationSynapseId?: string;
+  /** Creates a Synapse canvas and stores its resolved ID on the Flow. */
+  destinationSynapseName?: string;
   instructions: string;
   trigger?: FlowTrigger;
   agent: Pick<FlowAgentConfig, "connectionId"> & Partial<Pick<FlowAgentConfig, "provider" | "reasoningEffort">>;

@@ -7,13 +7,14 @@ import type {
   FlowTrigger,
   FlowToolGrant,
   ProviderDefinition,
+  SynapseWorkspaceSummary,
 } from "./model";
 import type { FormEvent, ReactNode } from "react";
 
-import { ArrowLeft, ArrowRight, Cable, Clock3, Workflow } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, BrainCircuit, Cable, Clock3, Workflow } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { apiPost, apiPut } from "./api";
+import { apiGet, apiPost, apiPut } from "./api";
 import { FlowConnectionPicker, flowConnectionDisplayName } from "./flow-connection-picker";
 import { FlowToolPermissionGroup } from "./flow-tool-permission-group";
 import { Badge, EmptyState, InlineError, ProviderIcon } from "./shared-ui";
@@ -39,7 +40,9 @@ interface FlowDraft {
   name: string;
   status: "active" | "paused";
   sourceConnectionId: string;
-  destinationConnectionId: string;
+  destinationConnectionId?: string;
+  destinationSynapseId?: string;
+  destinationSynapseName?: string;
   instructions: string;
   trigger: FlowTrigger;
   agent: {
@@ -50,6 +53,8 @@ interface FlowDraft {
   tools: FlowToolGrant[];
   maxSteps: number;
 }
+
+type FlowDestinationKind = "connection" | "existing_synapse" | "new_synapse";
 
 export function FlowBuilderPage(props: FlowBuilderPageProps): ReactNode {
   const { flowId } = useParams();
@@ -94,6 +99,12 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const [destinationId, setDestinationId] = useState(
     props.flow?.destinationConnectionId ?? connections[1]?.id ?? connections[0]?.id ?? "",
   );
+  const [destinationKind, setDestinationKind] = useState<FlowDestinationKind>(
+    props.flow?.destinationSynapseId ? "existing_synapse" : "connection",
+  );
+  const [destinationSynapseId, setDestinationSynapseId] = useState(props.flow?.destinationSynapseId ?? "");
+  const [destinationSynapseName, setDestinationSynapseName] = useState("");
+  const [synapses, setSynapses] = useState<SynapseWorkspaceSummary[]>([]);
   const [agentConnectionId, setAgentConnectionId] = useState(
     props.flow?.agent.connectionId ?? agentChoices[0]?.id ?? "",
   );
@@ -111,9 +122,23 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    void apiGet<SynapseWorkspaceSummary[]>("/api/synapses")
+      .then((items) => {
+        if (!active) return;
+        setSynapses(items);
+        setDestinationSynapseId((current) => current || items[0]?.id || "");
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const choices = useMemo(
-    () => createToolChoices(props.data, sourceId, destinationId),
-    [props.data, sourceId, destinationId],
+    () => createToolChoices(props.data, sourceId, destinationKind === "connection" ? destinationId : undefined),
+    [props.data, sourceId, destinationId, destinationKind],
   );
   const visibleChoices = choices.filter((choice) => {
     const query = toolSearch.trim().toLowerCase();
@@ -151,6 +176,12 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const trigger: FlowTrigger = sourceChangedWithConnectorTrigger
     ? { type: "manual" }
     : (props.flow?.trigger ?? { type: "manual" });
+  const destinationReady =
+    destinationKind === "connection"
+      ? Boolean(destinationId)
+      : destinationKind === "existing_synapse"
+        ? Boolean(destinationSynapseId)
+        : Boolean(destinationSynapseName.trim());
 
   function toggleTool(key: string, enabled: boolean): void {
     setSelectedTools((current) => {
@@ -176,7 +207,9 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
       name,
       status: props.flow?.status ?? "active",
       sourceConnectionId: sourceId,
-      destinationConnectionId: destinationId,
+      ...(destinationKind === "connection" ? { destinationConnectionId: destinationId } : {}),
+      ...(destinationKind === "existing_synapse" ? { destinationSynapseId } : {}),
+      ...(destinationKind === "new_synapse" ? { destinationSynapseName: destinationSynapseName.trim() } : {}),
       instructions,
       trigger,
       agent: {
@@ -215,7 +248,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
         <div className="flow-builder-heading">
           <div>
             <h2>{props.flow ? `Edit ${props.flow.name}` : "Create a Flow"}</h2>
-            <p>Choose exactly two endpoints, then expose only the tools this agent needs.</p>
+            <p>Choose a source and a connector or canvas destination, then expose only the tools this agent needs.</p>
           </div>
           <Badge>{grants.length} tools</Badge>
         </div>
@@ -274,14 +307,20 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               </Label>
             </section>
             <FlowDirection label="Write" />
-            <ConnectionNode
-              role="destination"
-              value={destinationId}
+            <DestinationNode
+              kind={destinationKind}
+              connectionId={destinationId}
               connection={destinationConnection}
               provider={destinationProvider}
               connections={connections}
               providers={props.data.providers}
-              onChange={setDestinationId}
+              synapses={synapses}
+              synapseId={destinationSynapseId}
+              synapseName={destinationSynapseName}
+              onKindChange={setDestinationKind}
+              onConnectionChange={setDestinationId}
+              onSynapseChange={setDestinationSynapseId}
+              onSynapseNameChange={setDestinationSynapseName}
             />
           </div>
           <section className="flow-trigger-editor flow-trigger-handoff">
@@ -338,16 +377,26 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               onToggle={toggleTool}
               onApprovalChange={changeApproval}
             />
-            <FlowToolPermissionGroup
-              role="destination"
-              connection={destinationConnection}
-              provider={destinationProvider}
-              choices={destinationChoices}
-              visibleChoices={visibleDestinationChoices}
-              selectedTools={selectedTools}
-              onToggle={toggleTool}
-              onApprovalChange={changeApproval}
-            />
+            {destinationKind === "connection" ? (
+              <FlowToolPermissionGroup
+                role="destination"
+                connection={destinationConnection}
+                provider={destinationProvider}
+                choices={destinationChoices}
+                visibleChoices={visibleDestinationChoices}
+                selectedTools={selectedTools}
+                onToggle={toggleTool}
+                onApprovalChange={changeApproval}
+              />
+            ) : (
+              <section className="flow-canvas-permission-summary">
+                <BrainCircuit size={20} />
+                <div>
+                  <strong>Canvas destination</strong>
+                  <p>The agent’s final result is added to the selected Synapse canvas as a new note card.</p>
+                </div>
+              </section>
+            )}
           </div>
           <div className="button-row">
             <Button
@@ -357,7 +406,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
                 connections.length < 1 ||
                 !agentConnectionId ||
                 !sourceId ||
-                !destinationId ||
+                !destinationReady ||
                 grants.length === 0
               }
             >
@@ -413,6 +462,111 @@ function ConnectionNode(props: {
   );
 }
 
+function DestinationNode(props: {
+  kind: FlowDestinationKind;
+  connectionId: string;
+  connection: (ConnectionRecord & { id: string }) | undefined;
+  provider: ProviderDefinition | undefined;
+  connections: Array<ConnectionRecord & { id: string }>;
+  providers: ProviderDefinition[];
+  synapses: SynapseWorkspaceSummary[];
+  synapseId: string;
+  synapseName: string;
+  onKindChange(value: FlowDestinationKind): void;
+  onConnectionChange(value: string): void;
+  onSynapseChange(value: string): void;
+  onSynapseNameChange(value: string): void;
+}): ReactNode {
+  const synapse = props.synapses.find((item) => item.id === props.synapseId);
+  const title =
+    props.kind === "connection"
+      ? props.connection
+        ? flowConnectionDisplayName(props.connection)
+        : "Choose a connection"
+      : props.kind === "existing_synapse"
+        ? (synapse?.name ?? (props.synapseId ? "Existing canvas" : "Choose a canvas"))
+        : props.synapseName.trim() || "Name a new canvas";
+
+  return (
+    <section className="flow-connector-node destination">
+      <div className="flow-connector-heading">
+        {props.kind === "connection" && props.provider ? (
+          <ProviderIcon provider={props.provider} large />
+        ) : (
+          <span className="flow-connector-placeholder flow-canvas-placeholder" aria-hidden="true">
+            {props.kind === "connection" ? <Cable size={20} /> : <BrainCircuit size={20} />}
+          </span>
+        )}
+        <div>
+          <span>{props.kind === "connection" ? "Destination connector" : "Destination canvas"}</span>
+          <strong>{title}</strong>
+          <small>
+            {props.kind === "connection" ? (props.provider?.displayName ?? "Connected application") : "Synapse canvas"}
+          </small>
+        </div>
+      </div>
+      <div className="flow-destination-fields">
+        <Label className="field">
+          <span>Destination type</span>
+          <select
+            className="flow-native-select flow-connection-select"
+            aria-label="Destination type"
+            value={props.kind}
+            onChange={(event) => props.onKindChange(event.target.value as FlowDestinationKind)}
+          >
+            <option value="connection">Connector</option>
+            <option value="existing_synapse">Existing canvas</option>
+            <option value="new_synapse">New canvas</option>
+          </select>
+        </Label>
+        {props.kind === "connection" ? (
+          <div className="field">
+            <span>Connection</span>
+            <FlowConnectionPicker
+              role="destination"
+              value={props.connectionId}
+              connections={props.connections}
+              providers={props.providers}
+              onChange={props.onConnectionChange}
+            />
+          </div>
+        ) : props.kind === "existing_synapse" ? (
+          <Label className="field">
+            <span>Canvas</span>
+            <select
+              className="flow-native-select flow-connection-select"
+              value={props.synapseId}
+              onChange={(event) => props.onSynapseChange(event.target.value)}
+              required
+            >
+              <option value="">Choose a canvas</option>
+              {props.synapseId && !synapse ? (
+                <option value={props.synapseId}>Current canvas · {props.synapseId}</option>
+              ) : null}
+              {props.synapses.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {item.nodeCount} nodes
+                </option>
+              ))}
+            </select>
+          </Label>
+        ) : (
+          <Label className="field">
+            <span>Canvas name</span>
+            <Input
+              value={props.synapseName}
+              maxLength={120}
+              placeholder="Daily operations digest"
+              onChange={(event) => props.onSynapseNameChange(event.target.value)}
+              required
+            />
+          </Label>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function FlowDirection(props: { label: string }): ReactNode {
   return (
     <div className="flow-direction" aria-label={`${props.label} flow direction`}>
@@ -450,10 +604,14 @@ function AgentSelect(props: { value: string; choices: AgentChoice[]; onChange(ch
   );
 }
 
-function createToolChoices(data: AppData, sourceId: string, destinationId: string): FlowToolPermissionChoice[] {
+function createToolChoices(
+  data: AppData,
+  sourceId: string,
+  destinationId: string | undefined,
+): FlowToolPermissionChoice[] {
   return [
     ...choicesForConnection(data, sourceId, "source"),
-    ...choicesForConnection(data, destinationId, "destination"),
+    ...(destinationId ? choicesForConnection(data, destinationId, "destination") : []),
   ];
 }
 

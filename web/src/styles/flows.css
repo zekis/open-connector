@@ -96,6 +96,38 @@
   border-top: 3px solid var(--success);
 }
 
+.flow-canvas-placeholder {
+  color: var(--success);
+}
+
+.flow-destination-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.flow-canvas-permission-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 150px;
+  padding: 18px;
+  border: 1px solid color-mix(in oklab, var(--success) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--success) 6%, var(--card));
+}
+
+.flow-canvas-permission-summary svg {
+  flex: 0 0 auto;
+  color: var(--success);
+}
+
+.flow-canvas-permission-summary p {
+  margin: 5px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .flow-connector-heading,
 .flow-instruction-heading {
   display: flex;

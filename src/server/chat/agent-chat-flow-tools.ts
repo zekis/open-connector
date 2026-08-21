@@ -84,7 +84,13 @@ const editableFlowProperties = {
   name: { type: "string", maxLength: 120 },
   status: { type: "string", enum: ["active", "paused"] },
   sourceConnectionId: { type: "string" },
-  destinationConnectionId: { type: "string" },
+  destinationConnectionId: { type: "string", description: "Existing connector destination." },
+  destinationSynapseId: { type: "string", description: "Existing Synapse canvas destination." },
+  destinationSynapseName: {
+    type: "string",
+    maxLength: 120,
+    description: "Name for a new Synapse canvas destination. OOMOL Connect creates it with the Flow.",
+  },
   instructions: { type: "string", maxLength: 20_000 },
   trigger: flowTriggerSchema,
   tools: { type: "array", minItems: 1, maxItems: 32, items: flowToolGrantSchema },
@@ -108,7 +114,7 @@ export const agentChatFlowTools: AgentChatExtensionTool[] = [
   {
     name: createFlowToolName,
     description:
-      "Create an OOMOL Connect Flow. Scheduling is supplied by OOMOL Connect through trigger.type schedule; it is not a connected-app action. Active Flows require explicit user authorization.",
+      "Create an OOMOL Connect Flow into a connector, an existing Synapse canvas, or a newly created canvas. Set exactly one destination field. Scheduling is supplied by OOMOL Connect through trigger.type schedule; it is not a connected-app action. Active Flows require explicit user authorization.",
     inputSchema: objectSchema(
       {
         ...editableFlowProperties,
@@ -118,16 +124,7 @@ export const agentChatFlowTools: AgentChatExtensionTool[] = [
             "True only when the latest user message explicitly authorizes creating this exact active persistent automation. A direct request to create and run a recurring Flow counts as confirmation.",
         },
       },
-      [
-        "name",
-        "status",
-        "sourceConnectionId",
-        "destinationConnectionId",
-        "instructions",
-        "trigger",
-        "tools",
-        "userConfirmedActivation",
-      ],
+      ["name", "status", "sourceConnectionId", "instructions", "trigger", "tools", "userConfirmedActivation"],
     ),
   },
   {
@@ -216,6 +213,7 @@ async function listFlows(
     status: flow.status,
     sourceConnectionId: flow.sourceConnectionId,
     destinationConnectionId: flow.destinationConnectionId,
+    destinationSynapseId: flow.destinationSynapseId,
     trigger: flow.trigger,
     updatedAt: flow.updatedAt,
   }));
@@ -316,7 +314,9 @@ function readFlowFields(input: Record<string, unknown>): Omit<FlowDefinitionInpu
   return {
     name: input.name as string,
     sourceConnectionId: input.sourceConnectionId as string,
-    destinationConnectionId: input.destinationConnectionId as string,
+    destinationConnectionId: input.destinationConnectionId as string | undefined,
+    destinationSynapseId: input.destinationSynapseId as string | undefined,
+    destinationSynapseName: input.destinationSynapseName as string | undefined,
     instructions: input.instructions as string,
     trigger: input.trigger as FlowDefinitionInput["trigger"],
     tools: input.tools as FlowDefinitionInput["tools"],
@@ -325,15 +325,29 @@ function readFlowFields(input: Record<string, unknown>): Omit<FlowDefinitionInpu
 }
 
 function mergeFlowInput(current: FlowDefinition, changes: Record<string, unknown>): FlowDefinitionInput {
+  const destinationChanged = ["destinationConnectionId", "destinationSynapseId", "destinationSynapseName"].some((key) =>
+    Object.hasOwn(changes, key),
+  );
+  const destination = destinationChanged
+    ? {
+        ...(changes.destinationConnectionId !== undefined
+          ? { destinationConnectionId: changes.destinationConnectionId as string }
+          : {}),
+        ...(changes.destinationSynapseId !== undefined
+          ? { destinationSynapseId: changes.destinationSynapseId as string }
+          : {}),
+        ...(changes.destinationSynapseName !== undefined
+          ? { destinationSynapseName: changes.destinationSynapseName as string }
+          : {}),
+      }
+    : current.destinationConnectionId
+      ? { destinationConnectionId: current.destinationConnectionId }
+      : { destinationSynapseId: current.destinationSynapseId };
   return {
     name: changedValue(changes, "name", current.name) as string,
     status: changedValue(changes, "status", current.status) as FlowStatus,
     sourceConnectionId: changedValue(changes, "sourceConnectionId", current.sourceConnectionId) as string,
-    destinationConnectionId: changedValue(
-      changes,
-      "destinationConnectionId",
-      current.destinationConnectionId,
-    ) as string,
+    ...destination,
     instructions: changedValue(changes, "instructions", current.instructions) as string,
     trigger: changedValue(changes, "trigger", current.trigger) as FlowDefinitionInput["trigger"],
     agent: {

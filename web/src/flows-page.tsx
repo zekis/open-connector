@@ -5,6 +5,7 @@ import {
   AlarmClock,
   ArrowRight,
   Braces,
+  BrainCircuit,
   Cable,
   CirclePlay,
   FilePlus2,
@@ -69,7 +70,7 @@ export function FlowsPage(props: FlowsPageProps): ReactNode {
     <div className="flows-page">
       <div className="flows-toolbar">
         <div>
-          <strong>Two connections. One direction. One agent.</strong>
+          <strong>One source. One destination. One agent.</strong>
           <p>Select a Flow to run it or open its dedicated builder to make changes.</p>
         </div>
         <Button asChild>
@@ -160,7 +161,12 @@ function FlowCard(props: {
           <ArrowRight size={16} />
           <span />
         </div>
-        <FlowEndpoint role="destination" connection={destination} provider={destinationProvider} />
+        <FlowEndpoint
+          role="destination"
+          connection={destination}
+          provider={destinationProvider}
+          synapseId={props.flow.destinationSynapseId}
+        />
       </div>
       <div className="flow-card-meta">
         <FlowTriggerBadge flow={props.flow} sourceProvider={sourceProvider} />
@@ -279,15 +285,26 @@ function FlowEndpoint(props: {
   role: "source" | "destination";
   connection: ConnectionRecord | undefined;
   provider: ProviderDefinition | undefined;
+  synapseId?: string;
 }): ReactNode {
   const roleLabel = props.role === "source" ? "Source" : "Destination";
-  const providerName = props.provider?.displayName ?? props.connection?.service ?? `Missing ${props.role}`;
-  const connectionName = props.connection ? connectionDisplayName(props.connection) : "Choose a connection to repair";
+  const providerName = props.synapseId
+    ? "Synapse canvas"
+    : (props.provider?.displayName ?? props.connection?.service ?? `Missing ${props.role}`);
+  const connectionName = props.synapseId
+    ? props.synapseId
+    : props.connection
+      ? connectionDisplayName(props.connection)
+      : "Choose a connection to repair";
 
   return (
     <div className={`flow-endpoint ${props.role}`} title={`${providerName} · ${connectionName}`}>
       <div className="flow-endpoint-icon">
-        {props.provider ? (
+        {props.synapseId ? (
+          <span className="flow-endpoint-icon-fallback">
+            <BrainCircuit size={20} />
+          </span>
+        ) : props.provider ? (
           <ProviderIcon provider={props.provider} large />
         ) : (
           <span className="flow-endpoint-icon-fallback">

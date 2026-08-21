@@ -164,20 +164,20 @@ describe("action execution OpenAPI", () => {
     expect(flowPath.put.responses["404"]).toBeDefined();
     expect(flowPath.put.description).toContain("Replaces all editable fields");
     expect(input.required).toEqual(
-      expect.arrayContaining([
-        "name",
-        "sourceConnectionId",
-        "destinationConnectionId",
-        "instructions",
-        "agent",
-        "tools",
-      ]),
+      expect.arrayContaining(["name", "sourceConnectionId", "instructions", "agent", "tools"]),
     );
+    expect(input.required).not.toContain("destinationConnectionId");
+    expect(input.properties).toHaveProperty("destinationConnectionId");
+    expect(input.properties).toHaveProperty("destinationSynapseId");
+    expect(input.properties).toHaveProperty("destinationSynapseName");
     expect(input.properties).not.toHaveProperty("model");
     expect(agent.required).toEqual(["connectionId"]);
     expect(agent.properties).not.toHaveProperty("model");
     expect(definition.required).toEqual(expect.arrayContaining(["id", "revision", "createdAt", "updatedAt"]));
     expect(definition.required).toContain("trigger");
+    expect(definition.required).not.toContain("destinationConnectionId");
+    expect(definition.properties).toHaveProperty("destinationSynapseId");
+    expect(definition.properties).not.toHaveProperty("destinationSynapseName");
     expect(input.properties).toHaveProperty("trigger");
     expect(trigger.oneOf).toHaveLength(6);
     expect(triggerConfigurationPath.put.requestBody.content["application/json"].schema.$ref).toBe(

@@ -3457,6 +3457,44 @@ describe("ConnectServer", () => {
       ],
     });
 
+    const newCanvasResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Publish a canvas digest",
+        destinationConnectionId: undefined,
+        destinationSynapseName: "Daily digest",
+      }),
+    });
+    expect(newCanvasResponse.status).toBe(200);
+    await expect(newCanvasResponse.json()).resolves.toMatchObject({
+      destinationSynapseId: "synapse-created",
+    });
+
+    const existingCanvasResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Publish to an existing canvas",
+        destinationConnectionId: undefined,
+        destinationSynapseId: "synapse-existing",
+      }),
+    });
+    expect(existingCanvasResponse.status).toBe(200);
+    await expect(existingCanvasResponse.json()).resolves.toMatchObject({
+      destinationSynapseId: "synapse-existing",
+    });
+
+    const ambiguousDestinationResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({ ...input, destinationSynapseId: "synapse-existing" }),
+    });
+    expect(ambiguousDestinationResponse.status).toBe(400);
+    await expect(ambiguousDestinationResponse.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });
+
     const triggerList = await app.request("/api/flow-triggers", { headers: { authorization } });
     expect(triggerList.status).toBe(200);
     await expect(triggerList.json()).resolves.toMatchObject([
@@ -3701,6 +3739,15 @@ function createTestFlowService(): FlowService {
     agentSettings: {
       async get() {
         return { provider: "claude_code" as const, model: "opus" };
+      },
+    },
+    synapses: {
+      async create() {
+        return { id: "synapse-created" } as never;
+      },
+      async get(id: string) {
+        if (id !== "synapse-existing") throw new Error("Synapse not found.");
+        return { id } as never;
       },
     },
     store: new MemoryFlowStore(),

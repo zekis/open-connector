@@ -166,6 +166,26 @@ describe("FlowBuilderPage", () => {
     expect(html).not.toContain('value="Australia/Perth"');
   });
 
+  it("loads a Synapse canvas destination and removes destination connector permissions", () => {
+    const canvasFlow: FlowDefinition = {
+      ...flow,
+      destinationConnectionId: undefined,
+      destinationSynapseId: "synapse-1",
+    };
+    const html = renderBuilder(
+      "/flows/flow-1/edit",
+      <Route
+        path="/flows/:flowId/edit"
+        element={<FlowBuilderPage data={{ ...editorData, flows: [canvasFlow] }} onRefresh={() => {}} />}
+      />,
+    );
+
+    expect(html).toContain('<option value="existing_synapse" selected="">Existing canvas</option>');
+    expect(html).toContain("Current canvas · synapse-1");
+    expect(html).toContain("Canvas destination");
+    expect(html).not.toContain("Destination permissions");
+  });
+
   it("lays out provider connectors around the Flow instructions", () => {
     const html = renderBuilder(
       "/flows/flow-1/edit",

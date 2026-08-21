@@ -277,7 +277,8 @@ export interface FlowDefinition {
   name: string;
   status: "active" | "paused";
   sourceConnectionId: string;
-  destinationConnectionId: string;
+  destinationConnectionId?: string;
+  destinationSynapseId?: string;
   instructions: string;
   trigger: FlowTrigger;
   agent: {

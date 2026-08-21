@@ -955,86 +955,253 @@ export function ChatToolActivityList(props: {
   activities: AgentChatToolActivity[];
   activeApprovalId?: string;
   activeApprovalIds?: string[];
-  approvalDecision?: "approve" | "deny" | null | { approvalId: string; decision: "approve" | "deny" };
+  approvalDecision?:
+    | "approve"
+    | "deny"
+    | null
+    | { approvalId: string; decision: "approve" | "deny" }
+    | { approvalIds: string[]; decision: "approve" | "deny" };
   onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
+  onApprovalAll?(decision: "approve" | "deny", approvalIds: string[]): void;
 }): ReactNode {
   const activeApprovalIds = new Set([
     ...(props.activeApprovalIds ?? []),
     ...(props.activeApprovalId ? [props.activeApprovalId] : []),
   ]);
+  const approvalActivities = props.activities.filter((activity) => approvalIdFromToolActivity(activity));
+  const otherActivities = props.activities.filter((activity) => !approvalIdFromToolActivity(activity));
   return (
     <div className="chat-tool-list">
-      {props.activities.map((activity) => {
-        const approvalId = approvalIdFromToolActivity(activity);
-        const waiting = approvalId !== undefined && activeApprovalIds.has(approvalId);
-        const decision =
-          props.approvalDecision && typeof props.approvalDecision === "object"
-            ? props.approvalDecision.approvalId === approvalId
-              ? props.approvalDecision.decision
-              : null
-            : props.approvalDecision;
-        return (
-          <div className="chat-tool-activity" key={activity.id}>
-            {waiting ? (
-              <div className="chat-approval-request">
-                <Clock3 size={16} aria-hidden="true" />
-                <span>
-                  <strong>Waiting for approval</strong>
-                  <small>Queued without executing. Approve this exact action once.</small>
-                </span>
-                <div className="chat-approval-actions">
-                  <Button
-                    size="sm"
-                    disabled={decision !== null && decision !== undefined}
-                    onClick={() => props.onApprovalDecision("approve", approvalId)}
-                  >
-                    {decision === "approve" ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
-                    {decision === "approve" ? "Approving…" : "Approve once"}
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    disabled={decision !== null && decision !== undefined}
-                    onClick={() => props.onApprovalDecision("deny", approvalId)}
-                  >
-                    {decision === "deny" ? <Loader2 className="spin" size={14} /> : <X size={14} />}
-                    {decision === "deny" ? "Denying…" : "Deny"}
-                  </Button>
-                  <Button variant="outline" size="sm" asChild>
-                    <Link to="/approvals" target="_blank" rel="noreferrer">
-                      Open mailbox
-                    </Link>
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-            <details
-              className={waiting ? "chat-tool-call pending" : activity.ok ? "chat-tool-call" : "chat-tool-call failed"}
-            >
-              <summary>
-                {waiting ? (
-                  <Clock3 size={14} aria-hidden="true" />
-                ) : activity.ok ? (
-                  <CircleCheck size={14} aria-hidden="true" />
-                ) : (
-                  <CircleX size={14} aria-hidden="true" />
-                )}
-                <Wrench size={13} aria-hidden="true" />
-                <span>{activity.type === "search" ? activity.label : activity.actionId}</span>
-                {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
-              </summary>
-              <div className="chat-tool-detail">
-                <strong>Input</strong>
-                <pre>{JSON.stringify(activity.input, null, 2)}</pre>
-                <strong>Result</strong>
-                <pre>{JSON.stringify(activity.output, null, 2)}</pre>
-              </div>
-            </details>
-          </div>
-        );
-      })}
+      {approvalActivities.length > 0 ? (
+        <ChatApprovalActivityGroup
+          activities={approvalActivities}
+          activeApprovalIds={activeApprovalIds}
+          approvalDecision={props.approvalDecision}
+          onApprovalDecision={props.onApprovalDecision}
+          onApprovalAll={props.onApprovalAll}
+        />
+      ) : null}
+      {otherActivities.map((activity) => (
+        <ChatToolCall activity={activity} key={activity.id} />
+      ))}
     </div>
   );
+}
+
+type ChatApprovalDecision =
+  | "approve"
+  | "deny"
+  | null
+  | { approvalId: string; decision: "approve" | "deny" }
+  | { approvalIds: string[]; decision: "approve" | "deny" };
+
+function ChatApprovalActivityGroup(props: {
+  activities: AgentChatToolActivity[];
+  activeApprovalIds: ReadonlySet<string>;
+  approvalDecision?: ChatApprovalDecision;
+  onApprovalDecision(decision: "approve" | "deny", approvalId?: string): void;
+  onApprovalAll?(decision: "approve" | "deny", approvalIds: string[]): void;
+}): ReactNode {
+  const pending = props.activities.filter((activity) => {
+    const approvalId = approvalIdFromToolActivity(activity);
+    return approvalId !== undefined && props.activeApprovalIds.has(approvalId);
+  });
+  const pendingIds = pending.flatMap((activity) => {
+    const approvalId = approvalIdFromToolActivity(activity);
+    return approvalId ? [approvalId] : [];
+  });
+  const busy = approvalDecisionIds(props.approvalDecision).length > 0;
+  const failed = pending.length === 0 && props.activities.some((activity) => !activity.ok);
+  const summary =
+    props.activities.length === 1
+      ? (props.activities[0]!.actionId ?? props.activities[0]!.label)
+      : `${props.activities.length} connector actions`;
+
+  return (
+    <div className="chat-approval-group">
+      {pending.length > 0 ? (
+        <div className="chat-approval-request">
+          <Clock3 size={16} aria-hidden="true" />
+          <span>
+            <strong>{pending.length === 1 ? "Waiting for approval" : `${pending.length} approvals waiting`}</strong>
+            <small>Queued without executing. Review these exact actions once.</small>
+          </span>
+          {pending.length > 1 ? (
+            <ul className="chat-approval-items">
+              {pending.map((activity) => {
+                const approvalId = approvalIdFromToolActivity(activity)!;
+                const decision = decisionForApproval(props.approvalDecision, approvalId);
+                return (
+                  <li key={activity.id}>
+                    <span>
+                      <strong>{activity.actionId ?? activity.label}</strong>
+                      {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
+                    </span>
+                    <div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => props.onApprovalDecision("approve", approvalId)}
+                      >
+                        {decision === "approve" ? <Loader2 className="spin" size={13} /> : <Check size={13} />}
+                        Approve
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => props.onApprovalDecision("deny", approvalId)}
+                      >
+                        {decision === "deny" ? <Loader2 className="spin" size={13} /> : <X size={13} />}
+                        Deny
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          <div className="chat-approval-actions">
+            {pending.length > 1 && props.onApprovalAll ? (
+              <>
+                <Button size="sm" disabled={busy} onClick={() => props.onApprovalAll!("approve", pendingIds)}>
+                  {batchDecision(props.approvalDecision, pendingIds) === "approve" ? (
+                    <Loader2 className="spin" size={14} />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  Approve all
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => props.onApprovalAll!("deny", pendingIds)}
+                >
+                  {batchDecision(props.approvalDecision, pendingIds) === "deny" ? (
+                    <Loader2 className="spin" size={14} />
+                  ) : (
+                    <X size={14} />
+                  )}
+                  Deny all
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button size="sm" disabled={busy} onClick={() => props.onApprovalDecision("approve", pendingIds[0])}>
+                  {decisionForApproval(props.approvalDecision, pendingIds[0]!) === "approve" ? (
+                    <Loader2 className="spin" size={14} />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  Approve once
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => props.onApprovalDecision("deny", pendingIds[0])}
+                >
+                  {decisionForApproval(props.approvalDecision, pendingIds[0]!) === "deny" ? (
+                    <Loader2 className="spin" size={14} />
+                  ) : (
+                    <X size={14} />
+                  )}
+                  Deny
+                </Button>
+              </>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/approvals" target="_blank" rel="noreferrer">
+                Open mailbox
+              </Link>
+            </Button>
+          </div>
+          <details className="chat-approval-payloads">
+            <summary>Review {pending.length === 1 ? "request payload" : `${pending.length} request payloads`}</summary>
+            <ChatApprovalActivityDetails activities={props.activities} pending />
+          </details>
+        </div>
+      ) : null}
+      {pending.length === 0 ? (
+        <details className={`chat-tool-call grouped${failed ? " failed" : ""}`}>
+          <summary>
+            {failed ? <CircleX size={14} aria-hidden="true" /> : <CircleCheck size={14} aria-hidden="true" />}
+            <Wrench size={13} aria-hidden="true" />
+            <span>{summary}</span>
+            <small>{props.activities.length} results</small>
+          </summary>
+          <ChatApprovalActivityDetails activities={props.activities} />
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function ChatApprovalActivityDetails(props: { activities: AgentChatToolActivity[]; pending?: boolean }): ReactNode {
+  return (
+    <div className="chat-tool-detail chat-tool-detail-grouped">
+      {props.activities.map((activity) => (
+        <section key={activity.id}>
+          <header>
+            {props.pending ? <Clock3 size={13} /> : activity.ok ? <CircleCheck size={13} /> : <CircleX size={13} />}
+            <strong>{activity.actionId ?? activity.label}</strong>
+            {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
+          </header>
+          <strong>Input</strong>
+          <pre>{JSON.stringify(activity.input, null, 2)}</pre>
+          <strong>{props.pending ? "Queued response" : "Result"}</strong>
+          <pre>{JSON.stringify(activity.output, null, 2)}</pre>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ChatToolCall(props: { activity: AgentChatToolActivity }): ReactNode {
+  const activity = props.activity;
+  return (
+    <div className="chat-tool-activity">
+      <details className={activity.ok ? "chat-tool-call" : "chat-tool-call failed"}>
+        <summary>
+          {activity.ok ? <CircleCheck size={14} aria-hidden="true" /> : <CircleX size={14} aria-hidden="true" />}
+          <Wrench size={13} aria-hidden="true" />
+          <span>{activity.type === "search" ? activity.label : activity.actionId}</span>
+          {activity.connectionDisplayName ? <small>{activity.connectionDisplayName}</small> : null}
+        </summary>
+        <div className="chat-tool-detail">
+          <strong>Input</strong>
+          <pre>{JSON.stringify(activity.input, null, 2)}</pre>
+          <strong>Result</strong>
+          <pre>{JSON.stringify(activity.output, null, 2)}</pre>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function approvalDecisionIds(decision: ChatApprovalDecision | undefined): string[] {
+  if (!decision || typeof decision === "string") return decision ? ["*"] : [];
+  return "approvalIds" in decision ? decision.approvalIds : [decision.approvalId];
+}
+
+function decisionForApproval(
+  decision: ChatApprovalDecision | undefined,
+  approvalId: string,
+): "approve" | "deny" | undefined {
+  if (!decision) return undefined;
+  if (typeof decision === "string") return decision;
+  return approvalDecisionIds(decision).includes(approvalId) ? decision.decision : undefined;
+}
+
+function batchDecision(
+  decision: ChatApprovalDecision | undefined,
+  approvalIds: string[],
+): "approve" | "deny" | undefined {
+  if (!decision || typeof decision === "string") return decision || undefined;
+  const decisionIds = approvalDecisionIds(decision);
+  return approvalIds.every((approvalId) => decisionIds.includes(approvalId)) ? decision.decision : undefined;
 }
 
 export function approvalIdFromToolActivity(activity: AgentChatToolActivity): string | undefined {

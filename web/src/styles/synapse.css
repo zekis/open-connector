@@ -1,3 +1,9 @@
+.app-shell.synapse-shell {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100svh;
+  overflow: hidden;
+}
+
 .main-region-synapse {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -254,10 +260,10 @@
   background: color-mix(in oklab, var(--brand) 14%, var(--card));
 }
 
-.synapse-node-tts {
+.synapse-node-tts,
+.synapse-node-refresh {
   position: absolute;
   top: 9px;
-  right: 9px;
   z-index: 5;
   display: inline-flex;
   align-items: center;
@@ -273,8 +279,18 @@
   cursor: pointer;
 }
 
+.synapse-node-tts {
+  right: 9px;
+}
+
+.synapse-node-refresh {
+  right: 42px;
+}
+
 .synapse-node-tts:hover:not(:disabled),
+.synapse-node-refresh:hover:not(:disabled),
 .synapse-node-tts:focus-visible,
+.synapse-node-refresh:focus-visible,
 .synapse-node-tts.active {
   border-color: color-mix(in oklab, var(--brand) 62%, var(--border));
   color: var(--brand);
@@ -282,7 +298,8 @@
   outline: none;
 }
 
-.synapse-node-tts:disabled {
+.synapse-node-tts:disabled,
+.synapse-node-refresh:disabled {
   opacity: 0.42;
   cursor: not-allowed;
 }
@@ -524,6 +541,8 @@
 
 .synapse-approval-node-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
 }
@@ -1227,6 +1246,7 @@
 
 .synapse-approval-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;

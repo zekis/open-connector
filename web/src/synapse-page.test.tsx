@@ -143,6 +143,8 @@ describe("SynapseNodeCard", () => {
         speaking={false}
         speechConnecting={false}
         checked
+        refreshing={false}
+        refreshDisabled={false}
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
@@ -152,6 +154,7 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onRefresh={() => {}}
         onToggleSpeech={() => {}}
         onCheckedChange={() => {}}
       />,
@@ -177,6 +180,8 @@ describe("SynapseNodeCard", () => {
         speaking
         speechConnecting={false}
         checked={false}
+        refreshing
+        refreshDisabled={false}
         onPointerDown={() => {}}
         onPointerMove={() => {}}
         onPointerUp={() => {}}
@@ -186,6 +191,7 @@ describe("SynapseNodeCard", () => {
         onResizePointerMove={() => {}}
         onResizePointerUp={() => {}}
         onSelect={() => {}}
+        onRefresh={() => {}}
         onToggleSpeech={() => {}}
         onCheckedChange={() => {}}
       />,
@@ -203,6 +209,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Open artifact resources");
     expect(html).toContain("Sales brief.pdf");
     expect(html).toContain("Stop reading New mining opportunity");
+    expect(html).toContain("Ask Claude to refresh New mining opportunity");
     expect(html).not.toContain("<iframe");
   });
 
@@ -289,7 +296,6 @@ describe("SynapseNodeCard", () => {
         speechAvailable
         speaking={false}
         speechConnecting={false}
-        onSelect={() => {}}
         onDecision={async () => {}}
         onToggleSpeech={() => {}}
       />,
@@ -394,7 +400,6 @@ describe("SynapseNodeCard", () => {
         speechAvailable={false}
         speaking={false}
         speechConnecting={false}
-        onSelect={() => {}}
         onDecision={async () => {}}
         onToggleSpeech={() => {}}
       />,
@@ -402,6 +407,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Close selected YardCraft items");
     expect(html).toContain("Close work items 194047 and 194048.");
     expect(html).toContain("1 / 2");
+    expect(html).toContain("Approve all");
     expect(html.match(/role="tab"/g)).toHaveLength(2);
     expect(html).toContain('aria-label="Next approval"');
   });

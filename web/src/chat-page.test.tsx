@@ -139,10 +139,98 @@ describe("ChatPage", () => {
     expect(html).toContain("Waiting for approval");
     expect(html).toContain("Approve once");
     expect(html).toContain(">Deny<");
-    expect(html).toContain('class="chat-tool-call pending"');
+    expect(html).toContain('class="chat-approval-payloads"');
     expect(html).not.toContain('class="chat-tool-call failed"');
     expect(html).toContain('href="/approvals"');
     expect(html).toContain('target="_blank"');
+  });
+
+  it("stacks pending approvals into one card with a bulk decision", () => {
+    const activities = [
+      {
+        id: "activity-1",
+        type: "action" as const,
+        label: "Close item 101",
+        ok: false,
+        actionId: "azure_devops.update_work_item",
+        connectionId: "connection-1",
+        connectionDisplayName: "YardCraft",
+        approvalId: "approval-1",
+        input: { id: 101, state: "Done" },
+        output: { error: { code: "approval_pending" } },
+      },
+      {
+        id: "activity-2",
+        type: "action" as const,
+        label: "Close item 102",
+        ok: false,
+        actionId: "azure_devops.update_work_item",
+        connectionId: "connection-1",
+        connectionDisplayName: "YardCraft",
+        approvalId: "approval-2",
+        input: { id: 102, state: "Done" },
+        output: { error: { code: "approval_pending" } },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ChatToolActivityList
+          activities={activities}
+          activeApprovalIds={["approval-1", "approval-2"]}
+          approvalDecision={null}
+          onApprovalDecision={() => {}}
+          onApprovalAll={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("2 approvals waiting");
+    expect(html).toContain("Approve all");
+    expect(html).toContain("Deny all");
+    expect(html.match(/class="chat-approval-request"/g)).toHaveLength(1);
+    expect(html.match(/class="chat-approval-payloads"/g)).toHaveLength(1);
+    expect(html).not.toContain('class="chat-tool-call grouped pending"');
+  });
+
+  it("joins approval results into one completed card", () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ChatToolActivityList
+          activities={[
+            {
+              id: "activity-1",
+              type: "action",
+              label: "Close item 101",
+              ok: true,
+              actionId: "azure_devops.update_work_item",
+              connectionId: "connection-1",
+              approvalId: "approval-1",
+              input: { id: 101, state: "Done" },
+              output: { id: 101, state: "Done" },
+            },
+            {
+              id: "activity-2",
+              type: "action",
+              label: "Close item 102",
+              ok: true,
+              actionId: "azure_devops.update_work_item",
+              connectionId: "connection-1",
+              approvalId: "approval-2",
+              input: { id: 102, state: "Done" },
+              output: { id: 102, state: "Done" },
+            },
+          ]}
+          activeApprovalIds={[]}
+          approvalDecision={null}
+          onApprovalDecision={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("2 connector actions");
+    expect(html).toContain("2 results");
+    expect(html.match(/class="chat-tool-call grouped"/g)).toHaveLength(1);
+    expect(html).not.toContain("Waiting for approval");
   });
 
   it("replaces a waiting message when the approved Chat resumes", () => {
