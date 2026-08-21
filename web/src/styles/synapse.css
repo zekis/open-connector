@@ -689,7 +689,7 @@
   cursor: pointer;
 }
 
-.synapse-context-menu button:hover,
+.synapse-context-menu button:hover:not(:disabled),
 .synapse-context-menu button:focus-visible {
   background: var(--accent);
   outline: none;
@@ -703,6 +703,64 @@
   height: 1px;
   margin: 5px 4px;
   background: var(--border);
+}
+
+.synapse-text-context-menu {
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  gap: 2px;
+}
+
+.synapse-text-context-selection {
+  display: block;
+  overflow: hidden;
+  margin: 2px 4px 5px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--background) 68%, transparent);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-text-context-menu button {
+  align-items: flex-start;
+}
+
+.synapse-text-context-menu button > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.synapse-text-context-menu button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.synapse-text-context-menu button strong,
+.synapse-text-context-menu button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-text-context-menu button strong {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.synapse-text-context-menu button small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.synapse-text-context-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .synapse-node-markdown .chat-markdown {
@@ -960,7 +1018,7 @@
   align-items: center;
   justify-content: center;
   width: calc(100% - 10px);
-  min-height: 118px;
+  min-height: 228px;
   min-width: 0;
   gap: 7px;
   padding: 10px 7px;
@@ -1001,29 +1059,34 @@
 }
 
 .synapse-node-detail-handle-copy {
-  display: grid;
-  justify-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
-  gap: 2px;
+  min-height: 0;
+  gap: 5px;
 }
 
 .synapse-node-detail-handle small,
 .synapse-node-detail-handle strong {
   overflow: hidden;
-  max-width: 100%;
+  max-height: 150px;
   text-overflow: ellipsis;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 
 .synapse-node-detail-handle small {
   color: var(--muted-foreground);
   font-size: 8px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .synapse-node-detail-handle strong {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  max-width: 42px;
   font-size: 10px;
   font-weight: 650;
   line-height: 1.25;
@@ -1525,7 +1588,7 @@
   .synapse-node-detail-rail.outgoing .synapse-node-detail-handle {
     flex: 0 0 92px;
     width: 92px;
-    min-height: 112px;
+    min-height: 200px;
     border: 1px solid var(--border);
     border-radius: 10px;
   }
