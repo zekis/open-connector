@@ -6,7 +6,12 @@ import {
   idempotencyKeyMaxBytes,
   idempotencyRetentionHours,
 } from "../actions/action-idempotency.ts";
-import { defaultFlowMaxSteps, maximumFlowMaxSteps, maximumFlowSourceConnections } from "../flows/flow-types.ts";
+import {
+  defaultFlowMaxSteps,
+  maximumFlowMaxSteps,
+  maximumFlowRunToolCalls,
+  maximumFlowSourceConnections,
+} from "../flows/flow-types.ts";
 import { policyRequestMaxBytes, policyRuleListMaxItems, policyRuleMaxBytes } from "./policy-input.ts";
 
 /**
@@ -1226,7 +1231,7 @@ function flowDefinitionProperties(agent: JsonSchema, acceptsNewSynapse = false):
       minimum: 1,
       maximum: maximumFlowMaxSteps,
       default: defaultFlowMaxSteps,
-      description: `Maximum connector tool calls for one Flow run. Defaults to ${defaultFlowMaxSteps} when omitted.`,
+      description: `Connector tool-call allowance per source. Multi-source runs multiply this value by their source count, capped at ${maximumFlowRunToolCalls} calls for one run. Defaults to ${defaultFlowMaxSteps} when omitted.`,
     }),
   };
   if (acceptsNewSynapse) {

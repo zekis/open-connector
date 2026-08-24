@@ -4,7 +4,12 @@ import type { AgentChatExtensionTool } from "./agent-chat-service.ts";
 import type { AgentChatToolActivity } from "./agent-chat-types.ts";
 
 import { FlowError } from "../flows/flow-service.ts";
-import { flowSourceConnectionIds, maximumFlowMaxSteps, maximumFlowSourceConnections } from "../flows/flow-types.ts";
+import {
+  flowSourceConnectionIds,
+  maximumFlowMaxSteps,
+  maximumFlowRunToolCalls,
+  maximumFlowSourceConnections,
+} from "../flows/flow-types.ts";
 
 export interface AgentChatFlowToolOptions {
   flows: Pick<FlowService, "create" | "delete" | "getRequired" | "list" | "update">;
@@ -101,7 +106,12 @@ const editableFlowProperties = {
   instructions: { type: "string", maxLength: 20_000 },
   trigger: flowTriggerSchema,
   tools: { type: "array", minItems: 1, maxItems: 32, items: flowToolGrantSchema },
-  maxSteps: { type: "integer", minimum: 1, maximum: maximumFlowMaxSteps },
+  maxSteps: {
+    type: "integer",
+    minimum: 1,
+    maximum: maximumFlowMaxSteps,
+    description: `Connector tool-call allowance per source. The total run limit scales with source count up to ${maximumFlowRunToolCalls} calls.`,
+  },
 };
 
 export const agentChatFlowTools: AgentChatExtensionTool[] = [

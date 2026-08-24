@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
 import { ActionPolicyService } from "../../core/action-policy.ts";
 import { FlowRunner } from "./flow-runner.ts";
+import { flowRunToolCallLimit } from "./flow-types.ts";
 
 describe("FlowRunner", () => {
   it("executes an always-allowed tool and completes the agent loop", async () => {
@@ -78,9 +79,31 @@ describe("FlowRunner", () => {
       stepCount: 2,
       errorCode: "step_limit_exceeded",
       errorMessage:
-        "Flow reached its 2-tool-call limit. Increase Maximum tool calls in the Flow editor to allow a longer run.",
+        "Flow reached its 2-tool-call limit. Increase Tool calls per source in the Flow editor to allow a longer run.",
     });
     expect(harness.actions.toolCalls).toHaveLength(2);
+  });
+
+  it("scales the connector-call limit with the number of source connections", async () => {
+    const harness = createHarness("always_allow");
+    harness.flow.sourceConnectionIds = ["source-connection", "secondary-source-connection"];
+    delete harness.flow.sourceConnectionId;
+    harness.flow.maxSteps = 2;
+    harness.agent.requestToolCalls(3);
+
+    const detail = await harness.runner.start(harness.flow.id);
+
+    expect(detail.run).toMatchObject({ status: "completed", stepCount: 3 });
+    expect(harness.actions.toolCalls).toHaveLength(3);
+  });
+
+  it("caps the scaled connector-call limit", () => {
+    expect(
+      flowRunToolCallLimit({
+        sourceConnectionIds: ["source-1", "source-2", "source-3", "source-4"],
+        maxSteps: 100,
+      }),
+    ).toBe(200);
   });
 
   it("starts a manual run in the background without waiting for the agent loop", async () => {

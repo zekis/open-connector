@@ -30,7 +30,8 @@ interface FlowBuilderPageProps {
 }
 
 const defaultFlowMaxSteps = 20;
-const maximumFlowMaxSteps = 50;
+const maximumFlowMaxSteps = 200;
+const maximumFlowRunToolCalls = 200;
 const maximumFlowSourceConnections = 16;
 
 interface AgentChoice {
@@ -125,6 +126,8 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const budgetSourceCount = Math.max(1, sourceIds.length);
+  const runToolCallLimit = Math.min(maximumFlowRunToolCalls, maxSteps * budgetSourceCount);
 
   useEffect(() => {
     let active = true;
@@ -360,7 +363,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
               onChange={(choice) => setAgentConnectionId(choice.id)}
             />
             <Label className="field">
-              <span>Maximum tool calls</span>
+              <span>Tool calls per source</span>
               <Input
                 type="number"
                 min={1}
@@ -369,6 +372,10 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
                 onChange={(event) => setMaxSteps(Number(event.target.value))}
                 required
               />
+              <small>
+                Current run limit: {runToolCallLimit} calls across {budgetSourceCount} source
+                {budgetSourceCount === 1 ? "" : "s"}. Runs are capped at {maximumFlowRunToolCalls} calls.
+              </small>
             </Label>
           </div>
           <div className="flow-tools-heading">

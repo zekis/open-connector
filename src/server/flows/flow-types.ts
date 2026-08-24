@@ -94,7 +94,9 @@ export interface FlowToolGrant {
 }
 
 export const defaultFlowMaxSteps = 20;
-export const maximumFlowMaxSteps = 50;
+export const maximumFlowMaxSteps = 200;
+/** Absolute connector-call safety cap for one Flow run after source scaling. */
+export const maximumFlowRunToolCalls = 200;
 export const maximumFlowSourceConnections = 16;
 
 /** Durable definition for one directional agent flow into a connector or Synapse canvas. */
@@ -113,6 +115,7 @@ export interface FlowDefinition {
   trigger: FlowTrigger;
   agent: FlowAgentConfig;
   tools: FlowToolGrant[];
+  /** Connector-call allowance per source; the runner applies the absolute run cap after scaling. */
   maxSteps: number;
   createdAt: string;
   updatedAt: string;
@@ -132,6 +135,7 @@ export interface FlowDefinitionInput {
   trigger?: FlowTrigger;
   agent: Pick<FlowAgentConfig, "connectionId"> & Partial<Pick<FlowAgentConfig, "provider" | "reasoningEffort">>;
   tools: FlowToolGrant[];
+  /** Connector-call allowance per source; defaults to defaultFlowMaxSteps. */
   maxSteps?: number;
 }
 
@@ -141,6 +145,14 @@ export function flowSourceConnectionIds(
 ): string[] {
   if (flow.sourceConnectionIds?.length) return [...flow.sourceConnectionIds];
   return flow.sourceConnectionId ? [flow.sourceConnectionId] : [];
+}
+
+/** Scale the connector-call budget with the number of readable sources while retaining a hard runaway cap. */
+export function flowRunToolCallLimit(
+  flow: Pick<FlowDefinition, "sourceConnectionIds" | "sourceConnectionId" | "maxSteps">,
+): number {
+  const sourceCount = Math.max(1, flowSourceConnectionIds(flow).length);
+  return Math.min(maximumFlowRunToolCalls, flow.maxSteps * sourceCount);
 }
 
 /** Trigger configuration projected with the Flow fields needed by trigger-management clients. */

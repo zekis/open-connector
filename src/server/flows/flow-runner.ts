@@ -30,7 +30,7 @@ import type {
 import { hashActionRequest } from "../actions/action-idempotency.ts";
 import { FlowAgentError } from "./flow-agent.ts";
 import { FlowError, FlowService } from "./flow-service.ts";
-import { flowSourceConnectionIds } from "./flow-types.ts";
+import { flowRunToolCallLimit, flowSourceConnectionIds, maximumFlowRunToolCalls } from "./flow-types.ts";
 
 interface FlowToolBinding {
   grant: FlowToolGrant;
@@ -288,6 +288,7 @@ export class FlowRunner {
     let input = initialInput;
     let previousResponseId = initialPreviousResponseId;
     let sequence = (await this.options.store.listSteps(run.id)).length;
+    const toolCallLimit = flowRunToolCallLimit(flow);
 
     while (true) {
       const policy = await this.options.getPolicySnapshot();
@@ -346,11 +347,12 @@ export class FlowRunner {
         return await this.getRunDetail(run.id);
       }
 
-      if (run.stepCount >= flow.maxSteps) {
-        throw new FlowError(
-          "step_limit_exceeded",
-          `Flow reached its ${flow.maxSteps}-tool-call limit. Increase Maximum tool calls in the Flow editor to allow a longer run.`,
-        );
+      if (run.stepCount >= toolCallLimit) {
+        const guidance =
+          toolCallLimit < maximumFlowRunToolCalls
+            ? "Increase Tool calls per source in the Flow editor to allow a longer run."
+            : "Split the work into smaller Flows to stay within the run safety cap.";
+        throw new FlowError("step_limit_exceeded", `Flow reached its ${toolCallLimit}-tool-call limit. ${guidance}`);
       }
 
       const binding = bindingsByName.get(turn.functionCall.name);

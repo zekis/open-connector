@@ -3399,7 +3399,7 @@ describe("ConnectServer", () => {
           approval: "require_approval",
         },
       ],
-      maxSteps: 50,
+      maxSteps: 200,
     };
     const updateResponse = await app.request(`/api/flows/${created.id}`, {
       method: "PUT",
@@ -3413,7 +3413,7 @@ describe("ConnectServer", () => {
       name: updateInput.name,
       status: "paused",
       instructions: updateInput.instructions,
-      maxSteps: 50,
+      maxSteps: 200,
       trigger: updateInput.trigger,
       createdAt: created.createdAt,
       agent: { model: "opus" },
@@ -3446,7 +3446,7 @@ describe("ConnectServer", () => {
     const excessiveSteps = await app.request(`/api/flows/${created.id}`, {
       method: "PUT",
       headers: { authorization, "content-type": "application/json" },
-      body: JSON.stringify({ ...updateInput, maxSteps: 51 }),
+      body: JSON.stringify({ ...updateInput, maxSteps: 201 }),
     });
     expect(excessiveSteps.status).toBe(400);
     await expect(excessiveSteps.json()).resolves.toMatchObject({ error: { code: "invalid_flow" } });

@@ -126,8 +126,9 @@ describe("FlowBuilderPage", () => {
     expect(html).toContain("Create a Flow");
     expect(html).toContain("Back to Flows");
     expect(html).toContain("Connect a Claude subscription from the Agents panel");
-    expect(html).toContain('max="50"');
+    expect(html).toContain('max="200"');
     expect(html).toContain('value="20"');
+    expect(html).toContain("Current run limit: 20 calls across 1 source");
     expect(html).not.toContain("Codex");
   });
 
@@ -251,6 +252,7 @@ describe("FlowBuilderPage", () => {
     expect(html.match(/Source permissions/g)).toHaveLength(2);
     expect(html).toContain("zeke@example.com");
     expect(html).toContain("Projects");
+    expect(html).toContain("Current run limit: 16 calls across 2 sources");
   });
 
   it("shows the connector-wide default while preserving Flow overrides", () => {
