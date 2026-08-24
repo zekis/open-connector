@@ -192,10 +192,10 @@ export function FeedCard(props: {
               <span className={`feed-status ${props.item.flow.status}`}>{props.item.flow.status}</span>
             ) : null}
           </div>
+          <FeedGeneratedImage post={props.item.post} />
           <div className="feed-social-copy">
             <ChatMarkdown>{props.item.post.text}</ChatMarkdown>
           </div>
-          <FeedGeneratedImage post={props.item.post} />
           <div className="feed-origin">
             <Radio size={13} /> {triggerLabel(props.item)} · {props.item.title}
             {props.item.author && props.item.author !== displayName ? ` · ${props.item.author}` : ""}

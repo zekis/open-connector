@@ -21,6 +21,7 @@ import type {
   IFeedStore,
 } from "./feed-types.ts";
 
+import { normalizeFeedCopy, normalizeFlowFeedPost } from "../flows/flow-feed-post.ts";
 import { flowSourceConnectionIds } from "../flows/flow-types.ts";
 import {
   createProviderPreviews,
@@ -214,7 +215,7 @@ export class FeedService {
       summary: trigger.summary,
       author: trigger.author,
       providerService: trigger.providerService,
-      post: run.feedPost ?? fallbackFeedPost(run, trigger, agentSummary),
+      post: normalizeFlowFeedPost(run.feedPost) ?? fallbackFeedPost(run, trigger, agentSummary),
       previews: trigger.previews.map((preview) => preview.preview),
       flow: {
         id: run.flowId,
@@ -438,31 +439,33 @@ function fallbackFeedPost(
   trigger: ReturnType<typeof summarizeTrigger>,
   agentSummary: string | undefined,
 ): FlowFeedPost {
-  const flowName = run.flowSnapshot.name;
+  const flowName = friendlyFlowName(run.flowSnapshot.name);
   const source = plainFeedText(agentSummary ?? trigger.summary ?? trigger.title);
   let text: string;
   switch (run.status) {
     case "completed":
-      text = source ? `All sorted — ${lowercaseFirst(source)}` : `${flowName} is all sorted.`;
+      text =
+        conciseLegacyResult(source) ??
+        `The ${flowName} update is ready. I pulled everything together for a quick look.`;
       break;
     case "waiting_for_approval":
       text = `Quick check needed before I can keep ${flowName} moving.`;
       break;
     case "failed":
-      text = `Hit a snag on ${flowName}${source ? `: ${source}` : "."}`;
+      text = `I hit a snag with ${flowName}.${source ? ` ${truncate(source, 100)}` : ""}`;
       break;
     case "cancelled":
       text = `${flowName} stopped before it could finish.`;
       break;
     default:
-      text = `${flowName} is under way — I’ll share what changes.`;
+      text = `${flowName} is running now. I’ll post an update when it’s ready.`;
   }
   const motif = inferFeedImageMotif(run, `${trigger.title} ${trigger.summary ?? ""} ${agentSummary ?? ""}`);
   return {
-    text: truncate(text, 280),
+    text: normalizeFeedCopy(text, 220),
     image: {
       alt: `Editorial illustration for the ${flowName} update.`,
-      headline: truncate(flowName, 64),
+      headline: normalizeFeedCopy(flowName, 64),
       motif,
       palette: paletteForMotif(motif),
     },
@@ -472,7 +475,7 @@ function fallbackFeedPost(
 function approvalFeedPost(actionId: string, kind: "action" | "flow"): FlowFeedPost {
   const action = humanize(actionId);
   return {
-    text: `Quick check — I need your approval before I ${lowercaseFirst(action)}.`,
+    text: `I need your approval before I ${lowercaseFirst(action)}.`,
     image: {
       alt: `Editorial illustration showing a decision waiting for review.`,
       headline: kind === "flow" ? "Flow needs a quick check" : "Your call",
@@ -480,6 +483,23 @@ function approvalFeedPost(actionId: string, kind: "action" | "flow"): FlowFeedPo
       palette: "amber",
     },
   };
+}
+
+function conciseLegacyResult(value: string): string | undefined {
+  if (!value || value.length > 150 || /\[[ x]\]|https?:\/\/|\b\d{4}-\d{2}-\d{2}\b/i.test(value)) return undefined;
+  const sentence = value.replace(/[.!?]+$/, "");
+  if (/^(I|We|The|Everything|Nothing|No)\b/i.test(sentence)) return `${sentence}.`;
+  return `I ${lowercaseFirst(sentence)}.`;
+}
+
+function friendlyFlowName(value: string): string {
+  const sections = value
+    .split(/[—–|]/)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  const mostSpecific = sections.at(-1) ?? value;
+  const withoutSchedule = mostSpecific.replace(/^\d+\s+/, "").replace(/^(daily|weekly|monthly)\s+/i, "");
+  return normalizeFeedCopy(withoutSchedule || "Flow", 80);
 }
 
 function plainFeedText(value: string): string {

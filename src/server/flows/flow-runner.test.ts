@@ -31,7 +31,7 @@ describe("FlowRunner", () => {
       stepCount: 1,
       finalOutput: "Synchronized one source item.",
       feedPost: {
-        text: "All synced — today’s source item is right where it should be.",
+        text: "Today’s source item is synced and right where it should be.",
         image: { headline: "All synced", motif: "automation", palette: "teal" },
       },
     });
@@ -345,7 +345,7 @@ class FakeFlowAgent implements IFlowAgent {
           responseId: `response-${this.inputs.length}`,
           text: "Synchronized one source item.",
           feedPost: {
-            text: "All synced — today’s source item is right where it should be.",
+            text: "Today’s source item is synced and right where it should be.",
             image: {
               alt: "An illustrated record moving between connected workspaces.",
               headline: "All synced",

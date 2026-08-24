@@ -2,25 +2,12 @@ import type { JsonSchema } from "../../core/types.ts";
 import type { AgentCredentialService } from "../agents/agent-credential-service.ts";
 import type { IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { FlowAgentTurn, FlowAgentTurnInput, IFlowAgent } from "./flow-agent.ts";
-import type { FlowFeedImageMotif, FlowFeedImagePalette, FlowFeedPost } from "./flow-types.ts";
 
 import { AgentCredentialError } from "../agents/agent-credential-service.ts";
 import { ClaudeAgentDecisionError, readClaudeAgentDecision } from "../agents/claude-agent-decision.ts";
 import { ClaudeCodeError } from "../agents/claude-code-client.ts";
 import { FlowAgentError } from "./flow-agent.ts";
-
-const feedImageMotifs: FlowFeedImageMotif[] = [
-  "automation",
-  "calendar",
-  "chart",
-  "document",
-  "files",
-  "message",
-  "people",
-  "success",
-  "warning",
-];
-const feedImagePalettes: FlowFeedImagePalette[] = ["amber", "blue", "rose", "slate", "teal", "violet"];
+import { flowFeedImageMotifs, flowFeedImagePalettes, normalizeFlowFeedPost } from "./flow-feed-post.ts";
 const flowAgentDecisionSchema: JsonSchema = {
   type: "object",
   properties: {
@@ -31,14 +18,14 @@ const flowAgentDecisionSchema: JsonSchema = {
     feedPost: {
       type: "object",
       properties: {
-        text: { type: "string", maxLength: 280 },
+        text: { type: "string", maxLength: 220 },
         image: {
           type: "object",
           properties: {
             alt: { type: "string", maxLength: 180 },
             headline: { type: "string", maxLength: 64 },
-            motif: { type: "string", enum: feedImageMotifs },
-            palette: { type: "string", enum: feedImagePalettes },
+            motif: { type: "string", enum: flowFeedImageMotifs },
+            palette: { type: "string", enum: flowFeedImagePalettes },
           },
           required: ["alt", "headline", "motif", "palette"],
           additionalProperties: false,
@@ -110,10 +97,12 @@ Return kind "final" with factual text and feedPost when the synchronization is c
 Never claim an action succeeded unless its result appears in the history.
 
 Feed post rules:
-- write feedPost.text as one or two natural sentences of at most 240 characters
-- sound like a trusted work colleague sharing an update, not a formal report or literal API summary
-- lead with the useful outcome, change, or blocker; omit raw ids, headings, tables, and boilerplate
-- use contractions where natural and at most one fitting emoji
+- write feedPost.text as one or two natural sentences of at most 200 characters
+- sound like a work colleague posting naturally, not a formal report or literal dump of the result
+- mention only the useful outcome, change, or blocker; omit raw ids, headings, tables, checklists, and boilerplate
+- vary the opening; never begin with "All sorted", "Quick update", or another stock announcement
+- use ordinary sentence punctuation; never use em dashes or en dashes
+- use contractions where natural and avoid emojis unless one genuinely adds something
 - make feedPost.image a related editorial illustration brief, with a punchy headline of no more than six words
 - choose the closest supplied motif and palette; make alt describe the visual rather than repeat the post
 
@@ -153,44 +142,11 @@ function parseDecision(value: unknown, usage: unknown): FlowAgentTurn {
   return {
     responseId,
     text: decision.text.trim(),
-    feedPost: readFeedPost(value),
+    feedPost: normalizeFlowFeedPost(record(value)?.feedPost),
     usage,
-  };
-}
-
-function readFeedPost(value: unknown): FlowFeedPost | undefined {
-  const feedPost = record(record(value)?.feedPost);
-  const image = record(feedPost?.image);
-  const text = textField(feedPost, "text");
-  const alt = textField(image, "alt");
-  const headline = textField(image, "headline");
-  const motif = image?.motif;
-  const palette = image?.palette;
-  if (!text || !alt || !headline || !isFeedImageMotif(motif) || !isFeedImagePalette(palette)) return undefined;
-  return {
-    text: text.slice(0, 280),
-    image: {
-      alt: alt.slice(0, 180),
-      headline: headline.slice(0, 64),
-      motif,
-      palette,
-    },
   };
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
-function textField(value: Record<string, unknown> | undefined, field: string): string | undefined {
-  const fieldValue = value?.[field];
-  return typeof fieldValue === "string" && fieldValue.trim() ? fieldValue.trim() : undefined;
-}
-
-function isFeedImageMotif(value: unknown): value is FlowFeedImageMotif {
-  return typeof value === "string" && feedImageMotifs.includes(value as FlowFeedImageMotif);
-}
-
-function isFeedImagePalette(value: unknown): value is FlowFeedImagePalette {
-  return typeof value === "string" && feedImagePalettes.includes(value as FlowFeedImagePalette);
 }

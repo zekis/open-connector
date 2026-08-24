@@ -66,7 +66,7 @@ const detail: FlowRunDetail = {
     completedAt: "2026-08-14T01:00:02.000Z",
     finalOutput: "Archived the project email in Obsidian.",
     feedPost: {
-      text: "All tucked away — the project email’s in Obsidian and the commissioning plan is ready for a look 👀",
+      text: "All sorted — the project email is in Obsidian — the commissioning plan is ready for a look.",
       image: {
         alt: "An illustrated email moving into a project notebook.",
         headline: "Ready for a look",
@@ -107,7 +107,7 @@ describe("FeedService", () => {
       author: "Mel Blanch",
       providerService: "outlook",
       post: {
-        text: "All tucked away — the project email’s in Obsidian and the commissioning plan is ready for a look 👀",
+        text: "The project email is in Obsidian, the commissioning plan is ready for a look.",
         image: { headline: "Ready for a look", motif: "message", palette: "violet" },
       },
       previews: [
@@ -168,6 +168,26 @@ describe("FeedService", () => {
       flow: { trigger: "manual", status: "completed" },
       canReply: true,
     });
+  });
+
+  it("turns a verbose legacy Flow result into a short, natural Feed post", async () => {
+    const legacyDetail = structuredClone(detail);
+    legacyDetail.run.id = "run-legacy";
+    legacyDetail.run.flowSnapshot.name = "2158 Daily — Granola meeting todos";
+    delete legacyDetail.run.feedPost;
+    legacyDetail.run.finalOutput =
+      "2158 2026-08-23 Meeting todos (Granola, last 7 days) Stockpile Go/No Go Meeting — 2026-08-21 [ ] Prepare go-live plan and present to HIO on Monday 24th August — owner: Zeke — due 2026-08-24";
+    const service = createService(new MemoryFeedStore(), [], completedResponse("Done."), undefined, undefined, [
+      legacyDetail,
+    ]);
+
+    const page = await service.list();
+
+    expect(page.items[0]?.post.text).toBe(
+      "The Granola meeting todos update is ready. I pulled everything together for a quick look.",
+    );
+    expect(page.items[0]?.post.text).not.toContain("—");
+    expect(page.items[0]?.post.image.headline).toBe("Granola meeting todos");
   });
 
   it("persists follow-up comments and links one-time Chat approvals to their Feed thread", async () => {

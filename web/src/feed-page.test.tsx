@@ -23,7 +23,7 @@ const item: FeedItem = {
   author: "Mel Blanch",
   providerService: "outlook",
   post: {
-    text: "All sorted — the project email’s archived and the commissioning plan is ready for a look 👀",
+    text: "The project email is archived, and the commissioning plan is ready for a look.",
     image: {
       alt: "An illustrated message moving into a project notebook.",
       headline: "Ready for a look",
@@ -94,7 +94,7 @@ describe("FeedCard", () => {
     );
 
     expect(html).toContain("Roy Hill weekly update");
-    expect(html).toContain("the project email’s archived");
+    expect(html).toContain("The project email is archived");
     expect(html).toContain("Ready for a look");
     expect(html).toContain("AI visual");
     expect(html).toContain('role="img"');
@@ -106,5 +106,6 @@ describe("FeedCard", () => {
     expect(html).toContain("Decide the pending request to continue");
     expect(html).toContain('class="provider-icon large"');
     expect(html).toContain('class="feed-social-copy"');
+    expect(html.indexOf('class="feed-generated-image')).toBeLessThan(html.indexOf('class="feed-social-copy"'));
   });
 });
