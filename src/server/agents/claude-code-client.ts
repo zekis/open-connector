@@ -43,6 +43,7 @@ export interface ClaudeCodeCommandRunner {
 const maxCommandOutputBytes = 4 * 1024 * 1024;
 const maxPipedPromptBytes = 8 * 1024 * 1024;
 const fileBackedPromptMaxTurns = "8";
+const maximumTransientTurnAttempts = 2;
 
 interface ClaudeCodePromptTransport {
   stdin?: string;
@@ -87,7 +88,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
     const prompt = await prepareClaudeCodePrompt(input.prompt);
     let result: ClaudeCodeCommandResult;
     try {
-      result = await this.runner.run({
+      const command: ClaudeCodeCommandInput = {
         args: [
           "-p",
           "--output-format",
@@ -122,9 +123,17 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
         cwd: prompt.file?.directory,
         stdin: prompt.stdin,
         signal: input.signal,
-      });
+      };
+      result = await this.runner.run(command);
+      for (let attempt = 1; attempt < maximumTransientTurnAttempts && claudeApiError(result); attempt += 1) {
+        result = await this.runner.run(command);
+      }
     } finally {
       await prompt.dispose();
+    }
+    const apiError = claudeApiError(result);
+    if (apiError) {
+      throw new ClaudeCodeError("claude_agent_api_error", `Claude Code API failed after one retry. ${apiError}`);
     }
     if (result.exitCode !== 0) {
       throw commandError("claude_agent_failed", "Claude Code could not complete the agent turn.", result);
@@ -311,16 +320,33 @@ function commandError(
   return new ClaudeCodeError(code, detail ? `${fallback} ${detail.slice(0, 2_000)}` : fallback);
 }
 
+function claudeApiError(result: Pick<ClaudeCodeCommandResult, "stdout" | "stderr">): string | undefined {
+  for (const value of [result.stderr, result.stdout]) {
+    const response = tryParseJsonRecord(value);
+    if (response?.terminal_reason !== "api_error") {
+      continue;
+    }
+    const detail = typeof response.result === "string" ? response.result.trim() : "";
+    return detail ? detail.slice(0, 500) : "The provider returned a transient API error.";
+  }
+  return undefined;
+}
+
 function parseJsonRecord(value: string, label: string): Record<string, unknown> {
+  const parsed = tryParseJsonRecord(value);
+  if (parsed) return parsed;
+  throw new ClaudeCodeError("invalid_agent_response", `${label} was not valid JSON.`);
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(value) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
   } catch {
-    // Use the stable error below.
+    return undefined;
   }
-  throw new ClaudeCodeError("invalid_agent_response", `${label} was not valid JSON.`);
 }
 
 function parseModelOptions(help: string): AgentModelOption[] {

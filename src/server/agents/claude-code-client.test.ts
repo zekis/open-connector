@@ -103,6 +103,55 @@ describe("ClaudeCodeClient", () => {
     expect(runner.calls[0]?.args).not.toContain("secret-subscription-token");
   });
 
+  it("retries a transient API failure before returning the structured turn", async () => {
+    const runner = new FakeCommandRunner([
+      transientApiFailure(),
+      {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          subtype: "success",
+          structured_output: { kind: "final", text: "Recovered after the provider error." },
+        }),
+        stderr: "",
+      },
+    ]);
+    const client = new ClaudeCodeClient(runner);
+
+    await expect(
+      client.completeTurn({
+        oauthToken: "secret-subscription-token",
+        model: "opus",
+        effort: "medium",
+        systemPrompt: "Run the synchronization.",
+        prompt: "Choose the next action.",
+        outputSchema: { type: "object" },
+      }),
+    ).resolves.toMatchObject({
+      structuredOutput: { kind: "final", text: "Recovered after the provider error." },
+    });
+    expect(runner.calls).toHaveLength(2);
+  });
+
+  it("returns a concise API error after the transient retry is exhausted", async () => {
+    const runner = new FakeCommandRunner([transientApiFailure(), transientApiFailure()]);
+    const client = new ClaudeCodeClient(runner);
+
+    await expect(
+      client.completeTurn({
+        oauthToken: "secret-subscription-token",
+        model: "opus",
+        effort: "medium",
+        systemPrompt: "Run the synchronization.",
+        prompt: "Choose the next action.",
+        outputSchema: { type: "object" },
+      }),
+    ).rejects.toMatchObject({
+      code: "claude_agent_api_error",
+      message: "Claude Code API failed after one retry. API Error: Server error mid-response.",
+    });
+    expect(runner.calls).toHaveLength(2);
+  });
+
   it("passes oversized prompts through a temporary file and removes it after the turn", async () => {
     const runner = new FileInspectingCommandRunner();
     const client = new ClaudeCodeClient(runner);
@@ -132,6 +181,19 @@ interface FakeCommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+function transientApiFailure(): FakeCommandResult {
+  return {
+    exitCode: 1,
+    stdout: JSON.stringify({
+      is_error: true,
+      terminal_reason: "api_error",
+      result: "API Error: Server error mid-response.",
+      modelUsage: { opus: { cacheCreationInputTokens: 300_287 } },
+    }),
+    stderr: "",
+  };
 }
 
 class FakeCommandRunner implements ClaudeCodeCommandRunner {
