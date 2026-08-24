@@ -6,7 +6,7 @@ export type FlowReasoningEffort = "none" | "low" | "medium" | "high";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
 export type FlowStepStatus = "pending" | "completed" | "failed" | "denied";
 export type FlowApprovalStatus = "pending" | "approved" | "denied";
-export type FlowAgentProvider = "claude_code";
+export type FlowAgentProvider = AgentProvider;
 export type FlowTriggerType = "manual" | "api" | "schedule" | "event" | "new_email" | "file_created";
 export type FlowFeedImageMotif =
   | "automation"
@@ -78,7 +78,7 @@ export type FlowTrigger =
   | FileCreatedFlowTrigger;
 
 export interface FlowAgentConfig {
-  /** Omitted on definitions created before Claude-only agent support. */
+  /** Omitted on definitions created before selectable agent support. */
   provider?: FlowAgentProvider;
   connectionId: string;
   model: string;
@@ -258,3 +258,4 @@ export interface IFlowStore {
   getTriggerState(flowId: string): Promise<FlowTriggerState | undefined>;
   deleteTriggerState(flowId: string): Promise<void>;
 }
+import type { AgentProvider } from "../agents/agent-provider.ts";

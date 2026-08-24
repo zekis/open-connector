@@ -8,7 +8,7 @@ import { ClaudeAgentDecisionError, readClaudeAgentDecision } from "../agents/cla
 import { ClaudeCodeError } from "../agents/claude-code-client.ts";
 import { FlowAgentError } from "./flow-agent.ts";
 import { flowFeedImageMotifs, flowFeedImagePalettes, normalizeFlowFeedPost } from "./flow-feed-post.ts";
-const flowAgentDecisionSchema: JsonSchema = {
+export const flowAgentDecisionSchema: JsonSchema = {
   type: "object",
   properties: {
     kind: { type: "string", enum: ["tool_call", "final"] },
@@ -62,10 +62,10 @@ export class ClaudeCodeFlowAgent implements IFlowAgent {
         model: input.flow.agent.model,
         effort: input.flow.agent.reasoningEffort,
         systemPrompt: input.instructions,
-        prompt: createTurnPrompt(input),
+        prompt: createFlowAgentTurnPrompt(input),
         outputSchema: flowAgentDecisionSchema,
       });
-      return parseDecision(result.structuredOutput, result.usage);
+      return parseFlowAgentDecision(result.structuredOutput, result.usage);
     } catch (error) {
       if (error instanceof FlowAgentError) {
         throw error;
@@ -84,7 +84,7 @@ export class ClaudeCodeFlowAgent implements IFlowAgent {
   }
 }
 
-function createTurnPrompt(input: FlowAgentTurnInput): string {
+export function createFlowAgentTurnPrompt(input: FlowAgentTurnInput): string {
   const tools = input.tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -116,14 +116,14 @@ Current input:
 ${JSON.stringify(input.input)}`;
 }
 
-function parseDecision(value: unknown, usage: unknown): FlowAgentTurn {
+export function parseFlowAgentDecision(value: unknown, usage: unknown): FlowAgentTurn {
   const decision = readClaudeAgentDecision(value);
   const responseId = crypto.randomUUID();
   if (decision.kind === "tool_call") {
     if (!decision.toolName || !decision.arguments) {
       throw new FlowAgentError(
         "invalid_agent_response",
-        "Claude Code returned a tool decision without a tool name and arguments.",
+        "The agent returned a tool decision without a tool name and arguments.",
       );
     }
     return {
@@ -137,7 +137,7 @@ function parseDecision(value: unknown, usage: unknown): FlowAgentTurn {
     };
   }
   if (!decision.text?.trim()) {
-    throw new FlowAgentError("invalid_agent_response", "Claude Code returned a final decision without text.");
+    throw new FlowAgentError("invalid_agent_response", "The agent returned a final decision without text.");
   }
   return {
     responseId,

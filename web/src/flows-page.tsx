@@ -93,7 +93,7 @@ export function FlowsPage(props: FlowsPageProps): ReactNode {
         {flows.length === 0 ? (
           <EmptyState
             title="No Flows yet"
-            description="Create a Flow to connect one or more sources, a destination, and a Claude agent."
+            description="Create a Flow to connect one or more sources, a destination, and a subscription agent."
           />
         ) : (
           <div className="flow-card-grid">
@@ -187,7 +187,7 @@ function FlowCard(props: {
       <div className="flow-card-meta">
         <FlowTriggerBadge flow={props.flow} sourceProvider={triggerSource?.provider} />
         <span>{props.flow.tools.length} tools</span>
-        <span>Claude Code</span>
+        <span>{props.flow.agent.provider === "openai_codex" ? "OpenAI Codex" : "Claude Code"}</span>
         {latestRun ? (
           <span className="flow-last-run">
             <Badge tone={tone}>{latestRun.status.replaceAll("_", " ")}</Badge>

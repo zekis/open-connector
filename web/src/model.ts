@@ -305,7 +305,7 @@ export interface FlowDefinition {
   instructions: string;
   trigger: FlowTrigger;
   agent: {
-    provider?: "claude_code";
+    provider?: AgentProvider;
     connectionId: string;
     model: string;
     reasoningEffort: "none" | "low" | "medium" | "high";
@@ -325,15 +325,15 @@ export function flowSourceConnectionIds(
 
 export interface AgentConnectionSummary {
   id: string;
-  provider: "claude_code";
-  authType: "subscription_oauth";
+  provider: AgentProvider;
+  authType: "subscription_oauth" | "chatgpt_subscription";
   configured: true;
   displayName: string;
   updatedAt?: string;
 }
 
 export interface AgentRuntimeSettings {
-  provider: "claude_code";
+  provider: AgentProvider;
   model: string;
 }
 
@@ -341,6 +341,8 @@ export interface AgentModelOption {
   id: string;
   displayName: string;
 }
+
+export type AgentProvider = "claude_code" | "openai_codex";
 
 export interface FlowRun {
   id: string;
@@ -661,7 +663,7 @@ export interface AppData {
   actionApprovals?: ActionApproval[];
   agentConnections?: AgentConnectionSummary[];
   agentSettings?: AgentRuntimeSettings[];
-  agentModels?: AgentModelOption[];
+  agentModels?: Record<AgentProvider, AgentModelOption[]>;
 }
 
 export interface OverviewSummary {
@@ -760,7 +762,7 @@ export const emptyData: AppData = {
   actionApprovals: [],
   agentConnections: [],
   agentSettings: [],
-  agentModels: [],
+  agentModels: { claude_code: [], openai_codex: [] },
 };
 
 function emptyPolicyRules(): PolicyRules {

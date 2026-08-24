@@ -56,6 +56,7 @@ export interface FlowRunnerOptions {
   connectionApprovals?: Pick<ConnectionApprovalService, "getApprovalMode">;
   synapses?: Pick<SynapseService, "addNode">;
   claudeCodeAgent?: IFlowAgent;
+  codexAgent?: IFlowAgent;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
   logger?: Logger;
 }
@@ -230,13 +231,14 @@ export class FlowRunner {
   }
 
   private async withCurrentAgentSettings(flow: FlowDefinition): Promise<FlowDefinition> {
-    const settings = await this.options.agentSettings?.get("claude_code");
+    const provider = flow.agent.provider ?? "claude_code";
+    const settings = await this.options.agentSettings?.get(provider);
     return settings
       ? {
           ...flow,
           agent: {
             ...flow.agent,
-            provider: "claude_code",
+            provider,
             model: settings.model,
           },
         }
@@ -283,7 +285,7 @@ export class FlowRunner {
     const bindingsByName = new Map(bindings.map((binding) => [binding.agentTool.name, binding]));
     const agentTools = bindings.map((binding) => binding.agentTool);
     const agentInstructions = createAgentInstructions(flow, bindings);
-    const agent = this.agentFor();
+    const agent = this.agentFor(flow);
     let run = initialRun;
     let input = initialInput;
     let previousResponseId = initialPreviousResponseId;
@@ -399,11 +401,13 @@ export class FlowRunner {
     }
   }
 
-  private agentFor(): IFlowAgent {
-    if (!this.options.claudeCodeAgent) {
-      throw new FlowError("agent_unavailable", "Claude Code subscription agents are unavailable in this runtime.");
+  private agentFor(flow: FlowDefinition): IFlowAgent {
+    const provider = flow.agent.provider ?? "claude_code";
+    const agent = provider === "openai_codex" ? this.options.codexAgent : this.options.claudeCodeAgent;
+    if (!agent) {
+      throw new FlowError("agent_unavailable", `${provider} subscription agents are unavailable in this runtime.`);
     }
-    return this.options.claudeCodeAgent;
+    return agent;
   }
 
   private async createToolBindings(flow: FlowDefinition): Promise<FlowToolBinding[]> {

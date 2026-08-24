@@ -1,6 +1,7 @@
 import type { FlowToolPermissionChoice } from "./flow-tool-permission-group";
 import type {
   AppData,
+  AgentProvider,
   ConnectionRecord,
   FlowApprovalSetting,
   FlowDefinition,
@@ -37,6 +38,7 @@ const maximumFlowSourceConnections = 16;
 interface AgentChoice {
   id: string;
   label: string;
+  provider: AgentProvider;
 }
 
 interface FlowDraft {
@@ -49,7 +51,7 @@ interface FlowDraft {
   instructions: string;
   trigger: FlowTrigger;
   agent: {
-    provider: "claude_code";
+    provider: AgentProvider;
     connectionId: string;
     reasoningEffort: "none" | "low" | "medium" | "high";
   };
@@ -89,12 +91,11 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
     Boolean(connection.id),
   );
   const agentChoices: AgentChoice[] = [
-    ...(props.data.agentConnections ?? [])
-      .filter((connection) => connection.provider === "claude_code")
-      .map((connection) => ({
-        id: connection.id,
-        label: `${connection.displayName} · Claude Code`,
-      })),
+    ...(props.data.agentConnections ?? []).map((connection) => ({
+      id: connection.id,
+      label: `${connection.displayName} · ${connection.provider === "openai_codex" ? "OpenAI Codex" : "Claude Code"}`,
+      provider: connection.provider,
+    })),
   ];
   const editing = props.flow !== undefined;
   const [name, setName] = useState(props.flow?.name ?? "");
@@ -113,6 +114,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
   const [agentConnectionId, setAgentConnectionId] = useState(
     props.flow?.agent.connectionId ?? agentChoices[0]?.id ?? "",
   );
+  const selectedAgent = agentChoices.find((choice) => choice.id === agentConnectionId);
   const [instructions, setInstructions] = useState(props.flow?.instructions ?? "");
   const [maxSteps, setMaxSteps] = useState(props.flow?.maxSteps ?? defaultFlowMaxSteps);
   const [toolSearch, setToolSearch] = useState("");
@@ -231,7 +233,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
       instructions,
       trigger,
       agent: {
-        provider: "claude_code",
+        provider: selectedAgent?.provider ?? props.flow?.agent.provider ?? "claude_code",
         connectionId: agentConnectionId,
         reasoningEffort: props.flow?.agent.reasoningEffort ?? "medium",
       },
@@ -279,7 +281,7 @@ function FlowBuilder(props: { data: AppData; flow: FlowDefinition | undefined; o
           <InlineError message="Connect at least one endpoint connection before creating a Flow." />
         ) : null}
         {!agentConnectionId ? (
-          <InlineError message="Connect a Claude subscription from the Agents panel before saving this Flow." />
+          <InlineError message="Connect a subscription agent from the Agents panel before saving this Flow." />
         ) : null}
 
         <form className="flow-builder-form" onSubmit={(event) => void submit(event)}>

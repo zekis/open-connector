@@ -11,6 +11,7 @@ import type {
   AgentChatResponse,
   AgentChatStreamEvent,
   AgentChatToolActivity,
+  AgentProvider,
   AppData,
   SaynaVoiceConfiguration,
 } from "./model";
@@ -101,6 +102,9 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceReplies, setVoiceReplies] = useState(false);
   const [queuedVoiceTurnCount, setQueuedVoiceTurnCount] = useState(0);
+  const [agentProvider, setAgentProvider] = useState<AgentProvider>(
+    props.data.agentConnections?.[0]?.provider ?? "claude_code",
+  );
   const transcriptRef = useRef<HTMLDivElement>(null);
   const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
   const sendVoiceMessageRef = useRef<(value: string) => Promise<void>>(async () => {});
@@ -120,7 +124,9 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
   const spokenMessageIds = useRef(new Set(activeConversation.messages.map((message) => message.id)));
   const messages = session.messages;
   const pendingApproval = session.pendingApproval;
-  const agentConnection = props.data.agentConnections?.find((connection) => connection.provider === "claude_code");
+  const agentConnections = props.data.agentConnections ?? [];
+  const agentConnection = agentConnections.find((connection) => connection.provider === agentProvider);
+  const agentName = agentProvider === "openai_codex" ? "Codex" : "Claude";
   const connectedServices = useMemo(
     () =>
       new Set(
@@ -148,6 +154,11 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
       ),
     [actionPolicyLayers, connectedServices, props.data.providers],
   );
+
+  useEffect(() => {
+    if (agentConnection || agentConnections.length === 0) return;
+    setAgentProvider(agentConnections[0]!.provider);
+  }, [agentConnection, agentConnections]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
@@ -291,6 +302,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
           messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
           voiceMode: voiceRepliesRef.current || source === "voice",
           timeZone: browserTimeZone(),
+          agentProvider,
         },
         (event) => {
           if (event.type === "error") throw new Error(event.error.message);
@@ -305,7 +317,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         },
         { signal: abortController.signal },
       );
-      if (!response) throw new Error("Chat ended before Claude returned a response.");
+      if (!response) throw new Error(`Chat ended before ${agentName} returned a response.`);
       const assistantMessage: DisplayMessage = {
         ...response.message,
         toolActivity: response.toolActivity,
@@ -348,6 +360,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
         messages: sessionRef.current.messages.map(({ role, content }) => ({ role, content })),
         interruption,
         progress: agentProgressRef.current?.message,
+        agentProvider,
       });
       if (decision.cancelCurrentTask && activeChatAbortRef.current === activeRequest) activeRequest.abort();
     } catch {
@@ -515,9 +528,9 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
             <span>
               <strong>
                 {pendingApproval
-                  ? "Claude is waiting for approval"
+                  ? `${agentName} is waiting for approval`
                   : agentConnection
-                    ? "Claude is ready"
+                    ? `${agentName} is ready`
                     : "Agent setup required"}
               </strong>
               <small>
@@ -525,11 +538,26 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
                   ? pendingApproval
                     ? "Approving the pending connector action will resume this Chat automatically."
                     : `${connectionSummary} · ${actionSummary}`
-                  : "Connect your Claude subscription before starting a chat."}
+                  : "Connect an agent subscription before starting a chat."}
               </small>
             </span>
           </div>
           <div className="chat-context-actions">
+            {agentConnections.length > 1 ? (
+              <select
+                className="agent-model-select"
+                aria-label="Chat agent"
+                value={agentProvider}
+                disabled={sending || Boolean(pendingApproval)}
+                onChange={(event) => setAgentProvider(event.target.value as AgentProvider)}
+              >
+                {agentConnections.map((connection) => (
+                  <option key={connection.id} value={connection.provider}>
+                    {connection.provider === "openai_codex" ? "OpenAI Codex" : "Claude Code"}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <Button
               variant="outline"
               size="icon-sm"
@@ -581,6 +609,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
           {messages.length === 0 ? (
             <ChatWelcome
               configured={Boolean(agentConnection)}
+              agentName={agentName}
               onSuggestion={(suggestion) => void sendMessage(suggestion)}
             />
           ) : (
@@ -601,7 +630,7 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
                   </span>
                   <div className="chat-bubble assistant thinking">
                     <Loader2 className="spin" size={16} aria-hidden="true" />
-                    <span>{agentProgress?.message ?? "Claude is working with your connections…"}</span>
+                    <span>{agentProgress?.message ?? `${agentName} is working with your connections…`}</span>
                   </div>
                 </div>
               ) : null}
@@ -622,10 +651,10 @@ export function ChatPage(props: { data: AppData; onRefresh(): void }): ReactNode
                   : voiceListening
                     ? "Listening with Sayna…"
                     : agentConnection
-                      ? "Ask Claude to find, explain, or do something…"
-                      : "Set up Claude to start chatting"
+                      ? `Ask ${agentName} to find, explain, or do something…`
+                      : "Set up an agent to start chatting"
               }
-              aria-label="Message Claude"
+              aria-label={`Message ${agentName}`}
               disabled={!agentConnection || sending || Boolean(pendingApproval)}
               rows={3}
             />
@@ -829,7 +858,7 @@ function SaynaVoiceSettingsDialog(props: {
         <DialogHeader>
           <DialogTitle>Sayna voice</DialogTitle>
           <DialogDescription>
-            Use ElevenLabs for live speech recognition and spoken Claude replies inside Chat.
+            Use ElevenLabs for live speech recognition and spoken agent replies inside Chat.
           </DialogDescription>
         </DialogHeader>
         <form className="chat-voice-settings-form" onSubmit={(event) => void save(event)}>
@@ -884,7 +913,7 @@ function SaynaVoiceSettingsDialog(props: {
   );
 }
 
-function ChatWelcome(props: { configured: boolean; onSuggestion(value: string): void }): ReactNode {
+function ChatWelcome(props: { configured: boolean; agentName: string; onSuggestion(value: string): void }): ReactNode {
   if (!props.configured) {
     return (
       <div className="chat-welcome compact">
@@ -892,7 +921,7 @@ function ChatWelcome(props: { configured: boolean; onSuggestion(value: string): 
           <Bot size={25} aria-hidden="true" />
         </span>
         <h2>Connect your agent</h2>
-        <p>Chat uses the Claude subscription and model configured for this Open Connector runtime.</p>
+        <p>Chat uses a subscription agent and model configured for this Open Connector runtime.</p>
         <Button asChild>
           <Link to="/agents">Open Agents</Link>
         </Button>
@@ -906,7 +935,8 @@ function ChatWelcome(props: { configured: boolean; onSuggestion(value: string): 
       </span>
       <h2>What can I help you with?</h2>
       <p>
-        Claude can answer directly, use actions from your connected applications, or create and manage scheduled Flows.
+        {props.agentName} can answer directly, use actions from your connected applications, or create and manage
+        scheduled Flows.
       </p>
       <div className="chat-suggestions">
         {suggestions.map((suggestion) => (
@@ -1231,7 +1261,7 @@ export function applyApprovalResult(session: ChatSession, result: AgentChatAppro
   if (result.status !== "denied" && result.status !== "expired") return session;
   const content =
     result.status === "denied"
-      ? "The connector action was denied, so Claude stopped this request."
+      ? "The connector action was denied, so the agent stopped this request."
       : "The connector approval expired before the action could run.";
   return {
     messages: session.messages.map((message) =>

@@ -1,6 +1,10 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
+import type { AgentProvider } from "./agent-provider.ts";
 
-export type AgentRuntimeProvider = "claude_code";
+import { agentProviders, isAgentProvider } from "./agent-provider.ts";
+import { defaultCodexAgentModel } from "./codex-client.ts";
+
+export type AgentRuntimeProvider = AgentProvider;
 
 export interface AgentRuntimeSettings {
   provider: AgentRuntimeProvider;
@@ -33,11 +37,13 @@ interface StoredAgentSettings {
 }
 
 const connectionName = "default";
-const provider: AgentRuntimeProvider = "claude_code";
-const defaultModel = "opus";
+const defaultModels: Record<AgentRuntimeProvider, string> = {
+  claude_code: "opus",
+  openai_codex: defaultCodexAgentModel(),
+};
 
-export function defaultAgentModel(): string {
-  return defaultModel;
+export function defaultAgentModel(provider: AgentRuntimeProvider = "claude_code"): string {
+  return defaultModels[provider];
 }
 
 /**
@@ -45,15 +51,24 @@ export function defaultAgentModel(): string {
  */
 export class AgentSettingsService {
   private readonly store: Pick<IConnectionStore, "get" | "set">;
-  private readonly models: AgentModelSource;
+  private readonly models: Record<AgentRuntimeProvider, AgentModelSource>;
 
-  constructor(store: Pick<IConnectionStore, "get" | "set">, models: AgentModelSource) {
+  constructor(
+    store: Pick<IConnectionStore, "get" | "set">,
+    models: AgentModelSource | Record<AgentRuntimeProvider, AgentModelSource>,
+  ) {
     this.store = store;
-    this.models = models;
+    this.models =
+      "claude_code" in models
+        ? models
+        : {
+            claude_code: models,
+            openai_codex: models,
+          };
   }
 
   async list(): Promise<AgentRuntimeSettings[]> {
-    return [await this.get(provider)];
+    return await Promise.all(agentProviders.map((provider) => this.get(provider)));
   }
 
   async get(provider: AgentRuntimeProvider): Promise<AgentRuntimeSettings> {
@@ -61,7 +76,7 @@ export class AgentSettingsService {
     if (!stored) {
       return {
         provider,
-        model: defaultAgentModel(),
+        model: defaultAgentModel(provider),
       };
     }
     if (!isAgentSettings(stored, provider)) {
@@ -76,16 +91,16 @@ export class AgentSettingsService {
   async update(providerInput: string, input: unknown): Promise<AgentRuntimeSettings> {
     const provider = readProvider(providerInput);
     const model = readModel(input);
-    const models = await this.readAvailableModels();
+    const models = await this.readAvailableModels(provider);
     if (!models.some((option) => option.id === model)) {
-      throw new AgentSettingsError("invalid_model", `Anthropic model is not available: ${model}.`);
+      throw new AgentSettingsError("invalid_model", `Agent model is not available for ${provider}: ${model}.`);
     }
     await this.store.set(internalService(provider), connectionName, {
       authType: "custom_credential",
       values: { model },
       profile: {
         accountId: provider,
-        displayName: "Claude Code settings",
+        displayName: `${providerDisplayName(provider)} settings`,
         grantedScopes: [],
       },
       metadata: {
@@ -97,21 +112,25 @@ export class AgentSettingsService {
   }
 
   async listModels(providerInput: string): Promise<AgentModelOption[]> {
-    readProvider(providerInput);
-    return await this.readAvailableModels();
+    const provider = readProvider(providerInput);
+    return await this.readAvailableModels(provider);
   }
 
-  private async readAvailableModels(): Promise<AgentModelOption[]> {
+  private async readAvailableModels(provider: AgentRuntimeProvider): Promise<AgentModelOption[]> {
     try {
-      const models = await this.models.listModels();
+      const models = await this.models[provider].listModels();
       if (models.length === 0) {
-        throw new AgentSettingsError("agent_models_unavailable", "Anthropic returned no Claude models.", 503);
+        throw new AgentSettingsError(
+          "agent_models_unavailable",
+          `${providerDisplayName(provider)} returned no models.`,
+          503,
+        );
       }
       return [...models].sort((left, right) => {
-        if (left.id === defaultModel) {
+        if (left.id === defaultAgentModel(provider)) {
           return -1;
         }
-        if (right.id === defaultModel) {
+        if (right.id === defaultAgentModel(provider)) {
           return 1;
         }
         return left.displayName.localeCompare(right.displayName);
@@ -122,7 +141,7 @@ export class AgentSettingsService {
       }
       throw new AgentSettingsError(
         "agent_models_unavailable",
-        error instanceof Error ? error.message : "Anthropic models are unavailable.",
+        error instanceof Error ? error.message : `${providerDisplayName(provider)} models are unavailable.`,
         503,
       );
     }
@@ -145,10 +164,14 @@ function internalService(provider: AgentRuntimeProvider): string {
 }
 
 function readProvider(value: string): AgentRuntimeProvider {
-  if (value === "claude_code") {
+  if (isAgentProvider(value)) {
     return value;
   }
   throw new AgentSettingsError("agent_provider_not_found", `Agent provider not found: ${value}.`, 404);
+}
+
+function providerDisplayName(provider: AgentRuntimeProvider): string {
+  return provider === "claude_code" ? "Claude Code" : "OpenAI Codex";
 }
 
 function readModel(input: unknown): string {

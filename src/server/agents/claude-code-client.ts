@@ -1,4 +1,5 @@
 import type { AgentModelOption } from "./agent-settings-service.ts";
+import type { AgentTurnRequest, AgentTurnResult } from "./agent-turn.ts";
 
 export interface ClaudeCodeCommandResult {
   exitCode: number;
@@ -6,20 +7,11 @@ export interface ClaudeCodeCommandResult {
   stderr: string;
 }
 
-export interface ClaudeCodeTurnInput {
+export interface ClaudeCodeTurnInput extends AgentTurnRequest {
   oauthToken: string;
-  model: string;
-  effort: "none" | "low" | "medium" | "high";
-  systemPrompt: string;
-  prompt: string;
-  outputSchema: Record<string, unknown>;
-  signal?: AbortSignal;
 }
 
-export interface ClaudeCodeTurnResult {
-  structuredOutput: unknown;
-  usage?: unknown;
-}
+export type ClaudeCodeTurnResult = AgentTurnResult;
 
 export interface IClaudeCodeClient {
   inspectSubscriptionToken(oauthToken: string): Promise<void>;

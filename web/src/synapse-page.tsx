@@ -508,7 +508,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
       setSelectedNodeId(result.resultNodeId);
       props.onRefresh();
     } catch (caught) {
-      setError(messageFrom(caught, "Claude could not combine the selected nodes."));
+      setError(messageFrom(caught, "The agent could not combine the selected nodes."));
     } finally {
       setSynthesizingSelection(false);
     }
@@ -668,8 +668,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     ? artifactGroups.find((group) => group.nodes.some((node) => node.id === expandedNode.id))
     : undefined;
   const synthesisNodes = workspace?.nodes.filter((node) => selectedNodeIdSet.has(node.id)) ?? [];
-  const agentConfigured =
-    props.data.agentConnections?.some((connection) => connection.provider === "claude_code") ?? false;
+  const agentConfigured = Boolean(props.data.agentConnections?.length);
 
   return (
     <div className="synapse-page">
@@ -1456,7 +1455,7 @@ export function SynapseArtifactGroupCard(props: {
     ).values(),
   ];
   const Icon = artifactIcon(node.artifactKind);
-  const markdown = node.content ?? node.summary ?? "Open the node and ask Claude to develop this artifact.";
+  const markdown = node.content ?? node.summary ?? "Open the node and ask the agent to develop this artifact.";
   const selected = selectedIndex >= 0;
   const checked = props.checkedNodeIds.has(node.id);
   const linking = props.linkingFrom !== undefined && props.linkingFrom !== node.id;
@@ -1614,7 +1613,7 @@ export function SynapseNodeCard(props: {
   const markdown =
     props.node.kind === "provider"
       ? (props.node.instructions ?? "Ask this node to retrieve or act through its connection.")
-      : (props.node.content ?? props.node.summary ?? "Open the node and ask Claude to develop this artifact.");
+      : (props.node.content ?? props.node.summary ?? "Open the node and ask the agent to develop this artifact.");
   const previews = props.node.kind === "artifact" ? (props.node.previews ?? []) : [];
   const providerLabel =
     props.provider?.displayName ?? (props.node.kind === "provider" ? "Connected provider" : undefined);
@@ -1708,7 +1707,7 @@ export function synapseNodeSpeech(node: SynapseNode): string {
   const content =
     node.kind === "provider"
       ? (node.instructions ?? "Ask this node to retrieve or act through its connection.")
-      : (node.content ?? node.summary ?? "Open the node and ask Claude to develop this artifact.");
+      : (node.content ?? node.summary ?? "Open the node and ask the agent to develop this artifact.");
   return `${node.title}\n\n${content}`;
 }
 
@@ -1718,7 +1717,7 @@ function SynapseRefreshButton(props: {
   label: string;
   onRefresh(): void;
 }): ReactNode {
-  const actionLabel = `Ask Claude to refresh ${props.label}`;
+  const actionLabel = `Ask the agent to refresh ${props.label}`;
   return (
     <button
       className="synapse-node-refresh"
@@ -2073,7 +2072,7 @@ function SynapseSelectionComposer(props: {
           </Button>
         </div>
       </form>
-      {!props.configured ? <small>Connect Claude on the Agents page to use multi-node questions.</small> : null}
+      {!props.configured ? <small>Connect a subscription on the Agents page to use multi-node questions.</small> : null}
     </aside>
   );
 }
@@ -2146,7 +2145,7 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
   const markdown =
     props.node.kind === "provider"
       ? (props.node.instructions ?? "Ask this node to retrieve or act through its connection.")
-      : (props.node.content ?? props.node.summary ?? "Ask Claude to develop this artifact.");
+      : (props.node.content ?? props.node.summary ?? "Ask the agent to develop this artifact.");
   const previews = props.node.kind === "artifact" ? (props.node.previews ?? []) : [];
   const DetailIcon = props.node.kind === "artifact" ? artifactIcon(props.node.artifactKind) : Cable;
 
@@ -2204,8 +2203,8 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
             variant="ghost"
             size="icon-sm"
             disabled={props.refreshDisabled}
-            aria-label={`Ask Claude to refresh ${props.node.title}`}
-            title={`Ask Claude to refresh ${props.node.title}`}
+            aria-label={`Ask the agent to refresh ${props.node.title}`}
+            title={`Ask the agent to refresh ${props.node.title}`}
             onClick={props.onRefresh}
           >
             <RefreshCw className={props.refreshing ? "spin" : undefined} size={15} />
@@ -2381,7 +2380,7 @@ function SynapseNodePanel(props: {
   const handledChatRequestIdRef = useRef(0);
   const thread = props.workspace.threads.find((candidate) => candidate.nodeId === props.node.id);
   const pendingApprovalIds = thread ? pendingSynapseApprovalIds(thread) : [];
-  const configured = props.data.agentConnections?.some((connection) => connection.provider === "claude_code");
+  const configured = Boolean(props.data.agentConnections?.length);
   const hasArtifactContext =
     props.showNodeContext && props.node.kind === "artifact" && Boolean(props.node.summary || props.node.content);
 
@@ -2416,7 +2415,7 @@ function SynapseNodePanel(props: {
         if (!next) throw new Error("Synapse chat ended before returning the updated canvas.");
         props.onRefresh();
       } catch (caught) {
-        setError(messageFrom(caught, "Claude could not continue this node."));
+        setError(messageFrom(caught, "The agent could not continue this node."));
       } finally {
         setLiveProgress([]);
         setSending(false);
@@ -2483,7 +2482,7 @@ function SynapseNodePanel(props: {
         {!configured ? (
           <div className="synapse-chat-empty">
             <Bot size={24} />
-            <strong>Connect Claude to chat</strong>
+            <strong>Connect an agent to chat</strong>
             <span>Synapse uses the subscription configured on the Agents page.</span>
             <Button asChild size="sm">
               <Link to="/agents">Open Agents</Link>
@@ -2575,7 +2574,7 @@ function SynapseLiveProgress(props: { progress: AgentChatProgress[] }): ReactNod
         ) : null,
       )}
       <div className="synapse-message-bubble">
-        <Loader2 className="spin" size={15} /> {latest?.message ?? "Claude is working across this branch…"}
+        <Loader2 className="spin" size={15} /> {latest?.message ?? "The agent is working across this branch…"}
       </div>
     </div>
   );
@@ -2630,7 +2629,7 @@ function SynapseTextContextMenu(props: {
         role="menuitem"
         disabled={!props.canSend}
         aria-label={`Show more info for ${excerpt}`}
-        title={props.canSend ? "Send now and create an attached node" : "Connect Claude on the Agents page first"}
+        title={props.canSend ? "Send now and create an attached node" : "Connect an agent on the Agents page first"}
         onClick={props.onShowMore}
       >
         <Search size={15} />
@@ -2981,7 +2980,7 @@ function SynapseEmpty(props: { loading: boolean; onCreate(): void }): ReactNode 
         <BrainCircuit size={34} />
       </span>
       <h2>{props.loading ? "Loading Synapse…" : "Turn connected data into a map you can talk to."}</h2>
-      <p>Start with a provider, let Claude fan results into artifacts, then follow the branch that matters.</p>
+      <p>Start with a provider, let the agent fan results into artifacts, then follow the branch that matters.</p>
       <Button disabled={props.loading} onClick={props.onCreate}>
         {props.loading ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Create your first Synapse
       </Button>
@@ -3355,9 +3354,9 @@ function artifactIcon(kind: SynapseArtifactKind): typeof FileText {
 
 function nodeSuggestion(node: SynapseNode): string {
   if (node.kind === "provider")
-    return "Ask Claude to retrieve something. Useful results will become connected artifact cards.";
-  if (node.artifactKind === "draft") return "Ask Claude to revise this draft, then tell it when you are ready to send.";
-  return "Ask a follow-up. Claude sees this artifact and every node connected to its branch.";
+    return "Ask the agent to retrieve something. Useful results will become connected artifact cards.";
+  if (node.artifactKind === "draft") return "Ask the agent to revise this draft, then say when you are ready to send.";
+  return "Ask a follow-up. The agent sees this artifact and every node connected to its branch.";
 }
 
 function formatJson(value: unknown): string {

@@ -7,6 +7,7 @@ import type {
   FlowApprovalSetting,
   FlowConnectionRole,
   FlowDefinition,
+  FlowAgentProvider,
   FlowReasoningEffort,
   FlowStatus,
   FlowTrigger,
@@ -158,10 +159,12 @@ export class FlowService {
     const agentInput = requiredObject(value.agent, "agent");
     const agentProvider = readAgentProvider(agentInput.provider);
     const agentConnectionId = requiredText(agentInput.connectionId, "agent.connectionId", 200);
-    if (!(await this.options.agents?.getSummaryById(agentConnectionId))) {
-      throw new FlowError("invalid_flow", "The Claude Code flow agent must use a configured subscription connection.");
+    const agentConnection = await this.options.agents?.getSummaryById(agentConnectionId);
+    if (!agentConnection || agentConnection.provider !== agentProvider) {
+      throw new FlowError("invalid_flow", "The flow agent must use a configured connection for its provider.");
     }
-    const agentModel = (await this.options.agentSettings?.get(agentProvider))?.model ?? defaultAgentModel();
+    const agentModel =
+      (await this.options.agentSettings?.get(agentProvider))?.model ?? defaultAgentModel(agentProvider);
 
     const tools = this.normalizeTools(value.tools, connections, sources, destination);
     const trigger = this.normalizeTrigger(value.trigger, sources);
@@ -462,11 +465,14 @@ function readReasoningEffort(value: unknown): FlowReasoningEffort {
   throw new FlowError("invalid_flow", "agent.reasoningEffort must be none, low, medium, or high.");
 }
 
-function readAgentProvider(value: unknown): "claude_code" {
+function readAgentProvider(value: unknown): FlowAgentProvider {
   if (value === undefined || value === "claude_code") {
     return "claude_code";
   }
-  throw new FlowError("invalid_flow", "agent.provider must be claude_code.");
+  if (value === "openai_codex") {
+    return value;
+  }
+  throw new FlowError("invalid_flow", "agent.provider must be claude_code or openai_codex.");
 }
 
 function readMaxSteps(value: unknown): number {
@@ -494,6 +500,10 @@ function normalizeStoredFlow(flow: FlowDefinition): FlowDefinition {
   const sourceConnectionIds = flowSourceConnectionIds(normalized);
   return {
     ...normalized,
+    agent: {
+      ...normalized.agent,
+      provider: normalized.agent.provider ?? "claude_code",
+    },
     sourceConnectionIds,
     sourceConnectionId: undefined,
     tools: normalized.tools.map((tool) => ({

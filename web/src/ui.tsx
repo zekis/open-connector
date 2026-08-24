@@ -193,7 +193,8 @@ export async function loadRuntimeData(
     actionApprovals,
     agentConnections,
     agentSettings,
-    agentModels,
+    claudeAgentModels,
+    codexAgentModels,
   ] = await Promise.all([
     catalogRequest,
     apiGet<ConnectionRecord[]>("/api/connections"),
@@ -209,6 +210,7 @@ export async function loadRuntimeData(
     apiGet<AgentConnectionSummary[]>("/api/agent-connections"),
     apiGet<AgentRuntimeSettings[]>("/api/agent-settings"),
     apiGet<AgentModelOption[]>("/api/agent-settings/claude_code/models"),
+    apiGet<AgentModelOption[]>("/api/agent-settings/openai_codex/models"),
   ]);
 
   return {
@@ -228,7 +230,10 @@ export async function loadRuntimeData(
       actionApprovals,
       agentConnections,
       agentSettings,
-      agentModels,
+      agentModels: {
+        claude_code: claudeAgentModels,
+        openai_codex: codexAgentModels,
+      },
     },
   };
 }

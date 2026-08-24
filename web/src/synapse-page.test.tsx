@@ -216,7 +216,7 @@ describe("SynapseNodeCard", () => {
     expect(html).toContain("Open artifact resources");
     expect(html).toContain("Sales brief.pdf");
     expect(html).toContain("Stop reading New mining opportunity");
-    expect(html).toContain("Ask Claude to refresh New mining opportunity");
+    expect(html).toContain("Ask the agent to refresh New mining opportunity");
     expect(html).toContain("Drag New mining opportunity");
     expect(html).toContain('class="provider-icon"');
     expect(html).not.toContain("<iframe");

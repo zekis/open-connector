@@ -266,6 +266,21 @@ describe("FlowRunner", () => {
     expect(harness.agent.inputs[0]?.tools[0]?.description).toContain('source connection "Secondary source"');
     expect(harness.agent.inputs[0]?.instructions).toContain("across every relevant source connection");
   });
+
+  it("dispatches OpenAI Codex flows to the Codex adapter", async () => {
+    const harness = createHarness("always_allow", "gpt-5.6-sol");
+    harness.flow.agent.provider = "openai_codex";
+
+    const detail = await harness.runner.start(harness.flow.id);
+
+    expect(detail.run.status).toBe("completed");
+    expect(harness.codexAgent.inputs).toHaveLength(2);
+    expect(harness.agent.inputs).toHaveLength(0);
+    expect(detail.run.flowSnapshot.agent).toMatchObject({
+      provider: "openai_codex",
+      model: "gpt-5.6-sol",
+    });
+  });
 });
 
 function createHarness(
@@ -276,6 +291,7 @@ function createHarness(
   flow: FlowDefinition;
   actions: FakeActionRunner;
   agent: FakeFlowAgent;
+  codexAgent: FakeFlowAgent;
   synapseNodes: Array<{ workspaceId: string; input: unknown }>;
   runner: FlowRunner;
 } {
@@ -283,6 +299,7 @@ function createHarness(
   const store = new MemoryFlowStore();
   const actions = new FakeActionRunner();
   const agent = new FakeFlowAgent();
+  const codexAgent = new FakeFlowAgent();
   const synapseNodes: Array<{ workspaceId: string; input: unknown }> = [];
   const connections = new Map(createConnections().map((connection) => [connection.id, connection]));
   const runner = new FlowRunner({
@@ -303,6 +320,7 @@ function createHarness(
     store,
     actions,
     claudeCodeAgent: agent,
+    codexAgent,
     agentSettings: {
       async get(provider: AgentRuntimeProvider) {
         return { provider, model: currentModel };
@@ -321,7 +339,7 @@ function createHarness(
     },
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
   });
-  return { flow, actions, agent, synapseNodes, runner };
+  return { flow, actions, agent, codexAgent, synapseNodes, runner };
 }
 
 class FakeActionRunner implements IActionRunner {

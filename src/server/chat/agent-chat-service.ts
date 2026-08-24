@@ -3,9 +3,11 @@ import type { ConnectionService, ConnectionSummary } from "../../connection-serv
 import type { ActionPolicySnapshot } from "../../core/action-policy.ts";
 import type { ExecutionResult } from "../../core/types.ts";
 import type { IActionRunner } from "../actions/action-runner.ts";
-import type { AgentCredentialService } from "../agents/agent-credential-service.ts";
+import type { AgentCredentialService, AgentProvider } from "../agents/agent-credential-service.ts";
 import type { AgentSettingsService } from "../agents/agent-settings-service.ts";
+import type { AgentTurnRequest, AgentTurnResult } from "../agents/agent-turn.ts";
 import type { IClaudeCodeClient } from "../agents/claude-code-client.ts";
+import type { CodexClient } from "../agents/codex-client.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
 import type { FlowService } from "../flows/flow-service.ts";
@@ -27,6 +29,7 @@ import {
   readClaudeAgentDecision,
 } from "../agents/claude-agent-decision.ts";
 import { ClaudeCodeError } from "../agents/claude-code-client.ts";
+import { CodexError } from "../agents/codex-client.ts";
 import { ConnectionApprovalError } from "../approvals/connection-approval-service.ts";
 import { agentChatFlowTools, isAgentChatFlowTool, runAgentChatFlowTool } from "./agent-chat-flow-tools.ts";
 
@@ -43,9 +46,11 @@ export type {
 export interface AgentChatServiceOptions {
   catalog: CatalogStore;
   connections: Pick<ConnectionService, "listConnections">;
-  agents: Pick<AgentCredentialService, "getClaudeOAuthToken" | "list">;
+  agents: Pick<AgentCredentialService, "getClaudeOAuthToken" | "list"> &
+    Partial<Pick<AgentCredentialService, "assertCodexConnection">>;
   agentSettings: Pick<AgentSettingsService, "get">;
   claudeCode: IClaudeCodeClient;
+  codex?: Pick<CodexClient, "completeTurn">;
   actions: IActionRunner;
   flows: Pick<FlowService, "create" | "delete" | "getRequired" | "list" | "update">;
   approvals: Pick<
@@ -91,9 +96,10 @@ interface ChatContext extends ChatConnectorContext {
 }
 
 interface PreparedChat {
-  oauthToken: string;
+  provider: AgentProvider;
   model: string;
   context: ChatContext;
+  completeTurn(input: AgentTurnRequest): Promise<AgentTurnResult>;
 }
 
 interface ContinueConversationOptions {
@@ -108,12 +114,14 @@ interface ParsedChatRequest {
   messages: AgentChatMessage[];
   voiceMode: boolean;
   timeZone: string;
+  agentProvider?: AgentProvider;
 }
 
 interface ParsedInterruptionRequest {
   messages: AgentChatMessage[];
   interruption: string;
   progress?: string;
+  agentProvider?: AgentProvider;
 }
 
 interface AgentChatDateTimeContext {
@@ -175,7 +183,7 @@ const chatTools = [
   },
 ];
 
-/** Runs one bounded conversational Claude turn with host-controlled connector and Flow tools. */
+/** Runs one bounded conversational agent turn with host-controlled connector and Flow tools. */
 export class AgentChatService implements IAgentChatService {
   private readonly options: AgentChatServiceOptions;
   private readonly approvalBatchLocks = new Map<string, Promise<void>>();
@@ -191,7 +199,7 @@ export class AgentChatService implements IAgentChatService {
   ): Promise<AgentChatResponse> {
     const request = readChatRequest(input);
     return await this.withErrorHandling(async () =>
-      this.continueConversation(request.messages, await this.prepareChat(), [], {
+      this.continueConversation(request.messages, await this.prepareChat(request.agentProvider), [], {
         voiceMode: request.voiceMode,
         timeZone: request.timeZone,
         onProgress,
@@ -208,7 +216,7 @@ export class AgentChatService implements IAgentChatService {
   ): Promise<AgentChatResponse> {
     const request = readChatRequest(input);
     return await this.withErrorHandling(async () =>
-      this.continueConversation(request.messages, await this.prepareChat(), [], {
+      this.continueConversation(request.messages, await this.prepareChat(request.agentProvider), [], {
         voiceMode: request.voiceMode,
         timeZone: request.timeZone,
         onProgress,
@@ -221,9 +229,8 @@ export class AgentChatService implements IAgentChatService {
   async classifyInterruption(input: unknown, signal?: AbortSignal): Promise<AgentChatInterruptionDecision> {
     const request = readInterruptionRequest(input);
     return await this.withErrorHandling(async () => {
-      const prepared = await this.prepareChat();
-      const result = await this.options.claudeCode.completeTurn({
-        oauthToken: prepared.oauthToken,
+      const prepared = await this.prepareChat(request.agentProvider);
+      const result = await prepared.completeTurn({
         model: prepared.model,
         effort: "low",
         systemPrompt: createInterruptionSystemPrompt(),
@@ -276,7 +283,7 @@ export class AgentChatService implements IAgentChatService {
     }
 
     try {
-      const prepared = await this.prepareChat();
+      const prepared = await this.prepareChat(continuation.agentProvider);
       const resolvedActivities = new Map<string, AgentChatToolActivity>();
       for (const candidate of chatApprovals) {
         if (candidate.status === "approved") {
@@ -390,16 +397,34 @@ export class AgentChatService implements IAgentChatService {
     };
   }
 
-  private async prepareChat(): Promise<PreparedChat> {
-    const [agentConnection, settings, context] = await Promise.all([
-      this.requiredAgentConnection(),
-      this.options.agentSettings.get("claude_code"),
+  private async prepareChat(requestedProvider?: AgentProvider): Promise<PreparedChat> {
+    const [agentConnection, context] = await Promise.all([
+      this.requiredAgentConnection(requestedProvider),
       this.createContext(),
     ]);
+    const provider = agentConnection.provider;
+    const currentSettings = await this.options.agentSettings.get(provider);
+    if (provider === "openai_codex") {
+      if (!this.options.agents.assertCodexConnection) {
+        throw new AgentChatError("agent_unavailable", "OpenAI Codex is unavailable in this runtime.", 503);
+      }
+      await this.options.agents.assertCodexConnection(agentConnection.id);
+      if (!this.options.codex) {
+        throw new AgentChatError("agent_unavailable", "OpenAI Codex is unavailable in this runtime.", 503);
+      }
+      return {
+        provider,
+        model: currentSettings.model,
+        context: { ...context, agentConnectionId: agentConnection.id },
+        completeTurn: (input) => this.options.codex!.completeTurn(input),
+      };
+    }
+    const oauthToken = await this.options.agents.getClaudeOAuthToken(agentConnection.id);
     return {
-      oauthToken: await this.options.agents.getClaudeOAuthToken(agentConnection.id),
-      model: settings.model,
+      provider,
+      model: currentSettings.model,
       context: { ...context, agentConnectionId: agentConnection.id },
+      completeTurn: (input) => this.options.claudeCode.completeTurn({ ...input, oauthToken }),
     };
   }
 
@@ -414,8 +439,7 @@ export class AgentChatService implements IAgentChatService {
     try {
       for (let step = 0; step <= maxToolSteps; step++) {
         assertChatNotCancelled(options.signal);
-        const result = await this.options.claudeCode.completeTurn({
-          oauthToken: prepared.oauthToken,
+        const result = await prepared.completeTurn({
           model: prepared.model,
           effort: "medium",
           systemPrompt: createSystemPrompt(options.voiceMode, options.extension?.systemPrompt),
@@ -440,17 +464,18 @@ export class AgentChatService implements IAgentChatService {
               toolActivity,
               options.voiceMode,
               options.timeZone,
+              prepared.provider,
             );
           }
           const content = decision.text?.trim();
           if (!content) {
-            throw new ClaudeAgentDecisionError("Claude Code returned a final chat decision without text.");
+            throw new ClaudeAgentDecisionError("The agent returned a final chat decision without text.");
           }
           return completedResponse(content, toolActivity);
         }
         if (!decision.toolName || !decision.arguments) {
           throw new ClaudeAgentDecisionError(
-            "Claude Code returned a chat tool decision without a tool name and arguments.",
+            "The agent returned a chat tool decision without a tool name and arguments.",
           );
         }
         if (step === maxToolSteps) {
@@ -461,6 +486,7 @@ export class AgentChatService implements IAgentChatService {
               toolActivity,
               options.voiceMode,
               options.timeZone,
+              prepared.provider,
             );
           }
           throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
@@ -492,6 +518,7 @@ export class AgentChatService implements IAgentChatService {
           toolActivity,
           options.voiceMode,
           options.timeZone,
+          prepared.provider,
         );
       }
       throw error;
@@ -505,6 +532,7 @@ export class AgentChatService implements IAgentChatService {
     toolActivity: AgentChatToolActivity[],
     voiceMode: boolean,
     timeZone: string,
+    agentProvider: AgentProvider,
   ): Promise<AgentChatResponse> {
     await Promise.all(
       approvalIds.map((approvalId) =>
@@ -515,6 +543,7 @@ export class AgentChatService implements IAgentChatService {
           voiceMode,
           approvalIds,
           timeZone,
+          agentProvider,
         ),
       ),
     );
@@ -529,12 +558,15 @@ export class AgentChatService implements IAgentChatService {
     }
   }
 
-  private async requiredAgentConnection(): Promise<{ id: string }> {
-    const connection = (await this.options.agents.list()).find((item) => item.provider === "claude_code");
+  private async requiredAgentConnection(provider?: AgentProvider): Promise<{ id: string; provider: AgentProvider }> {
+    const connections = await this.options.agents.list();
+    const connection = provider ? connections.find((item) => item.provider === provider) : connections[0];
     if (!connection) {
       throw new AgentChatError(
         "agent_connection_not_found",
-        "Connect a Claude subscription on the Agents page before starting a chat.",
+        provider
+          ? `Connect ${provider === "openai_codex" ? "a ChatGPT" : "a Claude"} subscription on the Agents page before starting a chat.`
+          : "Connect an agent subscription on the Agents page before starting a chat.",
       );
     }
     return connection;
@@ -703,6 +735,7 @@ function readChatRequest(input: unknown): ParsedChatRequest {
     messages: readMessages(body),
     voiceMode: body.voiceMode === true,
     timeZone: readTimeZone(body.timeZone),
+    agentProvider: readAgentProvider(body.agentProvider),
   };
 }
 
@@ -729,7 +762,15 @@ function readInterruptionRequest(input: unknown): ParsedInterruptionRequest {
     messages: readMessages(body),
     interruption: readRequiredText(body.interruption, "interruption", maxInterruptionCharacters),
     progress: readOptionalText(body.progress, "progress", 500),
+    agentProvider: readAgentProvider(body.agentProvider),
   };
+}
+
+function readAgentProvider(value: unknown): AgentProvider | undefined {
+  if (value === undefined || value === "claude_code" || value === "openai_codex") {
+    return value;
+  }
+  throw new AgentChatError("invalid_chat", "agentProvider must be claude_code or openai_codex.");
 }
 
 function readMessages(body: Record<string, unknown>): AgentChatMessage[] {
@@ -1178,9 +1219,13 @@ function normalizeChatError(error: unknown): AgentChatError {
   if (error instanceof ClaudeAgentDecisionError) {
     return new AgentChatError(error.code, error.message, 503);
   }
-  if (error instanceof ClaudeCodeError || error instanceof AgentCredentialError) {
+  if (error instanceof ClaudeCodeError || error instanceof CodexError || error instanceof AgentCredentialError) {
     const status =
-      error.code === "agent_connection_not_found" ? 400 : error.code === "claude_agent_cancelled" ? 409 : 503;
+      error.code === "agent_connection_not_found" || error.code === "codex_auth_failed"
+        ? 400
+        : error.code === "claude_agent_cancelled" || error.code === "codex_agent_cancelled"
+          ? 409
+          : 503;
     return new AgentChatError(error.code, error.message, status);
   }
   if (error instanceof ConnectionApprovalError) {

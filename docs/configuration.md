@@ -24,6 +24,7 @@ OpenConnector is configured with environment variables.
 | `OOMOL_CONNECT_TRANSIT_FILE_MAX_BYTES`   | `104857600`               | Maximum transit file upload size.                                              |
 | `OOMOL_CONNECT_RUN_LIMIT`                | `5000`                    | Maximum number of recent action run audit records to retain.                   |
 | `OOMOL_CONNECT_SAYNA_URL`                | unset                     | Optional external Sayna WebSocket URL for non-Docker Node deployments.         |
+| `CODEX_HOME`                             | `~/.codex`                | Codex CLI state and ChatGPT login. Docker sets `/app/data/codex`.              |
 
 Example:
 
@@ -44,6 +45,23 @@ or `*`; those grants can only narrow the deployment and runtime proxy policy.
 `OOMOL_CONNECT_RUNTIME_TOKEN` remains available for bootstrap scripts and backward compatibility.
 Because the bootstrap token has no stored policy, its proxy access is controlled only by the
 deployment and runtime proxy rules.
+
+## OpenAI Codex subscription agent
+
+Open Connector can use a ChatGPT subscription through the official Codex CLI for Chat, Synapse,
+and Flows. Run `codex login`, choose ChatGPT sign-in, then open **Agents** and verify the local
+login. Open Connector stores only a connection marker; Codex owns its cached authentication.
+
+Docker images include the Codex CLI and keep its state under `/app/data/codex` on the existing data
+volume. Sign in with device authentication before verifying the connection in the console:
+
+```bash
+docker exec -it open-connector codex login --device-auth
+# Docker Compose: docker compose exec connector codex login --device-auth
+```
+
+Protect the data volume because Codex authentication is stored under `CODEX_HOME`. Codex agent
+execution is Node/Docker-only; Cloudflare Workers cannot launch the local CLI.
 
 ## Sayna voice chat
 

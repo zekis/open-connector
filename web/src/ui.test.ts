@@ -211,6 +211,7 @@ describe("loadRuntimeData", () => {
       "/api/agent-connections",
       "/api/agent-settings",
       "/api/agent-settings/claude_code/models",
+      "/api/agent-settings/openai_codex/models",
     ]);
     expect(calls[0]?.headers.get("authorization")).toBe("Bearer local-token");
     for (const call of calls.slice(1)) {

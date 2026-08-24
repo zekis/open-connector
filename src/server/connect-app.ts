@@ -16,12 +16,14 @@ import { ActionRunner } from "./actions/action-runner.ts";
 import { AgentCredentialService } from "./agents/agent-credential-service.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { ClaudeCodeClient } from "./agents/claude-code-client.ts";
+import { CodexClient } from "./agents/codex-client.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import { AgentChatService } from "./chat/agent-chat-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { FeedService } from "./feed/feed-service.ts";
 import { ClaudeCodeFlowAgent } from "./flows/claude-code-flow-agent.ts";
+import { CodexFlowAgent } from "./flows/codex-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
@@ -68,8 +70,12 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     logger: options.logger,
   });
   const claudeCode = new ClaudeCodeClient();
-  const agentCredentials = new AgentCredentialService(options.runtimeDatabase.connectionStore, claudeCode);
-  const agentSettings = new AgentSettingsService(options.runtimeDatabase.connectionStore, claudeCode);
+  const codex = new CodexClient();
+  const agentCredentials = new AgentCredentialService(options.runtimeDatabase.connectionStore, claudeCode, codex);
+  const agentSettings = new AgentSettingsService(options.runtimeDatabase.connectionStore, {
+    claude_code: claudeCode,
+    openai_codex: codex,
+  });
   const actionPolicy = options.actionPolicy ?? new ActionPolicyService();
   const connectionApprovals = new ConnectionApprovalService({
     catalog: options.catalog,
@@ -114,6 +120,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     connectionApprovals,
     synapses: flowSynapses,
     claudeCodeAgent: new ClaudeCodeFlowAgent(agentCredentials, claudeCode),
+    codexAgent: new CodexFlowAgent(agentCredentials, codex),
     getPolicySnapshot,
     logger: options.logger,
   });
@@ -123,6 +130,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     agents: agentCredentials,
     agentSettings,
     claudeCode,
+    codex,
     actions,
     flows,
     approvals: connectionApprovals,

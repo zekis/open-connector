@@ -880,24 +880,34 @@ export class ConnectServer {
   }
 
   private async upsertAgentConnection(context: Context, provider: string): Promise<Response> {
-    if (provider !== "claude_code") {
-      return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
+    if (provider === "openai_codex") {
+      await readJsonBody(context);
+      return await this.writeAgentCredentialResult(context, this.options.agentCredentials!.connectCodexSubscription());
     }
-    const body = await readJsonBody(context);
-    return await this.writeAgentCredentialResult(
-      context,
-      this.options.agentCredentials!.connectClaudeSubscription(body),
-    );
+    if (provider === "claude_code") {
+      const body = await readJsonBody(context);
+      return await this.writeAgentCredentialResult(
+        context,
+        this.options.agentCredentials!.connectClaudeSubscription(body),
+      );
+    }
+    return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
   }
 
   private async deleteAgentConnection(context: Context, provider: string): Promise<Response> {
-    if (provider !== "claude_code") {
-      return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
+    if (provider === "openai_codex") {
+      return await this.writeAgentCredentialResult(
+        context,
+        this.options.agentCredentials!.disconnectCodexSubscription().then(() => ({ provider, deleted: true })),
+      );
     }
-    return await this.writeAgentCredentialResult(
-      context,
-      this.options.agentCredentials!.disconnectClaudeSubscription().then(() => ({ provider, deleted: true })),
-    );
+    if (provider === "claude_code") {
+      return await this.writeAgentCredentialResult(
+        context,
+        this.options.agentCredentials!.disconnectClaudeSubscription().then(() => ({ provider, deleted: true })),
+      );
+    }
+    return jsonError(context, 404, "agent_provider_not_found", `Agent provider not found: ${provider}.`);
   }
 
   private async writeAgentCredentialResult(context: Context, operation: Promise<unknown>): Promise<Response> {

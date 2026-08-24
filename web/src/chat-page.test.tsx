@@ -86,8 +86,34 @@ describe("ChatPage", () => {
     expect(html).toContain("Agent setup required");
     expect(html).toContain("Connect your agent");
     expect(html).toContain('href="/agents"');
-    expect(html).toContain("Set up Claude to start chatting");
+    expect(html).toContain("Set up an agent to start chatting");
     expect(html).toContain("disabled");
+  });
+
+  it("uses Codex labels when a ChatGPT subscription is configured", () => {
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ChatPage
+          data={{
+            ...emptyData,
+            agentConnections: [
+              {
+                id: "codex-subscription",
+                provider: "openai_codex",
+                authType: "chatgpt_subscription",
+                configured: true,
+                displayName: "ChatGPT subscription",
+              },
+            ],
+          }}
+          onRefresh={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("Codex is ready");
+    expect(html).toContain("Ask Codex to find, explain, or do something");
+    expect(html).toContain('aria-label="Message Codex"');
   });
 
   it("recognizes an approval queued by a connector action", () => {

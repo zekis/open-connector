@@ -23,6 +23,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 ENV OOMOL_CONNECT_DATA_DIR=/app/data
+ENV CODEX_HOME=/app/data/codex
 ENV OOMOL_CONNECT_SAYNA_EMBEDDED=true
 ENV LD_LIBRARY_PATH=/opt/sayna
 ENV PATH=/app/node_modules/.bin:$PATH

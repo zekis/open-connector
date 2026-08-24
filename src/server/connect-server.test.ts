@@ -13,6 +13,7 @@ import type { IOAuthClientConfigStore, OAuthClientConfig } from "../oauth/oauth-
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../oauth/oauth-flow-service.ts";
 import type { IProviderLoader } from "../providers/provider-loader.ts";
 import type { AgentModelSource } from "./agents/agent-settings-service.ts";
+import type { IClaudeCodeClient } from "./agents/claude-code-client.ts";
 import type { RuntimeActionHttpResult } from "./api/runtime-api.ts";
 import type { RuntimeJwtVerifier } from "./api/runtime-jwt.ts";
 import type {
@@ -58,6 +59,7 @@ import { OAuthClientConfigService } from "../oauth/oauth-client-config-service.t
 import { OAuthFlowService } from "../oauth/oauth-flow-service.ts";
 import { actionInputMaxDepth, hashActionRequest, hashIdempotencyKey } from "./actions/action-idempotency.ts";
 import { ActionRunner } from "./actions/action-runner.ts";
+import { AgentCredentialService } from "./agents/agent-credential-service.ts";
 import { AgentSettingsService } from "./agents/agent-settings-service.ts";
 import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
@@ -160,7 +162,10 @@ describe("ConnectServer", () => {
 
     const initial = await app.request("/api/agent-settings");
     expect(initial.status).toBe(200);
-    await expect(initial.json()).resolves.toEqual([{ provider: "claude_code", model: "opus" }]);
+    await expect(initial.json()).resolves.toEqual([
+      { provider: "claude_code", model: "opus" },
+      { provider: "openai_codex", model: "gpt-5.6-sol" },
+    ]);
 
     const models = await app.request("/api/agent-settings/claude_code/models");
     expect(models.status).toBe(200);
@@ -197,6 +202,45 @@ describe("ConnectServer", () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  it("verifies and removes an OpenAI Codex ChatGPT subscription connection", async () => {
+    const connectionStore = new MemoryConnectionStore();
+    const claudeCode: IClaudeCodeClient = {
+      async inspectSubscriptionToken() {},
+      async listModels() {
+        return [];
+      },
+      async completeTurn() {
+        throw new Error("Not used.");
+      },
+    };
+    let inspections = 0;
+    const credentials = new AgentCredentialService(connectionStore, claudeCode, {
+      async inspectSubscriptionLogin() {
+        inspections += 1;
+      },
+    });
+    const app = createTestServer([], { agentCredentials: credentials }).createApp();
+
+    const connected = await app.request("/api/agent-connections/openai_codex", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(connected.status).toBe(200);
+    await expect(connected.json()).resolves.toMatchObject({
+      provider: "openai_codex",
+      authType: "chatgpt_subscription",
+      displayName: "ChatGPT subscription",
+    });
+    expect(inspections).toBe(1);
+    await expect((await app.request("/api/agent-connections")).json()).resolves.toEqual([
+      expect.objectContaining({ provider: "openai_codex" }),
+    ]);
+
+    expect((await app.request("/api/agent-connections/openai_codex", { method: "DELETE" })).status).toBe(200);
+    await expect((await app.request("/api/agent-connections")).json()).resolves.toEqual([]);
   });
 
   it("forwards authenticated Chat messages to the configured agent service", async () => {
@@ -3372,6 +3416,28 @@ describe("ConnectServer", () => {
     expect(created.id).toBeTruthy();
     expect(created.revision).toBeTruthy();
 
+    const codexCreateResponse = await app.request("/api/flows", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...input,
+        name: "Archive with Codex",
+        agent: {
+          provider: "openai_codex",
+          connectionId: "codex-subscription",
+          reasoningEffort: "medium",
+        },
+      }),
+    });
+    expect(codexCreateResponse.status).toBe(200);
+    await expect(codexCreateResponse.json()).resolves.toMatchObject({
+      agent: {
+        provider: "openai_codex",
+        connectionId: "codex-subscription",
+        model: "gpt-5.6-sol",
+      },
+    });
+
     const legacyCreateResponse = await app.request("/api/flows", {
       method: "POST",
       headers: { authorization, "content-type": "application/json" },
@@ -3683,6 +3749,7 @@ interface CreateTestServerOptions {
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
   agentChat?: IAgentChatService;
+  agentCredentials?: AgentCredentialService;
   providerLoader?: IProviderLoader;
   logger?: Logger;
   idempotency?: IIdempotencyStore;
@@ -3744,6 +3811,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     catalog,
     providerLoader,
     connections,
+    agentCredentials: options.agentCredentials,
     agentChat: options.agentChat,
     agentSettings: new AgentSettingsService(connectionStore, new TestAgentModelSource()),
     oauthClientConfigs: clientConfigs,
@@ -3815,20 +3883,33 @@ function createTestFlowService(): FlowService {
     },
     agents: {
       async getSummaryById(id: string) {
-        return id === "claude-subscription"
-          ? {
-              id,
-              provider: "claude_code" as const,
-              authType: "subscription_oauth" as const,
-              configured: true as const,
-              displayName: "Claude subscription",
-            }
-          : undefined;
+        if (id === "claude-subscription") {
+          return {
+            id,
+            provider: "claude_code" as const,
+            authType: "subscription_oauth" as const,
+            configured: true as const,
+            displayName: "Claude subscription",
+          };
+        }
+        if (id === "codex-subscription") {
+          return {
+            id,
+            provider: "openai_codex" as const,
+            authType: "chatgpt_subscription" as const,
+            configured: true as const,
+            displayName: "ChatGPT subscription",
+          };
+        }
+        return undefined;
       },
     },
     agentSettings: {
-      async get() {
-        return { provider: "claude_code" as const, model: "opus" };
+      async get(provider) {
+        return {
+          provider,
+          model: provider === "openai_codex" ? "gpt-5.6-sol" : "opus",
+        };
       },
     },
     synapses: {

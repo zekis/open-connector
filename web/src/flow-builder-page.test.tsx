@@ -113,6 +113,13 @@ const editorData: AppData = {
       configured: true,
       displayName: "Claude Code",
     },
+    {
+      id: "codex-subscription-1",
+      provider: "openai_codex",
+      authType: "chatgpt_subscription",
+      configured: true,
+      displayName: "ChatGPT subscription",
+    },
   ],
 };
 
@@ -125,7 +132,7 @@ describe("FlowBuilderPage", () => {
 
     expect(html).toContain("Create a Flow");
     expect(html).toContain("Back to Flows");
-    expect(html).toContain("Connect a Claude subscription from the Agents panel");
+    expect(html).toContain("Connect a subscription agent from the Agents panel");
     expect(html).toContain('max="200"');
     expect(html).toContain('value="20"');
     expect(html).toContain("Current run limit: 20 calls across 1 source");
@@ -147,6 +154,7 @@ describe("FlowBuilderPage", () => {
     expect(html).not.toContain("Start this Flow");
     expect(html).not.toContain(">Model<");
     expect(html).not.toContain("opus");
+    expect(html).toContain("ChatGPT subscription · OpenAI Codex");
   });
 
   it("keeps persisted schedule settings out of the Flow editor", () => {

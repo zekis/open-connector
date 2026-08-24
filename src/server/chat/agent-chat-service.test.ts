@@ -3,6 +3,7 @@ import type { ProviderDefinition } from "../../core/types.ts";
 import type { ExecutionResult } from "../../core/types.ts";
 import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts";
 import type { AgentModelOption } from "../agents/agent-settings-service.ts";
+import type { AgentTurnRequest } from "../agents/agent-turn.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
 import type { FlowDefinition, FlowDefinitionInput } from "../flows/flow-types.ts";
@@ -692,6 +693,62 @@ describe("AgentChatService", () => {
       code: "agent_connection_not_found",
       status: 400,
     });
+  });
+
+  it("uses a verified Codex ChatGPT subscription when requested", async () => {
+    const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
+    const codexInputs: AgentTurnRequest[] = [];
+    const service = new AgentChatService({
+      catalog,
+      connections: {
+        async listConnections() {
+          return [connection];
+        },
+      },
+      agents: {
+        async list() {
+          return [
+            {
+              id: "codex-subscription",
+              provider: "openai_codex" as const,
+              authType: "chatgpt_subscription" as const,
+              configured: true as const,
+              displayName: "ChatGPT subscription",
+            },
+          ];
+        },
+        async getClaudeOAuthToken() {
+          throw new Error("Claude must not be selected.");
+        },
+        async assertCodexConnection(id) {
+          expect(id).toBe("codex-subscription");
+        },
+      },
+      agentSettings: {
+        async get(provider) {
+          return { provider, model: "gpt-5.6-sol" };
+        },
+      },
+      claudeCode: new FakeClaudeCodeClient([]),
+      codex: {
+        async completeTurn(input) {
+          codexInputs.push(input);
+          return { structuredOutput: { kind: "final", text: "Answered by Codex." } };
+        },
+      },
+      actions: new FakeActionRunner(),
+      flows: new FakeFlowService(),
+      approvals: new FakeChatApprovals(),
+      getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
+    });
+
+    const response = await service.respond({
+      messages: [{ role: "user", content: "Hello" }],
+      agentProvider: "openai_codex",
+    });
+
+    expect(response.message.content).toBe("Answered by Codex.");
+    expect(codexInputs[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "medium" });
   });
 });
 

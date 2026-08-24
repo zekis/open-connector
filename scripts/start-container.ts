@@ -6,6 +6,8 @@ import { connect } from "node:net";
 import { join } from "node:path";
 
 const dataDir = process.env.OOMOL_CONNECT_DATA_DIR ?? join(process.cwd(), "data");
+const codexHome = process.env.CODEX_HOME;
+if (codexHome) mkdirSync(codexHome, { recursive: true });
 const saynaCacheDir = join(dataDir, "sayna-cache");
 mkdirSync(saynaCacheDir, { recursive: true });
 if (readdirSync(saynaCacheDir).length === 0) {

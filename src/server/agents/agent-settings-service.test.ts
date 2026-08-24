@@ -9,7 +9,10 @@ describe("AgentSettingsService", () => {
   it("returns provider defaults before settings are stored", async () => {
     const service = new AgentSettingsService(new MemoryConnectionStore(), new FakeAgentModelSource());
 
-    await expect(service.list()).resolves.toEqual([{ provider: "claude_code", model: "opus" }]);
+    await expect(service.list()).resolves.toEqual([
+      { provider: "claude_code", model: "opus" },
+      { provider: "openai_codex", model: "gpt-5.6-sol" },
+    ]);
     await expect(service.listModels("claude_code")).resolves.toEqual([
       { id: "opus", displayName: "Opus 5" },
       { id: "sonnet", displayName: "Sonnet 5" },

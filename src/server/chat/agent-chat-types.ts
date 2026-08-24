@@ -55,6 +55,7 @@ export interface AgentChatApprovalContinuation {
   batchApprovalIds?: string[];
   voiceMode?: boolean;
   timeZone?: string;
+  agentProvider?: AgentProvider;
   response?: AgentChatResponse;
 }
 
@@ -73,3 +74,4 @@ export type AgentChatStreamEvent =
   | { type: "progress"; progress: AgentChatProgress }
   | { type: "response"; response: AgentChatResponse }
   | { type: "error"; error: { code: string; message: string } };
+import type { AgentProvider } from "../agents/agent-credential-service.ts";

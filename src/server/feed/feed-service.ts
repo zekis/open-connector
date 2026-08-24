@@ -105,6 +105,7 @@ export class FeedService {
     const response = await this.options.agentChat.respond({
       messages: createAgentMessages(detail, comments),
       voiceMode: false,
+      agentProvider: detail.run.flowSnapshot.agent.provider ?? "claude_code",
     });
     const assistantComment = responseComment(response);
     const thread: FeedThread = {

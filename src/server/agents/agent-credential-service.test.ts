@@ -10,7 +10,7 @@ describe("AgentCredentialService", () => {
   it("stores a Claude subscription token without exposing it in summaries", async () => {
     const store = new MemoryConnectionStore();
     const claudeCode = new FakeClaudeCodeClient();
-    const service = new AgentCredentialService(store, claudeCode);
+    const service = new AgentCredentialService(store, claudeCode, new FakeCodexClient());
     const oauthToken = "subscription-oauth-token-for-test";
 
     const summary = await service.connectClaudeSubscription({ oauthToken });
@@ -28,7 +28,11 @@ describe("AgentCredentialService", () => {
   });
 
   it("removes the stored subscription connection", async () => {
-    const service = new AgentCredentialService(new MemoryConnectionStore(), new FakeClaudeCodeClient());
+    const service = new AgentCredentialService(
+      new MemoryConnectionStore(),
+      new FakeClaudeCodeClient(),
+      new FakeCodexClient(),
+    );
     const summary = await service.connectClaudeSubscription({
       oauthToken: "subscription-oauth-token-for-test",
     });
@@ -40,7 +44,39 @@ describe("AgentCredentialService", () => {
       code: "agent_connection_not_found",
     });
   });
+
+  it("verifies a local Codex ChatGPT login without storing CLI credentials", async () => {
+    const store = new MemoryConnectionStore();
+    const codex = new FakeCodexClient();
+    const service = new AgentCredentialService(store, new FakeClaudeCodeClient(), codex);
+
+    const summary = await service.connectCodexSubscription();
+
+    expect(codex.inspections).toBe(1);
+    expect(summary).toMatchObject({
+      provider: "openai_codex",
+      authType: "chatgpt_subscription",
+      displayName: "ChatGPT subscription",
+    });
+    expect((await store.get("agent_openai_codex", "default"))?.credential).toMatchObject({
+      values: { login: "verified" },
+    });
+    await expect(service.assertCodexConnection(summary.id)).resolves.toBeUndefined();
+
+    await service.disconnectCodexSubscription();
+    await expect(service.assertCodexConnection(summary.id)).rejects.toMatchObject({
+      code: "agent_connection_not_found",
+    });
+  });
 });
+
+class FakeCodexClient {
+  inspections = 0;
+
+  async inspectSubscriptionLogin(): Promise<void> {
+    this.inspections += 1;
+  }
+}
 
 class FakeClaudeCodeClient implements IClaudeCodeClient {
   readonly inspectedTokens: string[] = [];

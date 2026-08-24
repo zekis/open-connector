@@ -1,14 +1,18 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
+import type { AgentProvider } from "./agent-provider.ts";
 import type { IClaudeCodeClient } from "./claude-code-client.ts";
+import type { CodexClient } from "./codex-client.ts";
 
+import { agentProviders } from "./agent-provider.ts";
 import { ClaudeCodeError } from "./claude-code-client.ts";
+import { CodexError } from "./codex-client.ts";
 
-export type AgentProvider = "claude_code";
+export type { AgentProvider } from "./agent-provider.ts";
 
 export interface AgentConnectionSummary {
   id: string;
   provider: AgentProvider;
-  authType: "subscription_oauth";
+  authType: "subscription_oauth" | "chatgpt_subscription";
   configured: true;
   displayName: string;
   updatedAt?: string;
@@ -25,12 +29,27 @@ interface StoredClaudeCredential {
     grantedScopes: string[];
   };
   metadata: {
-    agentProvider: AgentProvider;
+    agentProvider: "claude_code";
     authType: "subscription_oauth";
   };
 }
 
-const internalService = "agent_claude_code";
+interface StoredCodexCredential {
+  authType: "custom_credential";
+  values: {
+    login: "verified";
+  };
+  profile: {
+    accountId: string;
+    displayName: string;
+    grantedScopes: string[];
+  };
+  metadata: {
+    agentProvider: "openai_codex";
+    authType: "chatgpt_subscription";
+  };
+}
+
 const connectionName = "default";
 
 /**
@@ -40,15 +59,23 @@ const connectionName = "default";
 export class AgentCredentialService {
   private readonly store: Pick<IConnectionStore, "delete" | "get" | "set">;
   private readonly claudeCode: IClaudeCodeClient;
+  private readonly codex: Pick<CodexClient, "inspectSubscriptionLogin">;
 
-  constructor(store: Pick<IConnectionStore, "delete" | "get" | "set">, claudeCode: IClaudeCodeClient) {
+  constructor(
+    store: Pick<IConnectionStore, "delete" | "get" | "set">,
+    claudeCode: IClaudeCodeClient,
+    codex: Pick<CodexClient, "inspectSubscriptionLogin">,
+  ) {
     this.store = store;
     this.claudeCode = claudeCode;
+    this.codex = codex;
   }
 
   async list(): Promise<AgentConnectionSummary[]> {
-    const stored = await this.store.get(internalService, connectionName);
-    return stored && isClaudeCredential(stored) ? [toSummary(stored)] : [];
+    const records = await Promise.all(
+      agentProviders.map((provider) => this.store.get(internalService(provider), connectionName)),
+    );
+    return records.flatMap((stored) => (stored && isAgentCredential(stored) ? [toSummary(stored)] : []));
   }
 
   async connectClaudeSubscription(input: unknown): Promise<AgentConnectionSummary> {
@@ -61,7 +88,7 @@ export class AgentCredentialService {
       }
       throw error;
     }
-    const stored = await this.store.set(internalService, connectionName, {
+    const stored = await this.store.set(internalService("claude_code"), connectionName, {
       authType: "custom_credential",
       values: { oauthToken: token },
       profile: {
@@ -78,15 +105,51 @@ export class AgentCredentialService {
   }
 
   async disconnectClaudeSubscription(): Promise<void> {
-    await this.store.delete(internalService, connectionName);
+    await this.store.delete(internalService("claude_code"), connectionName);
   }
 
   async getClaudeOAuthToken(id: string): Promise<string> {
-    const stored = await this.store.get(internalService, connectionName);
+    const stored = await this.store.get(internalService("claude_code"), connectionName);
     if (!stored || stored.id !== id || !isClaudeCredential(stored)) {
       throw new AgentCredentialError("agent_connection_not_found", "Claude subscription connection not found.", 404);
     }
     return stored.credential.values.oauthToken;
+  }
+
+  async connectCodexSubscription(): Promise<AgentConnectionSummary> {
+    try {
+      await this.codex.inspectSubscriptionLogin();
+    } catch (error) {
+      if (error instanceof CodexError) {
+        throw mapCodexError(error);
+      }
+      throw error;
+    }
+    const stored = await this.store.set(internalService("openai_codex"), connectionName, {
+      authType: "custom_credential",
+      values: { login: "verified" },
+      profile: {
+        accountId: "chatgpt-subscription",
+        displayName: "ChatGPT subscription",
+        grantedScopes: [],
+      },
+      metadata: {
+        agentProvider: "openai_codex",
+        authType: "chatgpt_subscription",
+      },
+    });
+    return toSummary(stored);
+  }
+
+  async disconnectCodexSubscription(): Promise<void> {
+    await this.store.delete(internalService("openai_codex"), connectionName);
+  }
+
+  async assertCodexConnection(id: string): Promise<void> {
+    const stored = await this.store.get(internalService("openai_codex"), connectionName);
+    if (!stored || stored.id !== id || !isCodexCredential(stored)) {
+      throw new AgentCredentialError("agent_connection_not_found", "ChatGPT subscription connection not found.", 404);
+    }
   }
 
   async getSummaryById(id: string): Promise<AgentConnectionSummary | undefined> {
@@ -131,14 +194,31 @@ function isClaudeCredential(stored: StoredConnection): stored is StoredConnectio
   );
 }
 
+function isCodexCredential(stored: StoredConnection): stored is StoredConnection & {
+  credential: StoredCodexCredential;
+} {
+  return (
+    stored.credential.authType === "custom_credential" &&
+    stored.credential.metadata.agentProvider === "openai_codex" &&
+    stored.credential.metadata.authType === "chatgpt_subscription" &&
+    stored.credential.values.login === "verified"
+  );
+}
+
+function isAgentCredential(
+  stored: StoredConnection,
+): stored is StoredConnection & { credential: StoredClaudeCredential | StoredCodexCredential } {
+  return isClaudeCredential(stored) || isCodexCredential(stored);
+}
+
 function toSummary(stored: StoredConnection): AgentConnectionSummary {
-  if (!isClaudeCredential(stored)) {
-    throw new AgentCredentialError("invalid_agent_connection", "Stored Claude credential is invalid.", 503);
+  if (!isAgentCredential(stored)) {
+    throw new AgentCredentialError("invalid_agent_connection", "Stored agent credential is invalid.", 503);
   }
   return {
     id: stored.id,
-    provider: "claude_code",
-    authType: "subscription_oauth",
+    provider: stored.credential.metadata.agentProvider,
+    authType: stored.credential.metadata.authType,
     configured: true,
     displayName: stored.credential.profile.displayName,
   };
@@ -146,4 +226,12 @@ function toSummary(stored: StoredConnection): AgentConnectionSummary {
 
 export function mapClaudeCodeError(error: ClaudeCodeError): AgentCredentialError {
   return new AgentCredentialError(error.code, error.message, error.code === "claude_runtime_unavailable" ? 503 : 400);
+}
+
+export function mapCodexError(error: CodexError): AgentCredentialError {
+  return new AgentCredentialError(error.code, error.message, error.code === "codex_runtime_unavailable" ? 503 : 400);
+}
+
+function internalService(provider: AgentProvider): string {
+  return `agent_${provider}`;
 }

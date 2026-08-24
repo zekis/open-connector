@@ -120,6 +120,7 @@ describe("ConnectionApprovalService", () => {
       false,
       [requested.approval.id, "approval-2"],
       "Australia/Perth",
+      "openai_codex",
     );
     await service.approve(requested.approval.id);
     await service.storeChatResponse(requested.approval.id, {
@@ -139,6 +140,7 @@ describe("ConnectionApprovalService", () => {
       chat: {
         batchApprovalIds: [requested.approval.id, "approval-2"],
         timeZone: "Australia/Perth",
+        agentProvider: "openai_codex",
         response: { status: "waiting_for_approval", approvalId: "approval-2" },
       },
     });

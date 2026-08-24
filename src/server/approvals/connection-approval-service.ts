@@ -142,6 +142,7 @@ export class ConnectionApprovalService {
     voiceMode = false,
     batchApprovalIds: string[] = [id],
     timeZone?: string,
+    agentProvider?: AgentChatApprovalContinuation["agentProvider"],
   ): Promise<ActionApproval> {
     const approval = await this.getPendingApproval(id);
     if (approval.caller !== "chat") {
@@ -155,6 +156,7 @@ export class ConnectionApprovalService {
         batchApprovalIds: structuredClone(batchApprovalIds),
         voiceMode,
         timeZone,
+        agentProvider,
       },
     };
     if (!(await this.options.store.updateActionApproval(updated, "pending"))) {

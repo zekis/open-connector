@@ -70,6 +70,19 @@ docker run -d \
 See [configuration.md](configuration.md) for the full environment variable reference and
 [credentials.md](credentials.md) for connecting providers.
 
+### Connect An OpenAI Codex Subscription
+
+The image includes the Codex CLI. Sign in with the ChatGPT account whose subscription should run
+Chat and Flows, then verify the login from the console's **Agents** page:
+
+```bash
+docker exec -it open-connector codex login --device-auth
+# Docker Compose: docker compose exec connector codex login --device-auth
+```
+
+Codex stores its login under `/app/data/codex`, so the mounted data volume preserves it across
+container restarts. Protect that volume as credential-bearing data.
+
 ### Docker Compose
 
 The repository ships a [`docker-compose.yml`](../docker-compose.yml) that runs this published image.

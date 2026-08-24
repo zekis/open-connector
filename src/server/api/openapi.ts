@@ -563,7 +563,7 @@ function createAgentChatMessagesPath(): Record<string, unknown> {
       tags: ["Chat"],
       summary: "Send a message to the configured agent.",
       description:
-        "Runs one conversational Claude response. The agent can search and execute actions on currently connected applications through the guarded action runner, and can create or manage OOMOL Connect Flows. Explicit confirmation is required before active automation or deletion. Runtime policy and run auditing apply to every connector action. Requires local admin authentication when configured.",
+        "Runs one conversational response with the selected subscription agent. The agent can search and execute actions on currently connected applications through the guarded action runner, and can create or manage OOMOL Connect Flows. Explicit confirmation is required before active automation or deletion. Runtime policy and run auditing apply to every connector action. Requires local admin authentication when configured.",
       requestBody: {
         required: true,
         content: {
@@ -601,6 +601,10 @@ function createAgentChatRequestSchema(): JsonSchema {
         { maxLength: 100 },
       ),
       voiceMode: jsonSchema.boolean("Whether the response should follow concise voice-output rules."),
+      agentProvider: jsonSchema.stringEnum("Configured subscription agent used for this turn.", [
+        "claude_code",
+        "openai_codex",
+      ]),
     },
     {
       required: ["messages"],
@@ -1133,7 +1137,7 @@ function createFlowAgentInputSchema(): JsonSchema {
   return jsonSchema.object(flowAgentProperties(), {
     required: ["connectionId"],
     description:
-      "Claude Code subscription used by the Flow. Model selection belongs to the Agents configuration and is intentionally absent.",
+      "Subscription agent used by the Flow. Model selection belongs to the Agents configuration and is intentionally absent.",
   });
 }
 
@@ -1142,7 +1146,7 @@ function createFlowAgentConfigSchema(): JsonSchema {
     {
       ...flowAgentProperties(),
       model: jsonSchema.nonWhitespaceString(
-        "Anthropic model captured from the Agents configuration when this Flow revision was saved.",
+        "Provider model captured from the Agents configuration when this Flow revision was saved.",
         { maxLength: 200 },
       ),
     },
@@ -1155,10 +1159,11 @@ function createFlowAgentConfigSchema(): JsonSchema {
 
 function flowAgentProperties(): Record<string, JsonSchema> {
   return {
-    provider: jsonSchema.literal("claude_code", {
-      description: "Agent runtime provider. Defaults to claude_code when omitted.",
-    }),
-    connectionId: jsonSchema.nonWhitespaceString("Configured Claude subscription connection identifier.", {
+    provider: jsonSchema.stringEnum("Agent runtime provider. Defaults to claude_code when omitted.", [
+      "claude_code",
+      "openai_codex",
+    ]),
+    connectionId: jsonSchema.nonWhitespaceString("Configured subscription agent connection identifier.", {
       maxLength: 200,
     }),
     reasoningEffort: jsonSchema.stringEnum("Reasoning effort for agent turns. Defaults to medium when omitted.", [

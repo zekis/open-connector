@@ -201,6 +201,7 @@ describe("FeedService", () => {
     expect(item.comments.map((comment) => comment.role)).toEqual(["user", "assistant"]);
     expect(item.approvals).toMatchObject([{ id: approval.id, kind: "action", status: "pending" }]);
     expect(respond).toHaveBeenCalledWith({
+      agentProvider: "claude_code",
       messages: expect.arrayContaining([
         expect.objectContaining({ content: expect.stringContaining("Roy Hill weekly update") }),
         { role: "user", content: "Send Mel a short acknowledgement." },
