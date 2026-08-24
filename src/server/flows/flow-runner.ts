@@ -323,6 +323,7 @@ export class FlowRunner {
         output: {
           responseId: turn.responseId,
           text: turn.text,
+          feedPost: turn.feedPost,
           functionCall: turn.functionCall
             ? {
                 callId: turn.functionCall.callId,
@@ -340,6 +341,7 @@ export class FlowRunner {
           status: "completed",
           completedAt: new Date().toISOString(),
           finalOutput: turn.text,
+          feedPost: turn.feedPost,
         });
         return await this.getRunDetail(run.id);
       }

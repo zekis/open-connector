@@ -3,24 +3,32 @@ import type { FormEvent, ReactNode } from "react";
 
 import {
   Bot,
+  CalendarDays,
   Check,
+  CheckCircle2,
   CircleAlert,
   Clock3,
   ExternalLink,
   File,
   FileImage,
+  Files,
   FileText,
   Inbox,
+  LineChart,
   Loader2,
   Mail,
   Maximize2,
   MessageCircle,
+  MessageSquareText,
   Paperclip,
   Radio,
   Send,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  TriangleAlert,
+  Users,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -166,6 +174,8 @@ export function FeedCard(props: {
 }): ReactNode {
   const pendingApproval = props.item.approvals.some((approval) => approval.status === "pending");
   const [selectedPreview, setSelectedPreview] = useState<FeedPreview | undefined>(undefined);
+  const displayName =
+    props.item.flow?.name ?? props.item.author ?? props.provider?.displayName ?? triggerLabel(props.item);
   return (
     <article className={pendingApproval ? "feed-card needs-approval" : "feed-card"}>
       <div className="feed-post">
@@ -174,18 +184,31 @@ export function FeedCard(props: {
         </div>
         <div className="feed-post-body">
           <div className="feed-post-meta">
-            <strong>{props.item.author ?? props.provider?.displayName ?? triggerLabel(props.item)}</strong>
+            <strong>{displayName}</strong>
+            <span className="feed-handle">@claude</span>
             <span>·</span>
             <time dateTime={props.item.createdAt}>{relativeTime(props.item.createdAt)}</time>
             {props.item.flow ? (
               <span className={`feed-status ${props.item.flow.status}`}>{props.item.flow.status}</span>
             ) : null}
           </div>
-          <h3>{props.item.title}</h3>
-          {props.item.summary ? <p className="feed-summary">{props.item.summary}</p> : null}
-          {props.item.flow ? (
-            <div className="feed-origin">
-              <Radio size={13} /> {props.item.flow.name} · {triggerLabel(props.item)}
+          <div className="feed-social-copy">
+            <ChatMarkdown>{props.item.post.text}</ChatMarkdown>
+          </div>
+          <FeedGeneratedImage post={props.item.post} />
+          <div className="feed-origin">
+            <Radio size={13} /> {triggerLabel(props.item)} · {props.item.title}
+            {props.item.author && props.item.author !== displayName ? ` · ${props.item.author}` : ""}
+          </div>
+          {props.item.actions.length > 0 ? (
+            <div className="feed-action-strip">
+              {props.item.actions.slice(0, 5).map((action) => (
+                <span key={action.id} className={`feed-action-chip ${action.status}`} title={action.actionId}>
+                  {action.status === "completed" ? <Check size={12} /> : <Wrench size={12} />}
+                  {humanizeAction(action.actionId)}
+                </span>
+              ))}
+              {props.item.actions.length > 5 ? <span>+{props.item.actions.length - 5} more</span> : null}
             </div>
           ) : null}
         </div>
@@ -193,34 +216,6 @@ export function FeedCard(props: {
 
       {props.item.previews.length > 0 ? (
         <FeedPreviewGallery previews={props.item.previews} onOpen={setSelectedPreview} />
-      ) : null}
-
-      {props.item.agentSummary || props.item.actions.length > 0 ? (
-        <div className="feed-agent-post">
-          <div className="feed-avatar agent">
-            <Bot size={18} />
-          </div>
-          <div className="feed-agent-body">
-            <div className="feed-agent-heading">
-              <strong>Claude</strong>
-              <span>
-                <Sparkles size={12} /> Flow update
-              </span>
-            </div>
-            {props.item.agentSummary ? <ChatMarkdown>{props.item.agentSummary}</ChatMarkdown> : <AgentWorking />}
-            {props.item.actions.length > 0 ? (
-              <div className="feed-action-strip">
-                {props.item.actions.slice(0, 5).map((action) => (
-                  <span key={action.id} className={`feed-action-chip ${action.status}`} title={action.actionId}>
-                    {action.status === "completed" ? <Check size={12} /> : <Wrench size={12} />}
-                    {humanizeAction(action.actionId)}
-                  </span>
-                ))}
-                {props.item.actions.length > 5 ? <span>+{props.item.actions.length - 5} more</span> : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
       ) : null}
 
       {props.item.comments.map((comment) => (
@@ -307,6 +302,48 @@ export function FeedCard(props: {
       <FeedPreviewDialog preview={selectedPreview} onOpenChange={(open) => !open && setSelectedPreview(undefined)} />
     </article>
   );
+}
+
+function FeedGeneratedImage(props: { post: FeedItem["post"] }): ReactNode {
+  return (
+    <figure className={`feed-generated-image ${props.post.image.palette}`} role="img" aria-label={props.post.image.alt}>
+      <span className="feed-generated-grid" aria-hidden="true" />
+      <span className="feed-generated-orb one" aria-hidden="true" />
+      <span className="feed-generated-orb two" aria-hidden="true" />
+      <span className="feed-generated-icon" aria-hidden="true">
+        <FeedMotifIcon motif={props.post.image.motif} />
+      </span>
+      <figcaption>
+        <span>
+          <Sparkles size={12} /> AI visual
+        </span>
+        <strong>{props.post.image.headline}</strong>
+      </figcaption>
+    </figure>
+  );
+}
+
+function FeedMotifIcon(props: { motif: FeedItem["post"]["image"]["motif"] }): ReactNode {
+  switch (props.motif) {
+    case "calendar":
+      return <CalendarDays />;
+    case "chart":
+      return <LineChart />;
+    case "document":
+      return <FileText />;
+    case "files":
+      return <Files />;
+    case "message":
+      return <MessageSquareText />;
+    case "people":
+      return <Users />;
+    case "success":
+      return <CheckCircle2 />;
+    case "warning":
+      return <TriangleAlert />;
+    case "automation":
+      return <Workflow />;
+  }
 }
 
 function FeedPreviewGallery(props: { previews: FeedPreview[]; onOpen(preview: FeedPreview): void }): ReactNode {
@@ -469,14 +506,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KB`;
   return `${(bytes / (1_024 * 1_024)).toFixed(bytes < 10 * 1_024 * 1_024 ? 1 : 0)} MB`;
-}
-
-function AgentWorking(): ReactNode {
-  return (
-    <p className="feed-agent-working">
-      <Loader2 className="spin" size={14} /> Claude is working through this trigger…
-    </p>
-  );
 }
 
 function triggerLabel(item: FeedItem): string {

@@ -4,7 +4,13 @@ import type { ConnectionApprovalService } from "../approvals/connection-approval
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
 import type { AgentChatResponse, IAgentChatService } from "../chat/agent-chat-service.ts";
 import type { FlowRunDetail, FlowRunner } from "../flows/flow-runner.ts";
-import type { FlowApproval, FlowRun } from "../flows/flow-types.ts";
+import type {
+  FlowApproval,
+  FlowFeedImageMotif,
+  FlowFeedImagePalette,
+  FlowFeedPost,
+  FlowRun,
+} from "../flows/flow-types.ts";
 import type {
   FeedApprovalSummary,
   FeedComment,
@@ -190,6 +196,8 @@ export class FeedService {
   ): Promise<FeedItem> {
     const { run } = detail;
     const trigger = summarizeTrigger(run);
+    const agentSummary =
+      run.finalOutput ?? latestAgentText(detail) ?? (run.status === "failed" ? run.errorMessage : undefined);
     const approvals: FeedApprovalSummary[] = detail.approvals
       .filter((approval) => approval.status === "pending")
       .map(flowApprovalSummary);
@@ -206,6 +214,7 @@ export class FeedService {
       summary: trigger.summary,
       author: trigger.author,
       providerService: trigger.providerService,
+      post: run.feedPost ?? fallbackFeedPost(run, trigger, agentSummary),
       previews: trigger.previews.map((preview) => preview.preview),
       flow: {
         id: run.flowId,
@@ -214,8 +223,7 @@ export class FeedService {
         status: run.status,
         trigger: run.trigger,
       },
-      agentSummary:
-        run.finalOutput ?? latestAgentText(detail) ?? (run.status === "failed" ? run.errorMessage : undefined),
+      agentSummary,
       actions: detail.steps
         .filter((step) => step.kind === "action" && step.actionId)
         .map((step) => ({
@@ -364,6 +372,7 @@ function actionApprovalItem(approval: ActionApproval): FeedItem {
     title: `Approval requested: ${humanize(approval.actionId)}`,
     summary: `${humanize(approval.caller)} requested this connector action.`,
     providerService: approval.actionId.split(".")[0],
+    post: approvalFeedPost(approval.actionId, "action"),
     previews: [],
     actions: [],
     comments: [],
@@ -391,6 +400,7 @@ function flowApprovalItem(approval: FlowApproval): FeedItem {
     title: `Flow approval requested: ${humanize(approval.actionId)}`,
     summary: "A Flow is paused until this action is approved or denied.",
     providerService: approval.actionId.split(".")[0],
+    post: approvalFeedPost(approval.actionId, "flow"),
     previews: [],
     actions: [],
     comments: [],
@@ -421,6 +431,100 @@ function flowApprovalSummary(approval: FlowApproval): FeedApprovalSummary {
     input: approval.input,
     requestedAt: approval.requestedAt,
   };
+}
+
+function fallbackFeedPost(
+  run: FlowRun,
+  trigger: ReturnType<typeof summarizeTrigger>,
+  agentSummary: string | undefined,
+): FlowFeedPost {
+  const flowName = run.flowSnapshot.name;
+  const source = plainFeedText(agentSummary ?? trigger.summary ?? trigger.title);
+  let text: string;
+  switch (run.status) {
+    case "completed":
+      text = source ? `All sorted — ${lowercaseFirst(source)}` : `${flowName} is all sorted.`;
+      break;
+    case "waiting_for_approval":
+      text = `Quick check needed before I can keep ${flowName} moving.`;
+      break;
+    case "failed":
+      text = `Hit a snag on ${flowName}${source ? `: ${source}` : "."}`;
+      break;
+    case "cancelled":
+      text = `${flowName} stopped before it could finish.`;
+      break;
+    default:
+      text = `${flowName} is under way — I’ll share what changes.`;
+  }
+  const motif = inferFeedImageMotif(run, `${trigger.title} ${trigger.summary ?? ""} ${agentSummary ?? ""}`);
+  return {
+    text: truncate(text, 280),
+    image: {
+      alt: `Editorial illustration for the ${flowName} update.`,
+      headline: truncate(flowName, 64),
+      motif,
+      palette: paletteForMotif(motif),
+    },
+  };
+}
+
+function approvalFeedPost(actionId: string, kind: "action" | "flow"): FlowFeedPost {
+  const action = humanize(actionId);
+  return {
+    text: `Quick check — I need your approval before I ${lowercaseFirst(action)}.`,
+    image: {
+      alt: `Editorial illustration showing a decision waiting for review.`,
+      headline: kind === "flow" ? "Flow needs a quick check" : "Your call",
+      motif: "warning",
+      palette: "amber",
+    },
+  };
+}
+
+function plainFeedText(value: string): string {
+  return value
+    .replaceAll(/```[\s\S]*?```/g, " ")
+    .replaceAll(/[#*_`>|~]/g, "")
+    .replaceAll(/^\s*[-+]\s+/gm, "")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+}
+
+function lowercaseFirst(value: string): string {
+  return value ? `${value[0]!.toLocaleLowerCase()}${value.slice(1)}` : value;
+}
+
+function inferFeedImageMotif(run: FlowRun, source: string): FlowFeedImageMotif {
+  if (run.status === "failed" || run.status === "waiting_for_approval") return "warning";
+  const normalized = source.toLocaleLowerCase();
+  if (/mail|message|reply|inbox/.test(normalized)) return "message";
+  if (/calendar|meeting|schedule|appointment/.test(normalized)) return "calendar";
+  if (/document|file|attachment|note|pdf/.test(normalized))
+    return /files|attachment/.test(normalized) ? "files" : "document";
+  if (/team|people|colleague|customer|client/.test(normalized)) return "people";
+  if (/metric|report|trend|chart|forecast/.test(normalized)) return "chart";
+  if (/complete|closed|done|success|finished/.test(normalized)) return "success";
+  return "automation";
+}
+
+function paletteForMotif(motif: FlowFeedImageMotif): FlowFeedImagePalette {
+  switch (motif) {
+    case "warning":
+      return "amber";
+    case "success":
+      return "teal";
+    case "people":
+    case "message":
+      return "violet";
+    case "chart":
+      return "rose";
+    case "document":
+    case "files":
+      return "blue";
+    default:
+      return "slate";
+  }
 }
 
 function readComment(input: unknown): string {

@@ -65,6 +65,15 @@ const detail: FlowRunDetail = {
     updatedAt: "2026-08-14T01:00:02.000Z",
     completedAt: "2026-08-14T01:00:02.000Z",
     finalOutput: "Archived the project email in Obsidian.",
+    feedPost: {
+      text: "All tucked away — the project email’s in Obsidian and the commissioning plan is ready for a look 👀",
+      image: {
+        alt: "An illustrated email moving into a project notebook.",
+        headline: "Ready for a look",
+        motif: "message",
+        palette: "violet",
+      },
+    },
   },
   steps: [
     {
@@ -97,6 +106,10 @@ describe("FeedService", () => {
       summary: "The commissioning plan is ready for review.",
       author: "Mel Blanch",
       providerService: "outlook",
+      post: {
+        text: "All tucked away — the project email’s in Obsidian and the commissioning plan is ready for a look 👀",
+        image: { headline: "Ready for a look", motif: "message", palette: "violet" },
+      },
       previews: [
         expect.objectContaining({ id: "email", kind: "email", name: "Roy Hill weekly update" }),
         expect.objectContaining({ id: "attachment-0", kind: "pdf", name: "Commissioning plan.pdf" }),
@@ -124,6 +137,15 @@ describe("FeedService", () => {
       },
     ];
     manualDetail.run.finalOutput = "Updated the project notes with three changed work items.";
+    manualDetail.run.feedPost = {
+      text: "Project notes are caught up with the three work items that changed today.",
+      image: {
+        alt: "Three work item cards flowing into a shared project note.",
+        headline: "Notes caught up",
+        motif: "document",
+        palette: "blue",
+      },
+    };
     const service = createService(new MemoryFeedStore(), [], completedResponse("Done."), undefined, undefined, [
       manualDetail,
     ]);
@@ -138,6 +160,10 @@ describe("FeedService", () => {
       summary: "Compare Azure DevOps work items with the Obsidian project notes.",
       author: "Manual run",
       providerService: "azure_devops",
+      post: {
+        text: "Project notes are caught up with the three work items that changed today.",
+        image: { headline: "Notes caught up", motif: "document", palette: "blue" },
+      },
       agentSummary: "Updated the project notes with three changed work items.",
       flow: { trigger: "manual", status: "completed" },
       canReply: true,

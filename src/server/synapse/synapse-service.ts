@@ -194,7 +194,11 @@ export class SynapseService {
     const workspace = await this.requiredWorkspace(workspaceId);
     const node = requiredNode(workspace, nodeId);
     const body = readObject(input, "Synapse node update");
-    if (body.position !== undefined) node.position = readPosition(body.position);
+    if (body.position !== undefined) {
+      const position = readPosition(body.position);
+      if (node.kind === "artifact" && node.groupId) moveArtifactGroup(workspace, node, position);
+      else node.position = position;
+    }
     if (body.size !== undefined) {
       node.size = readSize(body.size);
       node.autoSize = body.autoSize === true;
@@ -212,6 +216,7 @@ export class SynapseService {
       if (body.content !== undefined) node.content = optionalText(body.content, "content", maximumNodeTextCharacters);
       if (body.externalUrl !== undefined) node.externalUrl = optionalHttpsUrl(body.externalUrl, "externalUrl");
       if (body.artifactKind !== undefined) node.artifactKind = readArtifactKind(body.artifactKind);
+      if (body.ungrouped === true) ungroupArtifactNode(workspace, node);
     }
     if (node.autoSize !== false) {
       node.autoSize = true;
@@ -223,10 +228,12 @@ export class SynapseService {
 
   async deleteNode(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
-    requiredNode(workspace, nodeId);
+    const node = requiredNode(workspace, nodeId);
+    const groupId = node.kind === "artifact" ? node.groupId : undefined;
     workspace.nodes = workspace.nodes.filter((node) => node.id !== nodeId);
     workspace.edges = workspace.edges.filter((edge) => edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId);
     workspace.threads = workspace.threads.filter((thread) => thread.nodeId !== nodeId);
+    if (groupId) normalizeArtifactGroup(workspace, groupId);
     return await this.save(workspace);
   }
 
@@ -255,6 +262,11 @@ export class SynapseService {
       createdAt: now,
       updatedAt: now,
     };
+    if (continuedNode.kind === "artifact") {
+      continuedNode.groupId = undefined;
+      continuedNode.groupOrder = undefined;
+      continuedNode.ungrouped = undefined;
+    }
     const workspace: SynapseWorkspace = {
       id: crypto.randomUUID(),
       name: optionalText(body.name, "name", maximumWorkspaceNameCharacters) ?? continuationName(sourceNode.title),
@@ -685,6 +697,7 @@ export class SynapseService {
       legacyApprovedActions,
       approvalDrafts,
     );
+    groupCreatedArtifacts(workspace, response.toolActivity, `artifact-group:${response.message.id}`);
   }
 
   private async materializeConnectorResults(
@@ -805,6 +818,8 @@ export class SynapseService {
     for (const thread of workspace.threads) {
       for (const message of thread.messages) {
         migrated = reconcileArtifactProvenance(workspace, message.toolActivity ?? []) || migrated;
+        migrated =
+          groupCreatedArtifacts(workspace, message.toolActivity ?? [], `artifact-group:${message.id}`) || migrated;
       }
     }
     if (migrated) await this.options.store.setWorkspace(workspace);
@@ -1417,6 +1432,105 @@ function activityCreatedNodeIds(
     }
   }
   return nodeIds;
+}
+
+function groupCreatedArtifacts(
+  workspace: SynapseWorkspace,
+  activities: AgentChatToolActivity[],
+  groupId: string,
+): boolean {
+  const createdIds = [...new Set(activityCreatedNodeIds(activities, "synapse_add_artifacts", "nodes"))];
+  const nodes = createdIds.flatMap((nodeId) => {
+    const node = workspace.nodes.find(
+      (candidate): candidate is SynapseArtifactNode => candidate.id === nodeId && candidate.kind === "artifact",
+    );
+    return node && !node.ungrouped && (node.approvalIds?.length ?? 0) === 0 ? [node] : [];
+  });
+  if (nodes.length < 2) return false;
+  let changed = false;
+  const now = new Date().toISOString();
+  const groupPosition = nodes[0]!.position;
+  for (const [index, node] of nodes.entries()) {
+    if (
+      node.groupId === groupId &&
+      node.groupOrder === index &&
+      node.position.x === groupPosition.x &&
+      node.position.y === groupPosition.y
+    ) {
+      continue;
+    }
+    node.groupId = groupId;
+    node.groupOrder = index;
+    node.ungrouped = undefined;
+    node.position = { ...groupPosition };
+    node.updatedAt = now;
+    changed = true;
+  }
+  return changed;
+}
+
+function moveArtifactGroup(workspace: SynapseWorkspace, anchor: SynapseArtifactNode, position: SynapsePosition): void {
+  const groupId = anchor.groupId;
+  if (!groupId) {
+    anchor.position = position;
+    return;
+  }
+  const delta = { x: position.x - anchor.position.x, y: position.y - anchor.position.y };
+  const now = new Date().toISOString();
+  for (const node of workspace.nodes) {
+    if (node.kind !== "artifact" || node.groupId !== groupId) continue;
+    node.position = { x: node.position.x + delta.x, y: node.position.y + delta.y };
+    node.updatedAt = now;
+  }
+}
+
+function ungroupArtifactNode(workspace: SynapseWorkspace, node: SynapseArtifactNode): void {
+  const groupId = node.groupId;
+  if (!groupId) {
+    node.ungrouped = true;
+    return;
+  }
+  const groupNodes = artifactGroupNodes(workspace, groupId);
+  const groupPosition = groupNodes[0]?.position ?? node.position;
+  node.groupId = undefined;
+  node.groupOrder = undefined;
+  node.ungrouped = true;
+  const remaining = groupNodes.filter((candidate) => candidate.id !== node.id);
+  normalizeArtifactGroup(workspace, groupId);
+  if (remaining[0]) remaining[0].position = groupPosition;
+  const remainingWidth = remaining.reduce((width, candidate) => Math.max(width, sizeForNode(candidate).width), 0);
+  const withoutNode = { ...workspace, nodes: workspace.nodes.filter((candidate) => candidate.id !== node.id) };
+  node.position = findOpenPosition(
+    withoutNode,
+    { x: groupPosition.x + remainingWidth + nodeHorizontalGap, y: groupPosition.y },
+    "artifact",
+    sizeForNode(node),
+  );
+}
+
+function normalizeArtifactGroup(workspace: SynapseWorkspace, groupId: string): void {
+  const nodes = artifactGroupNodes(workspace, groupId);
+  if (nodes.length < 2) {
+    for (const node of nodes) {
+      node.groupId = undefined;
+      node.groupOrder = undefined;
+      node.ungrouped = true;
+    }
+    return;
+  }
+  for (const [index, node] of nodes.entries()) node.groupOrder = index;
+}
+
+function artifactGroupNodes(workspace: SynapseWorkspace, groupId: string): SynapseArtifactNode[] {
+  return workspace.nodes
+    .filter(
+      (node): node is SynapseArtifactNode => node.kind === "artifact" && node.groupId === groupId && !node.ungrouped,
+    )
+    .sort(
+      (left, right) =>
+        (left.groupOrder ?? Number.MAX_SAFE_INTEGER) - (right.groupOrder ?? Number.MAX_SAFE_INTEGER) ||
+        left.createdAt.localeCompare(right.createdAt),
+    );
 }
 
 function removeRedundantApprovalProviders(

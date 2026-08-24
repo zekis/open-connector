@@ -30,6 +30,10 @@ describe("FlowRunner", () => {
       status: "completed",
       stepCount: 1,
       finalOutput: "Synchronized one source item.",
+      feedPost: {
+        text: "All synced — today’s source item is right where it should be.",
+        image: { headline: "All synced", motif: "automation", palette: "teal" },
+      },
     });
     expect(detail.steps.map((step) => [step.kind, step.status])).toEqual([
       ["agent", "completed"],
@@ -340,6 +344,15 @@ class FakeFlowAgent implements IFlowAgent {
       : {
           responseId: `response-${this.inputs.length}`,
           text: "Synchronized one source item.",
+          feedPost: {
+            text: "All synced — today’s source item is right where it should be.",
+            image: {
+              alt: "An illustrated record moving between connected workspaces.",
+              headline: "All synced",
+              motif: "automation",
+              palette: "teal",
+            },
+          },
         };
   }
 }

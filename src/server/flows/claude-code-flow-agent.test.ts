@@ -40,6 +40,10 @@ describe("ClaudeCodeFlowAgent", () => {
     });
     expect(client.inputs[0]?.prompt).toContain("flow_1_source_read");
     expect(client.inputs[0]?.prompt).toContain("previous source result");
+    expect(client.inputs[0]?.prompt).toContain("trusted work colleague sharing an update");
+    expect(client.inputs[0]?.outputSchema).toMatchObject({
+      properties: { feedPost: { type: "object" } },
+    });
   });
 
   it("returns final text from a completed Claude decision", async () => {
@@ -53,12 +57,25 @@ describe("ClaudeCodeFlowAgent", () => {
         structuredOutput: {
           kind: "final",
           text: "Synchronized one source item.",
+          feedPost: {
+            text: "All synced — today’s source item is right where it should be.",
+            image: {
+              alt: "An illustrated record moving between two connected workspaces.",
+              headline: "All synced",
+              motif: "automation",
+              palette: "teal",
+            },
+          },
         },
       }),
     );
 
     await expect(agent.respond(createTurnInput())).resolves.toMatchObject({
       text: "Synchronized one source item.",
+      feedPost: {
+        text: "All synced — today’s source item is right where it should be.",
+        image: { headline: "All synced", motif: "automation", palette: "teal" },
+      },
     });
   });
 });

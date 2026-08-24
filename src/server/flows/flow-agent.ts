@@ -1,6 +1,6 @@
 import type { ActionPolicySnapshot } from "../../core/action-policy.ts";
 import type { JsonSchema } from "../../core/types.ts";
-import type { FlowDefinition } from "./flow-types.ts";
+import type { FlowDefinition, FlowFeedPost } from "./flow-types.ts";
 
 export interface FlowAgentTool {
   name: string;
@@ -17,6 +17,7 @@ export interface FlowAgentFunctionCall {
 export interface FlowAgentTurn {
   responseId: string;
   text?: string;
+  feedPost?: FlowFeedPost;
   functionCall?: FlowAgentFunctionCall;
   usage?: unknown;
 }

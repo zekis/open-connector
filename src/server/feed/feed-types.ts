@@ -1,5 +1,11 @@
 import type { ActionApprovalStatus } from "../approvals/connection-approval-types.ts";
-import type { FlowApprovalStatus, FlowRunStatus, FlowStepStatus, FlowTriggerType } from "../flows/flow-types.ts";
+import type {
+  FlowApprovalStatus,
+  FlowFeedPost,
+  FlowRunStatus,
+  FlowStepStatus,
+  FlowTriggerType,
+} from "../flows/flow-types.ts";
 import type { ProviderPreview, ProviderPreviewContent, ProviderPreviewKind } from "../previews/provider-preview.ts";
 
 export interface FeedCommentToolActivity {
@@ -76,6 +82,7 @@ export interface FeedItem {
   summary?: string;
   author?: string;
   providerService?: string;
+  post: FlowFeedPost;
   previews: FeedPreview[];
   flow?: FeedFlowSummary;
   agentSummary?: string;

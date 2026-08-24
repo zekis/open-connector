@@ -44,6 +44,9 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   sourceInput?: Record<string, unknown>;
   itemIdentity?: string;
   approvalIds?: string[];
+  groupId?: string;
+  groupOrder?: number;
+  ungrouped?: boolean;
   previews?: ProviderPreview[];
   data?: unknown;
 }

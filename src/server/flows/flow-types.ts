@@ -8,6 +8,30 @@ export type FlowStepStatus = "pending" | "completed" | "failed" | "denied";
 export type FlowApprovalStatus = "pending" | "approved" | "denied";
 export type FlowAgentProvider = "claude_code";
 export type FlowTriggerType = "manual" | "api" | "schedule" | "event" | "new_email" | "file_created";
+export type FlowFeedImageMotif =
+  | "automation"
+  | "calendar"
+  | "chart"
+  | "document"
+  | "files"
+  | "message"
+  | "people"
+  | "success"
+  | "warning";
+export type FlowFeedImagePalette = "amber" | "blue" | "rose" | "slate" | "teal" | "violet";
+
+export interface FlowFeedImage {
+  alt: string;
+  headline: string;
+  motif: FlowFeedImageMotif;
+  palette: FlowFeedImagePalette;
+}
+
+/** Social presentation authored by the Flow agent alongside its factual final output. */
+export interface FlowFeedPost {
+  text: string;
+  image: FlowFeedImage;
+}
 
 export interface ManualFlowTrigger {
   type: "manual";
@@ -141,6 +165,7 @@ export interface FlowRun {
   updatedAt: string;
   completedAt?: string;
   finalOutput?: string;
+  feedPost?: FlowFeedPost;
   errorCode?: string;
   errorMessage?: string;
 }

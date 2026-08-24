@@ -419,6 +419,15 @@
   background: color-mix(in oklab, var(--warning) 6%, var(--card));
 }
 
+.synapse-node.artifact.artifact-group {
+  background: color-mix(in oklab, var(--brand) 4%, var(--card));
+  box-shadow:
+    5px 5px 0 -1px color-mix(in oklab, var(--card) 92%, var(--brand)),
+    5px 5px 0 0 color-mix(in oklab, var(--border) 82%, transparent),
+    10px 10px 0 -1px color-mix(in oklab, var(--card) 94%, var(--brand)),
+    10px 10px 0 0 color-mix(in oklab, var(--border) 68%, transparent);
+}
+
 .synapse-draft-actions {
   position: absolute;
   top: 9px;
@@ -621,6 +630,27 @@
 .synapse-group-tabs button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.synapse-group-tabs.artifact-tabs {
+  padding-right: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.synapse-group-tabs.artifact-tabs .ungroup {
+  margin-left: auto;
+  color: var(--brand);
+}
+
+.synapse-group-tabs.artifact-tabs button[role="tab"] {
+  max-width: 104px;
+}
+
+.synapse-group-tabs.artifact-tabs button[role="tab"] > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .synapse-artifact-shortcuts {
@@ -865,6 +895,10 @@
     color-mix(in oklab, var(--background) 97%, var(--muted));
 }
 
+.synapse-node-detail.has-tabs {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .synapse-node-detail.draft {
   background:
     radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--warning) 18%, transparent), transparent 42%),
@@ -952,6 +986,63 @@
 .synapse-node-detail-actions .synapse-node-detail-deny:focus-visible {
   color: var(--destructive);
   background: color-mix(in oklab, var(--destructive) 10%, transparent);
+}
+
+.synapse-node-detail-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  gap: 5px;
+  padding: 7px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 88%, var(--background));
+}
+
+.synapse-node-detail-tabs > button[role="tab"] {
+  display: grid;
+  grid-template-columns: auto auto minmax(72px, 180px);
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-width: 108px;
+  max-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--background) 75%, transparent);
+  cursor: pointer;
+}
+
+.synapse-node-detail-tabs > button[role="tab"]:hover,
+.synapse-node-detail-tabs > button[role="tab"]:focus-visible,
+.synapse-node-detail-tabs > button[role="tab"].active {
+  border-color: color-mix(in oklab, var(--brand) 58%, var(--border));
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--brand) 12%, var(--card));
+  outline: none;
+}
+
+.synapse-node-detail-tabs > button[role="tab"] > span {
+  display: inline-flex;
+}
+
+.synapse-node-detail-tabs > button[role="tab"] > small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.synapse-node-detail-tabs > button[role="tab"] > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.synapse-node-detail-tabs > .synapse-node-detail-ungroup {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .synapse-node-detail-main {

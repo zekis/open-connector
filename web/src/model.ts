@@ -211,6 +211,27 @@ export interface RuntimeActionResponse {
 export type FlowApprovalMode = "always_allow" | "require_approval";
 export type FlowApprovalSetting = FlowApprovalMode | "inherit";
 export type FlowRunStatus = "running" | "waiting_for_approval" | "completed" | "failed" | "cancelled";
+export type FlowFeedImageMotif =
+  | "automation"
+  | "calendar"
+  | "chart"
+  | "document"
+  | "files"
+  | "message"
+  | "people"
+  | "success"
+  | "warning";
+export type FlowFeedImagePalette = "amber" | "blue" | "rose" | "slate" | "teal" | "violet";
+
+export interface FlowFeedPost {
+  text: string;
+  image: {
+    alt: string;
+    headline: string;
+    motif: FlowFeedImageMotif;
+    palette: FlowFeedImagePalette;
+  };
+}
 export type FlowTriggerType = "manual" | "api" | "schedule" | "event" | "new_email" | "file_created";
 
 export type FlowTrigger =
@@ -332,6 +353,7 @@ export interface FlowRun {
   updatedAt: string;
   completedAt?: string;
   finalOutput?: string;
+  feedPost?: FlowFeedPost;
   errorCode?: string;
   errorMessage?: string;
 }
@@ -488,6 +510,7 @@ export interface FeedItem {
   summary?: string;
   author?: string;
   providerService?: string;
+  post: FlowFeedPost;
   previews: FeedPreview[];
   flow?: {
     id: string;
@@ -548,6 +571,9 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   sourceInput?: Record<string, unknown>;
   itemIdentity?: string;
   approvalIds?: string[];
+  groupId?: string;
+  groupOrder?: number;
+  ungrouped?: boolean;
   previews?: FeedPreview[];
   data?: unknown;
 }

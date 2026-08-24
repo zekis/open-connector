@@ -51,6 +51,7 @@ import {
   Square,
   StickyNote,
   Trash2,
+  Ungroup,
   Volume2,
   X,
 } from "lucide-react";
@@ -141,6 +142,13 @@ export interface SynapseApprovalCanvasItem {
   approvalId: string;
   nodeId: string;
   requests: SynapseApprovalRequestItem[];
+  position: { x: number; y: number };
+  size: SynapseSize;
+}
+
+export interface SynapseArtifactGroupItem {
+  id: string;
+  nodes: SynapseArtifactNode[];
   position: { x: number; y: number };
   size: SynapseSize;
 }
@@ -253,6 +261,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [synthesizingSelection, setSynthesizingSelection] = useState(false);
+  const [ungroupingNodeId, setUngroupingNodeId] = useState<string>();
   const nextNodeChatRequestIdRef = useRef(0);
   const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
   const voiceStateRef = useRef<SaynaVoiceState>("offline");
@@ -261,6 +270,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     [props.data.providers],
   );
   const approvalItems = useMemo(() => (workspace ? synapseApprovalItems(workspace) : []), [workspace]);
+  const artifactGroups = useMemo(() => (workspace ? synapseArtifactGroups(workspace) : []), [workspace]);
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const pendingApprovalKey = approvalItems
     .flatMap((item) => item.requests.map((request) => `${item.nodeId}:${request.approvalId}`))
@@ -527,6 +537,25 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     }
   }
 
+  async function ungroupNode(nodeId: string): Promise<void> {
+    if (!workspace || ungroupingNodeId) return;
+    setUngroupingNodeId(nodeId);
+    setError(undefined);
+    try {
+      const next = await apiPut<SynapseWorkspace>(
+        `/api/synapses/${encodeURIComponent(workspace.id)}/nodes/${encodeURIComponent(nodeId)}`,
+        { ungrouped: true },
+      );
+      applyWorkspace(next);
+      setFitRequest((current) => current + 1);
+      props.onRefresh();
+    } catch (caught) {
+      setError(messageFrom(caught, "Could not ungroup this artifact."));
+    } finally {
+      setUngroupingNodeId(undefined);
+    }
+  }
+
   async function autoArrange(): Promise<void> {
     if (!workspace || arranging) return;
     setArranging(true);
@@ -635,6 +664,9 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
   const expandedApprovalRequest = expandedApprovalItem?.requests.find(
     (request) => request.draftNode?.id === expandedNode?.id,
   );
+  const expandedArtifactGroup = expandedNode
+    ? artifactGroups.find((group) => group.nodes.some((node) => node.id === expandedNode.id))
+    : undefined;
   const synthesisNodes = workspace?.nodes.filter((node) => selectedNodeIdSet.has(node.id)) ?? [];
   const agentConfigured =
     props.data.agentConnections?.some((connection) => connection.provider === "claude_code") ?? false;
@@ -748,6 +780,8 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
                 : synapseNodeProvider(expandedNode, providersByService)
             }
             approvalRequest={expandedApprovalRequest}
+            groupNodes={expandedArtifactGroup?.nodes}
+            ungrouping={ungroupingNodeId === expandedNode.id}
             providersByService={providersByService}
             speechAvailable={voiceConfiguration?.enabled === true}
             speaking={speakingNodeId === expandedNode.id}
@@ -780,12 +814,14 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
                     await decideCanvasApprovals(expandedApprovalItem, [approvalId], decision)
                 : undefined
             }
+            onUngroup={expandedArtifactGroup ? async () => await ungroupNode(expandedNode.id) : undefined}
             onToggleSpeech={() => toggleNodeSpeech(expandedNode.id, synapseNodeSpeech(expandedNode))}
           />
         ) : workspace ? (
           <SynapseCanvas
             workspace={workspace}
             approvalItems={approvalItems}
+            artifactGroups={artifactGroups}
             selectedNodeId={selectedNodeId}
             linkingFrom={linkingFrom}
             fitRequest={fitRequest}
@@ -813,6 +849,8 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
               setSelectedNodeId(nodeId);
               setExpandedNodeId(nodeId);
             }}
+            ungroupingNodeId={ungroupingNodeId}
+            onUngroupNode={ungroupNode}
             onRefreshNode={(nodeId) => void refreshNode(nodeId)}
             onContextRequest={(request) => {
               setContextMenu(request);
@@ -940,6 +978,7 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
 function SynapseCanvas(props: {
   workspace: SynapseWorkspace;
   approvalItems: SynapseApprovalCanvasItem[];
+  artifactGroups: SynapseArtifactGroupItem[];
   selectedNodeId?: string;
   linkingFrom?: string;
   fitRequest: number;
@@ -959,6 +998,8 @@ function SynapseCanvas(props: {
     decision: "approve" | "deny",
   ): Promise<void>;
   onApprovalOpen(nodeId: string): void;
+  ungroupingNodeId?: string;
+  onUngroupNode(nodeId: string): Promise<void>;
   onContextRequest(request: SynapseContextRequest): void;
   onRefreshNode(nodeId: string): void;
   onToggleSpeech(nodeId: string, text: string): void;
@@ -976,6 +1017,13 @@ function SynapseCanvas(props: {
       item.requests.flatMap((request) => (request.draftNode ? [request.draftNode.id] : [])),
     ),
   );
+  const visibleArtifactGroups = props.artifactGroups
+    .map((group) => ({ ...group, nodes: group.nodes.filter((node) => !hiddenDraftNodeIds.has(node.id)) }))
+    .filter((group) => group.nodes.length > 1);
+  const artifactGroupByNodeId = new Map(
+    visibleArtifactGroups.flatMap((group) => group.nodes.map((node) => [node.id, group] as const)),
+  );
+  const groupedArtifactNodeIds = new Set(artifactGroupByNodeId.keys());
   workspaceRef.current = props.workspace;
 
   const revealSelectedNode = useCallback((): void => {
@@ -983,12 +1031,20 @@ function SynapseCanvas(props: {
     const canvas = scrollRef.current;
     const selectedNode = workspaceRef.current.nodes.find((node) => node.id === props.selectedNodeId);
     if (!canvas || !selectedNode) return;
+    const selectedGroup = synapseArtifactGroups(workspaceRef.current).find((group) =>
+      group.nodes.some((node) => node.id === selectedNode.id),
+    );
     const rect = canvas.getBoundingClientRect();
     setCanvasView((current) =>
-      panNodeIntoView(current, selectedNode.position, sizeForCanvasNode(selectedNode), {
-        width: rect.width,
-        height: rect.height,
-      }),
+      panNodeIntoView(
+        current,
+        selectedGroup?.position ?? selectedNode.position,
+        selectedGroup?.size ?? sizeForCanvasNode(selectedNode),
+        {
+          width: rect.width,
+          height: rect.height,
+        },
+      ),
     );
   }, [props.selectedNodeId]);
 
@@ -1014,7 +1070,9 @@ function SynapseCanvas(props: {
     if (!canvas) return;
     const frame = window.requestAnimationFrame(() => {
       const rect = canvas.getBoundingClientRect();
-      setCanvasView(fitCanvasView(workspaceRef.current.nodes, { width: rect.width, height: rect.height }));
+      setCanvasView(
+        fitCanvasView(visibleSynapseCanvasNodes(workspaceRef.current), { width: rect.width, height: rect.height }),
+      );
     });
     return () => window.cancelAnimationFrame(frame);
   }, [props.fitRequest]);
@@ -1171,13 +1229,17 @@ function SynapseCanvas(props: {
     const canvas = scrollRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const group = node ? artifactGroupByNodeId.get(node.id) : undefined;
     props.onContextRequest({
       clientX: event.clientX,
       clientY: event.clientY,
       position: node
         ? {
-            x: node.position.x + sizeForCanvasNode(node).width + nodeHorizontalGap,
-            y: node.position.y,
+            x:
+              (group?.position.x ?? node.position.x) +
+              (group?.size.width ?? sizeForCanvasNode(node).width) +
+              nodeHorizontalGap,
+            y: group?.position.y ?? node.position.y,
           }
         : {
             x: Math.round((event.clientX - rect.left - canvasView.x) / canvasView.scale),
@@ -1186,6 +1248,8 @@ function SynapseCanvas(props: {
       nodeId: node?.id,
     });
   }
+
+  const renderedEdgeKeys = new Set<string>();
 
   return (
     <div
@@ -1216,13 +1280,21 @@ function SynapseCanvas(props: {
             const source = props.workspace.nodes.find((node) => node.id === edge.sourceNodeId);
             const target = props.workspace.nodes.find((node) => node.id === edge.targetNodeId);
             if (!source || !target) return null;
-            const sourceSize = sizeForCanvasNode(source);
-            const targetSize = sizeForCanvasNode(target);
-            const direction = target.position.x >= source.position.x ? 1 : -1;
-            const startX = direction > 0 ? source.position.x + sourceSize.width : source.position.x;
-            const startY = source.position.y + sourceSize.height / 2;
-            const endX = direction > 0 ? target.position.x : target.position.x + targetSize.width;
-            const endY = target.position.y + targetSize.height / 2;
+            const sourceGroup = artifactGroupByNodeId.get(source.id);
+            const targetGroup = artifactGroupByNodeId.get(target.id);
+            if (sourceGroup && sourceGroup.id === targetGroup?.id) return null;
+            const renderedEdgeKey = `${sourceGroup?.id ?? source.id}:${targetGroup?.id ?? target.id}`;
+            if (renderedEdgeKeys.has(renderedEdgeKey)) return null;
+            renderedEdgeKeys.add(renderedEdgeKey);
+            const sourcePosition = sourceGroup?.position ?? source.position;
+            const targetPosition = targetGroup?.position ?? target.position;
+            const sourceSize = sourceGroup?.size ?? sizeForCanvasNode(source);
+            const targetSize = targetGroup?.size ?? sizeForCanvasNode(target);
+            const direction = targetPosition.x >= sourcePosition.x ? 1 : -1;
+            const startX = direction > 0 ? sourcePosition.x + sourceSize.width : sourcePosition.x;
+            const startY = sourcePosition.y + sourceSize.height / 2;
+            const endX = direction > 0 ? targetPosition.x : targetPosition.x + targetSize.width;
+            const endY = targetPosition.y + targetSize.height / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
             return (
               <path
@@ -1236,10 +1308,12 @@ function SynapseCanvas(props: {
           {props.approvalItems.map((item) => {
             const source = props.workspace.nodes.find((node) => node.id === item.nodeId);
             if (!source) return null;
-            const sourceSize = sizeForCanvasNode(source);
-            const direction = item.position.x >= source.position.x ? 1 : -1;
-            const startX = direction > 0 ? source.position.x + sourceSize.width : source.position.x;
-            const startY = source.position.y + sourceSize.height / 2;
+            const sourceGroup = artifactGroupByNodeId.get(source.id);
+            const sourcePosition = sourceGroup?.position ?? source.position;
+            const sourceSize = sourceGroup?.size ?? sizeForCanvasNode(source);
+            const direction = item.position.x >= sourcePosition.x ? 1 : -1;
+            const startX = direction > 0 ? sourcePosition.x + sourceSize.width : sourcePosition.x;
+            const startY = sourcePosition.y + sourceSize.height / 2;
             const endX = direction > 0 ? item.position.x : item.position.x + item.size.width;
             const endY = item.position.y + item.size.height / 2;
             const bend = Math.max(80, Math.abs(endX - startX) * 0.45);
@@ -1254,7 +1328,7 @@ function SynapseCanvas(props: {
           })}
         </svg>
         {props.workspace.nodes
-          .filter((node) => !hiddenDraftNodeIds.has(node.id))
+          .filter((node) => !hiddenDraftNodeIds.has(node.id) && !groupedArtifactNodeIds.has(node.id))
           .map((node) => (
             <SynapseNodeCard
               key={node.id}
@@ -1288,6 +1362,36 @@ function SynapseCanvas(props: {
               onCheckedChange={(checked) => props.onNodeCheckedChange(node.id, checked)}
             />
           ))}
+        {visibleArtifactGroups.map((group) => (
+          <SynapseArtifactGroupCard
+            group={group}
+            selectedNodeId={props.selectedNodeId}
+            linkingFrom={props.linkingFrom}
+            speechAvailable={props.speechAvailable}
+            speakingNodeId={props.speakingNodeId}
+            speechConnecting={props.speechConnecting}
+            refreshingNodeId={props.refreshingNodeId}
+            checkedNodeIds={props.checkedNodeIds}
+            providersByService={props.providersByService}
+            workspace={props.workspace}
+            ungroupingNodeId={props.ungroupingNodeId}
+            onPointerDown={beginDrag}
+            onPointerMove={moveDrag}
+            onPointerUp={finishDrag}
+            onPointerCancel={finishDrag}
+            onContextMenu={requestContext}
+            onResizePointerDown={beginResize}
+            onResizePointerMove={moveResize}
+            onResizePointerUp={finishResize}
+            onSelect={props.onNodeSelect}
+            onOpen={props.onNodeOpen}
+            onRefresh={props.onRefreshNode}
+            onToggleSpeech={props.onToggleSpeech}
+            onCheckedChange={props.onNodeCheckedChange}
+            onUngroup={props.onUngroupNode}
+            key={group.id}
+          />
+        ))}
         {props.approvalItems.map((item) => (
           <SynapseApprovalGroupCard
             item={item}
@@ -1308,6 +1412,169 @@ function SynapseCanvas(props: {
       </div>
       <span className="synapse-zoom-level">{Math.round(canvasView.scale * 100)}%</span>
     </div>
+  );
+}
+
+export function SynapseArtifactGroupCard(props: {
+  group: SynapseArtifactGroupItem;
+  workspace: SynapseWorkspace;
+  selectedNodeId?: string;
+  linkingFrom?: string;
+  speechAvailable: boolean;
+  speakingNodeId?: string;
+  speechConnecting: boolean;
+  refreshingNodeId?: string;
+  checkedNodeIds: ReadonlySet<string>;
+  providersByService: ReadonlyMap<string, ProviderDefinition>;
+  ungroupingNodeId?: string;
+  onPointerDown(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void;
+  onPointerMove(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerUp(event: ReactPointerEvent<HTMLElement>): void;
+  onPointerCancel(event: ReactPointerEvent<HTMLElement>): void;
+  onContextMenu(event: ReactMouseEvent<HTMLElement>, node: SynapseNode): void;
+  onResizePointerDown(event: ReactPointerEvent<HTMLElement>, node: SynapseNode): void;
+  onResizePointerMove(event: ReactPointerEvent<HTMLElement>): void;
+  onResizePointerUp(event: ReactPointerEvent<HTMLElement>): void;
+  onSelect(nodeId: string): void;
+  onOpen(nodeId: string): void;
+  onRefresh(nodeId: string): void;
+  onToggleSpeech(nodeId: string, text: string): void;
+  onCheckedChange(nodeId: string, checked: boolean): void;
+  onUngroup(nodeId: string): Promise<void>;
+}): ReactNode {
+  const [page, setPage] = useState(0);
+  const selectedIndex = props.group.nodes.findIndex((node) => node.id === props.selectedNodeId);
+  const activeIndex = selectedIndex >= 0 ? selectedIndex : Math.min(page, props.group.nodes.length - 1);
+  const node = props.group.nodes[activeIndex]!;
+  const provider = synapseNodeProvider(node, props.providersByService);
+  const groupProviders = [
+    ...new Map(
+      props.group.nodes.flatMap((candidate) => {
+        const candidateProvider = synapseNodeProvider(candidate, props.providersByService);
+        return candidateProvider ? [[candidateProvider.service, candidateProvider] as const] : [];
+      }),
+    ).values(),
+  ];
+  const Icon = artifactIcon(node.artifactKind);
+  const markdown = node.content ?? node.summary ?? "Open the node and ask Claude to develop this artifact.";
+  const selected = selectedIndex >= 0;
+  const checked = props.checkedNodeIds.has(node.id);
+  const linking = props.linkingFrom !== undefined && props.linkingFrom !== node.id;
+  const refreshing = props.refreshingNodeId === node.id;
+  const refreshDisabled =
+    props.refreshingNodeId !== undefined ||
+    props.workspace.threads.some((thread) => thread.nodeId === node.id && pendingSynapseApprovalIds(thread).length > 0);
+  const style = {
+    transform: `translate(${props.group.position.x}px, ${props.group.position.y}px)`,
+    width: props.group.size.width,
+    height: props.group.size.height,
+  };
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, props.group.nodes.length - 1)));
+  }, [props.group.nodes.length]);
+
+  return (
+    <article
+      className={`synapse-node artifact artifact-group ${node.artifactKind}${selected ? " selected" : ""}${checked ? " multi-selected" : ""}${linking ? " link-target" : ""}`}
+      style={style}
+      onClick={() => props.onSelect(node.id)}
+      onContextMenu={(event) => props.onContextMenu(event, node)}
+      onDoubleClick={(event) => {
+        if (!isSynapseNodeControlTarget(event.target)) props.onOpen(node.id);
+      }}
+    >
+      <SynapseNodeDragHandle
+        label={`${props.group.nodes.length} grouped artifacts`}
+        onPointerDown={(event) => props.onPointerDown(event, node)}
+        onPointerMove={props.onPointerMove}
+        onPointerUp={props.onPointerUp}
+        onPointerCancel={props.onPointerCancel}
+      />
+      <SynapseNodeCheckbox
+        checked={checked}
+        label={node.title}
+        onCheckedChange={(next) => props.onCheckedChange(node.id, next)}
+      />
+      <SynapseRefreshButton
+        refreshing={refreshing}
+        disabled={refreshDisabled}
+        label={node.title}
+        onRefresh={() => props.onRefresh(node.id)}
+      />
+      <SynapseTtsButton
+        available={props.speechAvailable}
+        speaking={props.speakingNodeId === node.id}
+        connecting={props.speakingNodeId === node.id && props.speechConnecting}
+        label={node.title}
+        onToggle={() => props.onToggleSpeech(node.id, synapseNodeSpeech(node))}
+      />
+      <header>
+        <span className="synapse-node-icon artifact synapse-node-provider-icons">
+          {groupProviders.length > 0 ? (
+            groupProviders.slice(0, 3).map((candidate) => <ProviderIcon provider={candidate} key={candidate.service} />)
+          ) : (
+            <Icon size={18} />
+          )}
+          {groupProviders.length > 3 ? <small>+{groupProviders.length - 3}</small> : null}
+        </span>
+        <span className="synapse-node-kind">
+          {provider?.displayName ?? artifactLabel(node.artifactKind)} · {activeIndex + 1} of {props.group.nodes.length}
+        </span>
+      </header>
+      <nav className="synapse-group-tabs artifact-tabs" role="tablist" aria-label="Grouped artifacts">
+        {props.group.nodes.map((candidate, index) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={candidate.id === node.id}
+            className={candidate.id === node.id ? "active" : undefined}
+            title={candidate.title}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setPage(index);
+              props.onSelect(candidate.id);
+            }}
+            key={candidate.id}
+          >
+            <span>{candidate.title}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className="ungroup"
+          disabled={props.ungroupingNodeId !== undefined}
+          aria-label={`Ungroup ${node.title}`}
+          title={`Ungroup ${node.title}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            void props.onUngroup(node.id);
+          }}
+        >
+          {props.ungroupingNodeId === node.id ? <Loader2 className="spin" size={12} /> : <Ungroup size={12} />}
+        </button>
+      </nav>
+      <strong className="synapse-node-title" title={node.title}>
+        {node.title}
+      </strong>
+      <SynapseArtifactShortcuts previews={node.previews ?? []} externalUrl={node.externalUrl} />
+      <div className="synapse-node-markdown">
+        <ChatMarkdown>{markdown}</ChatMarkdown>
+      </div>
+      <span className="synapse-port input" />
+      <span className="synapse-port output" />
+      <span
+        className="synapse-node-resize"
+        role="separator"
+        aria-label={`Resize ${node.title}`}
+        onPointerDown={(event) => props.onResizePointerDown(event, node)}
+        onPointerMove={props.onResizePointerMove}
+        onPointerUp={props.onResizePointerUp}
+        onPointerCancel={props.onResizePointerUp}
+      />
+    </article>
   );
 }
 
@@ -1851,6 +2118,8 @@ export interface SynapseNodeDetailProps {
   node: SynapseNode;
   provider?: ProviderDefinition;
   approvalRequest?: SynapseApprovalRequestItem;
+  groupNodes?: SynapseArtifactNode[];
+  ungrouping?: boolean;
   providersByService: ReadonlyMap<string, ProviderDefinition>;
   speechAvailable: boolean;
   speaking: boolean;
@@ -1862,6 +2131,7 @@ export interface SynapseNodeDetailProps {
   onTextContextMenu(request: SynapseTextContextRequest): void;
   onRefresh(): void;
   onApprovalDecision?(approvalId: string, decision: "approve" | "deny"): Promise<void>;
+  onUngroup?(): Promise<void>;
   onToggleSpeech(): void;
 }
 
@@ -1892,7 +2162,7 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
 
   return (
     <section
-      className={props.approvalRequest ? "synapse-node-detail draft" : "synapse-node-detail"}
+      className={`synapse-node-detail${props.approvalRequest ? " draft" : ""}${props.groupNodes ? " has-tabs" : ""}`}
       aria-label={`Expanded node ${props.node.title}`}
     >
       <header className="synapse-node-detail-header">
@@ -1961,6 +2231,43 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
           </Button>
         </div>
       </header>
+      {props.groupNodes ? (
+        <nav className="synapse-node-detail-tabs" role="tablist" aria-label="Grouped artifact tabs">
+          {props.groupNodes.map((node, index) => {
+            const provider = synapseNodeProvider(node, props.providersByService);
+            const Icon = artifactIcon(node.artifactKind);
+            return (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={node.id === props.node.id}
+                className={node.id === props.node.id ? "active" : undefined}
+                title={node.title}
+                onClick={() => props.onNavigate(node.id)}
+                key={node.id}
+              >
+                <span>{provider ? <ProviderIcon provider={provider} /> : <Icon size={14} />}</span>
+                <small>{index + 1}</small>
+                <strong>{node.title}</strong>
+              </button>
+            );
+          })}
+          {props.onUngroup ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="synapse-node-detail-ungroup"
+              disabled={props.ungrouping}
+              aria-label={`Ungroup ${props.node.title}`}
+              title={`Ungroup ${props.node.title}`}
+              onClick={() => void props.onUngroup?.()}
+            >
+              {props.ungrouping ? <Loader2 className="spin" size={14} /> : <Ungroup size={14} />}
+              Ungroup tab
+            </Button>
+          ) : null}
+        </nav>
+      ) : null}
       <div className="synapse-node-detail-main">
         <SynapseConnectedNodeRail
           direction="incoming"
@@ -2748,6 +3055,49 @@ export function synapseApprovalItems(workspace: SynapseWorkspace): SynapseApprov
   return items;
 }
 
+/** Projects persisted artifact memberships into one canvas card while retaining each child node identity. */
+export function synapseArtifactGroups(workspace: SynapseWorkspace): SynapseArtifactGroupItem[] {
+  const nodesByGroup = new Map<string, SynapseArtifactNode[]>();
+  for (const node of workspace.nodes) {
+    if (node.kind !== "artifact" || !node.groupId || node.ungrouped) continue;
+    nodesByGroup.set(node.groupId, [...(nodesByGroup.get(node.groupId) ?? []), node]);
+  }
+  return [...nodesByGroup.entries()].flatMap(([id, nodes]) => {
+    if (nodes.length < 2) return [];
+    nodes.sort(
+      (left, right) =>
+        (left.groupOrder ?? Number.MAX_SAFE_INTEGER) - (right.groupOrder ?? Number.MAX_SAFE_INTEGER) ||
+        left.createdAt.localeCompare(right.createdAt),
+    );
+    const sizes = nodes.map(sizeForCanvasNode);
+    return [
+      {
+        id,
+        nodes,
+        position: nodes[0]!.position,
+        size: {
+          width: Math.max(...sizes.map((size) => size.width)),
+          height: Math.max(artifactNodeHeight + 32, ...sizes.map((size) => size.height)),
+        },
+      },
+    ];
+  });
+}
+
+function visibleSynapseCanvasNodes(workspace: SynapseWorkspace): SynapseNode[] {
+  const groups = synapseArtifactGroups(workspace);
+  const groupedNodeIds = new Set(groups.flatMap((group) => group.nodes.map((node) => node.id)));
+  return [
+    ...workspace.nodes.filter((node) => !groupedNodeIds.has(node.id)),
+    ...groups.map((group) => ({
+      ...group.nodes[0]!,
+      position: group.position,
+      size: group.size,
+      autoSize: false,
+    })),
+  ];
+}
+
 function pendingSynapseApprovalIds(thread: SynapseThread): string[] {
   return [
     ...new Set([...(thread.pendingApprovalIds ?? []), ...(thread.pendingApprovalId ? [thread.pendingApprovalId] : [])]),
@@ -2783,9 +3133,17 @@ export function appendSynapseUserMessage(
 }
 
 function moveNode(workspace: SynapseWorkspace, nodeId: string, position: { x: number; y: number }): SynapseWorkspace {
+  const anchor = workspace.nodes.find((node) => node.id === nodeId);
+  const groupId = anchor?.kind === "artifact" ? anchor.groupId : undefined;
+  const delta = anchor ? { x: position.x - anchor.position.x, y: position.y - anchor.position.y } : { x: 0, y: 0 };
   return {
     ...workspace,
-    nodes: workspace.nodes.map((node) => (node.id === nodeId ? { ...node, position } : node)),
+    nodes: workspace.nodes.map((node) => {
+      if (groupId && node.kind === "artifact" && node.groupId === groupId) {
+        return { ...node, position: { x: node.position.x + delta.x, y: node.position.y + delta.y } };
+      }
+      return node.id === nodeId ? { ...node, position } : node;
+    }),
   };
 }
 

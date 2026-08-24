@@ -22,6 +22,15 @@ const item: FeedItem = {
   summary: "The commissioning plan is ready for review.",
   author: "Mel Blanch",
   providerService: "outlook",
+  post: {
+    text: "All sorted — the project email’s archived and the commissioning plan is ready for a look 👀",
+    image: {
+      alt: "An illustrated message moving into a project notebook.",
+      headline: "Ready for a look",
+      motif: "message",
+      palette: "violet",
+    },
+  },
   previews: [
     {
       id: "email",
@@ -85,7 +94,10 @@ describe("FeedCard", () => {
     );
 
     expect(html).toContain("Roy Hill weekly update");
-    expect(html).toContain("Archived the source email and prepared a reply.");
+    expect(html).toContain("the project email’s archived");
+    expect(html).toContain("Ready for a look");
+    expect(html).toContain("AI visual");
+    expect(html).toContain('role="img"');
     expect(html).toContain("Please acknowledge it.");
     expect(html).toContain("Open email");
     expect(html).toContain("Commissioning plan.pdf");
@@ -93,5 +105,6 @@ describe("FeedCard", () => {
     expect(html).toContain("Approve outlook.send_message");
     expect(html).toContain("Decide the pending request to continue");
     expect(html).toContain('class="provider-icon large"');
+    expect(html).toContain('class="feed-social-copy"');
   });
 });

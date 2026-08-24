@@ -306,6 +306,96 @@ describe("SynapseService", () => {
     });
   });
 
+  it("groups artifacts created across multiple graph calls while preserving each node identity", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const activities: AgentChatToolActivity[] = [];
+        for (const [index, title] of ["Open item 194047", "Open item 194048", "Open item 194049"].entries()) {
+          const activity = await extension.runTool("synapse_add_artifacts", {
+            artifacts: [
+              {
+                artifactKind: "task",
+                title,
+                content: `Work item ${194047 + index} is active.`,
+              },
+            ],
+          });
+          if (activity) activities.push(activity);
+        }
+        return completedResponse(activities);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Grouped work items" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "provider",
+      connectionId: "azure-devops-1",
+      position: { x: 100, y: 100 },
+    });
+
+    const grouped = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Show three open items." });
+    const artifacts = grouped.nodes.filter((node) => node.kind === "artifact");
+
+    expect(artifacts).toHaveLength(3);
+    expect(new Set(artifacts.map((node) => node.groupId))).toEqual(
+      new Set([`artifact-group:${grouped.threads[0]!.messages[1]!.id}`]),
+    );
+    expect(artifacts.map((node) => node.groupOrder)).toEqual([0, 1, 2]);
+    expect(new Set(artifacts.map((node) => node.id)).size).toBe(3);
+
+    const anchor = artifacts[0]!;
+    const moved = await service.updateNode(workspace.id, anchor.id, {
+      position: { x: anchor.position.x + 120, y: anchor.position.y + 60 },
+    });
+    const movedArtifacts = moved.nodes.filter(
+      (node): node is SynapseArtifactNode => node.kind === "artifact" && node.groupId === anchor.groupId,
+    );
+    expect(movedArtifacts.map((node) => node.position)).toEqual(
+      artifacts.map((node) => ({ x: node.position.x + 120, y: node.position.y + 60 })),
+    );
+  });
+
+  it("ungroups one artifact tab without regrouping it and keeps the other tabs together", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const activity = await extension.runTool("synapse_add_artifacts", {
+          artifacts: ["Alpha", "Bravo", "Charlie"].map((title) => ({
+            artifactKind: "note",
+            title,
+            content: `${title} details.`,
+          })),
+        });
+        return completedResponse(activity ? [activity] : []);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Ungroup one tab" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "note",
+      title: "Source",
+      position: { x: 100, y: 100 },
+    });
+    const grouped = await service.chat(workspace.id, seeded.nodes[0]!.id, { content: "Create three notes." });
+    const artifacts = grouped.nodes.filter((node) => node.kind === "artifact" && node.title !== "Source");
+    const removedTab = artifacts[1]!;
+
+    const ungrouped = await service.updateNode(workspace.id, removedTab.id, { ungrouped: true });
+    const removed = ungrouped.nodes.find((node) => node.id === removedTab.id);
+    const remaining = ungrouped.nodes.filter(
+      (node): node is SynapseArtifactNode =>
+        node.kind === "artifact" && node.title !== "Source" && node.id !== removedTab.id,
+    );
+
+    expect(removed).toMatchObject({ id: removedTab.id, groupId: undefined, ungrouped: true });
+    expect(remaining.map((node) => node.groupOrder)).toEqual([0, 1]);
+    expect(new Set(remaining.map((node) => node.groupId)).size).toBe(1);
+    expect((await service.get(workspace.id)).nodes.find((node) => node.id === removedTab.id)).toMatchObject({
+      groupId: undefined,
+      ungrouped: true,
+    });
+  });
+
   it("removes legacy raw connector JSON projection nodes", async () => {
     const service = createService({
       respondWithExtension: vi.fn(async () => completedResponse([])),

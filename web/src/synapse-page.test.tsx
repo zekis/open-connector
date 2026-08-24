@@ -17,9 +17,11 @@ import {
   panNodeIntoView,
   selectedSynapseText,
   SynapseApprovalGroupCard,
+  SynapseArtifactGroupCard,
   SynapseNodeCard,
   SynapseNodeDetail,
   synapseApprovalItems,
+  synapseArtifactGroups,
   synapseConnectedNodeGroups,
   synapseMoreInfoPrompt,
   synapseNodeProvider,
@@ -415,6 +417,68 @@ describe("SynapseNodeCard", () => {
   });
 });
 
+describe("SynapseArtifactGroupCard", () => {
+  const secondNode: SynapseArtifactNode = {
+    ...artifactNode,
+    id: "artifact-2",
+    title: "Second opportunity",
+    content: "Second tab content.",
+    groupId: "artifact-group:message-1",
+    groupOrder: 1,
+    position: { x: 760, y: 120 },
+  };
+  const firstNode: SynapseArtifactNode = {
+    ...artifactNode,
+    groupId: "artifact-group:message-1",
+    groupOrder: 0,
+  };
+  const workspace: SynapseWorkspace = {
+    id: "synapse-1",
+    name: "Grouped artifacts",
+    nodes: [firstNode, secondNode],
+    edges: [],
+    threads: [],
+    createdAt: "2026-08-15T01:00:00.000Z",
+    updatedAt: "2026-08-15T01:01:00.000Z",
+  };
+
+  it("renders one wrapper whose selected tab still uses the child node identity", () => {
+    const [group] = synapseArtifactGroups(workspace);
+    const html = renderToStaticMarkup(
+      <SynapseArtifactGroupCard
+        group={group!}
+        workspace={workspace}
+        selectedNodeId={secondNode.id}
+        speechAvailable
+        speechConnecting={false}
+        checkedNodeIds={new Set()}
+        providersByService={new Map([[provider.service, provider]])}
+        onPointerDown={() => {}}
+        onPointerMove={() => {}}
+        onPointerUp={() => {}}
+        onPointerCancel={() => {}}
+        onContextMenu={() => {}}
+        onResizePointerDown={() => {}}
+        onResizePointerMove={() => {}}
+        onResizePointerUp={() => {}}
+        onSelect={() => {}}
+        onOpen={() => {}}
+        onRefresh={() => {}}
+        onToggleSpeech={() => {}}
+        onCheckedChange={() => {}}
+        onUngroup={async () => {}}
+      />,
+    );
+
+    expect(group?.nodes.map((node) => node.id)).toEqual([firstNode.id, secondNode.id]);
+    expect(html).toContain("artifact-group");
+    expect(html).toContain('aria-label="Grouped artifacts"');
+    expect(html).toContain('aria-label="Ungroup Second opportunity"');
+    expect(html).toContain("Second tab content.");
+    expect(html).toContain('aria-selected="true"');
+  });
+});
+
 describe("Synapse provider and chat projections", () => {
   it("resolves provider identity for source and connector-backed artifact nodes", () => {
     const providers = new Map([[provider.service, provider]]);
@@ -590,6 +654,42 @@ describe("SynapseNodeDetail", () => {
     expect(html).toContain('aria-label="Approve Create YardCraft task"');
     expect(html).toContain('aria-label="Deny Create YardCraft task"');
     expect(html).toContain('class="provider-icon large"');
+  });
+
+  it("shows grouped artifact tabs across the top of fullscreen mode", () => {
+    const groupedNodes: SynapseArtifactNode[] = [
+      { ...artifactNode, groupId: "artifact-group:message-1", groupOrder: 0 },
+      {
+        ...downstreamNode,
+        groupId: "artifact-group:message-1",
+        groupOrder: 1,
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <SynapseNodeDetail
+        workspace={{ ...workspace, nodes: [providerNode, ...groupedNodes] }}
+        node={groupedNodes[1]!}
+        groupNodes={groupedNodes}
+        providersByService={new Map([[provider.service, provider]])}
+        speechAvailable
+        speaking={false}
+        speechConnecting={false}
+        refreshing={false}
+        refreshDisabled={false}
+        onClose={() => {}}
+        onNavigate={() => {}}
+        onTextContextMenu={() => {}}
+        onRefresh={() => {}}
+        onUngroup={async () => {}}
+        onToggleSpeech={() => {}}
+      />,
+    );
+
+    expect(html).toContain("synapse-node-detail has-tabs");
+    expect(html).toContain('aria-label="Grouped artifact tabs"');
+    expect(html).toContain("New mining opportunity");
+    expect(html).toContain("Opportunity decision");
+    expect(html).toContain('aria-label="Ungroup Opportunity decision"');
   });
 });
 
