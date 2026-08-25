@@ -1,5 +1,6 @@
+import type { FlowRunner } from "../flows/flow-runner.ts";
 import type { FlowService } from "../flows/flow-service.ts";
-import type { FlowDefinition, FlowDefinitionInput, FlowStatus } from "../flows/flow-types.ts";
+import type { FlowDefinition, FlowDefinitionInput, FlowRun, FlowStatus } from "../flows/flow-types.ts";
 import type { AgentChatExtensionTool } from "./agent-chat-service.ts";
 import type { AgentChatToolActivity } from "./agent-chat-types.ts";
 
@@ -13,11 +14,14 @@ import {
 
 export interface AgentChatFlowToolOptions {
   flows: Pick<FlowService, "create" | "delete" | "getRequired" | "list" | "update">;
+  flowRuns: Pick<FlowRunner, "getRunDetail" | "listRuns">;
   agentConnectionId: string;
 }
 
 const listFlowsToolName = "list_flows";
 const getFlowToolName = "get_flow";
+const listFlowRunsToolName = "list_flow_runs";
+const getFlowRunToolName = "get_flow_run";
 const createFlowToolName = "create_flow";
 const updateFlowToolName = "update_flow";
 const setFlowStatusToolName = "set_flow_status";
@@ -26,6 +30,8 @@ const deleteFlowToolName = "delete_flow";
 const flowToolNames = new Set([
   listFlowsToolName,
   getFlowToolName,
+  listFlowRunsToolName,
+  getFlowRunToolName,
   createFlowToolName,
   updateFlowToolName,
   setFlowStatusToolName,
@@ -129,6 +135,24 @@ export const agentChatFlowTools: AgentChatExtensionTool[] = [
     inputSchema: objectSchema({ flowId: { type: "string" } }, ["flowId"]),
   },
   {
+    name: listFlowRunsToolName,
+    description:
+      "List recent OOMOL Connect Flow runs, newest first, including their actual status and recorded error. Filter by flowId when diagnosing one Flow, then inspect the relevant run with get_flow_run.",
+    inputSchema: objectSchema(
+      {
+        flowId: { type: "string", description: "Optional Flow id to restrict the run history." },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum runs to return." },
+      },
+      [],
+    ),
+  },
+  {
+    name: getFlowRunToolName,
+    description:
+      "Get the persisted execution trace for one Flow run, including its definition snapshot, trigger event, ordered agent and action steps, action inputs and outputs, errors, and approval states.",
+    inputSchema: objectSchema({ runId: { type: "string" } }, ["runId"]),
+  },
+  {
     name: createFlowToolName,
     description:
       "Create an OOMOL Connect Flow using one or more source connectors and a connector, existing Synapse canvas, or newly created canvas destination. Include every source connection in sourceConnectionIds and set exactly one destination field. Scheduling is supplied by OOMOL Connect through trigger.type schedule; it is not a connected-app action. Active Flows require explicit user authorization.",
@@ -206,6 +230,8 @@ export async function runAgentChatFlowTool(
   try {
     if (toolName === listFlowsToolName) return await listFlows(input, options);
     if (toolName === getFlowToolName) return await getFlow(input, options);
+    if (toolName === listFlowRunsToolName) return await listFlowRuns(input, options);
+    if (toolName === getFlowRunToolName) return await getFlowRun(input, options);
     if (toolName === createFlowToolName) return await createFlow(input, options);
     if (toolName === updateFlowToolName) return await updateFlow(input, options);
     if (toolName === setFlowStatusToolName) return await setFlowStatus(input, options);
@@ -248,6 +274,48 @@ async function getFlow(
   const flowId = readRequiredText(input.flowId, "flowId");
   const flow = await options.flows.getRequired(flowId);
   return completedFlowActivity(toolNameLabel(getFlowToolName), input, { flow });
+}
+
+async function listFlowRuns(
+  input: Record<string, unknown>,
+  options: AgentChatFlowToolOptions,
+): Promise<AgentChatToolActivity> {
+  const flowId = readOptionalText(input.flowId, "flowId");
+  const limit = readOptionalInteger(input.limit, "limit", 1, 100) ?? 20;
+  const runs = await options.flowRuns.listRuns(flowId, limit);
+  return completedFlowActivity(toolNameLabel(listFlowRunsToolName), input, {
+    runs: runs.map(summarizeFlowRun),
+  });
+}
+
+async function getFlowRun(
+  input: Record<string, unknown>,
+  options: AgentChatFlowToolOptions,
+): Promise<AgentChatToolActivity> {
+  const runId = readRequiredText(input.runId, "runId");
+  const detail = await options.flowRuns.getRunDetail(runId);
+  return completedFlowActivity(toolNameLabel(getFlowRunToolName), input, {
+    ...detail,
+    steps: [...detail.steps].sort((left, right) => left.sequence - right.sequence),
+    approvals: [...detail.approvals].sort((left, right) => left.requestedAt.localeCompare(right.requestedAt)),
+  });
+}
+
+function summarizeFlowRun(run: FlowRun): Record<string, unknown> {
+  return {
+    id: run.id,
+    flowId: run.flowId,
+    flowName: run.flowSnapshot.name,
+    flowRevision: run.flowRevision,
+    trigger: run.trigger,
+    status: run.status,
+    stepCount: run.stepCount,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    completedAt: run.completedAt,
+    errorCode: run.errorCode,
+    errorMessage: run.errorMessage,
+  };
 }
 
 async function createFlow(
@@ -391,6 +459,11 @@ function readRequiredText(value: unknown, field: string): string {
     throw new AgentChatFlowToolError("invalid_flow_tool_input", `${field} is required.`);
   }
   return value.trim();
+}
+
+function readOptionalText(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  return readRequiredText(value, field);
 }
 
 function readRequiredObject(value: unknown, field: string): Record<string, unknown> {

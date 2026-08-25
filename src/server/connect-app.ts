@@ -133,6 +133,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     codex,
     actions,
     flows,
+    flowRuns: flowRunner,
     approvals: connectionApprovals,
     getPolicySnapshot,
   });

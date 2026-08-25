@@ -6,7 +6,8 @@ import type { AgentModelOption } from "../agents/agent-settings-service.ts";
 import type { AgentTurnRequest } from "../agents/agent-turn.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
-import type { FlowDefinition, FlowDefinitionInput } from "../flows/flow-types.ts";
+import type { FlowRunDetail } from "../flows/flow-runner.ts";
+import type { FlowDefinition, FlowDefinitionInput, FlowRun } from "../flows/flow-types.ts";
 import type { AgentChatProgress, AgentChatResponse } from "./agent-chat-types.ts";
 
 import { describe, expect, it } from "vitest";
@@ -424,6 +425,113 @@ describe("AgentChatService", () => {
     expect(flows.deleteInputs).toEqual(["flow-1"]);
   });
 
+  it("reads Flow run history and the persisted execution trace through Chat", async () => {
+    const flows = new FakeFlowService();
+    const flow = await flows.create({
+      name: "Record check",
+      status: "active",
+      sourceConnectionIds: [connection.id],
+      destinationConnectionId: connection.id,
+      instructions: "Look up record 42.",
+      trigger: { type: "schedule", cron: "0 9 * * *", timeZone: "Australia/Perth" },
+      agent: { connectionId: "claude-subscription" },
+      tools: [
+        {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          role: "source",
+          approval: "inherit",
+        },
+      ],
+    });
+    const run: FlowRun = {
+      id: "run-1",
+      flowId: flow.id,
+      flowRevision: flow.revision,
+      flowSnapshot: flow,
+      trigger: "schedule",
+      status: "failed",
+      stepCount: 2,
+      startedAt: "2026-08-25T01:00:00.000Z",
+      updatedAt: "2026-08-25T01:00:02.000Z",
+      completedAt: "2026-08-25T01:00:02.000Z",
+      errorCode: "action_failed",
+      errorMessage: "The provider rejected record 42.",
+    };
+    flows.runDetails.push({
+      run,
+      steps: [
+        {
+          id: "step-2",
+          runId: run.id,
+          sequence: 2,
+          kind: "action",
+          status: "failed",
+          startedAt: "2026-08-25T01:00:01.000Z",
+          completedAt: "2026-08-25T01:00:02.000Z",
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          input: { query: "42" },
+          errorCode: "provider_error",
+          errorMessage: "The provider rejected record 42.",
+        },
+        {
+          id: "step-1",
+          runId: run.id,
+          sequence: 1,
+          kind: "agent",
+          status: "completed",
+          startedAt: "2026-08-25T01:00:00.000Z",
+          completedAt: "2026-08-25T01:00:01.000Z",
+        },
+      ],
+      approvals: [],
+    });
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "list_flow_runs", arguments: { flowId: flow.id, limit: 5 } },
+      { kind: "tool_call", toolName: "get_flow_run", arguments: { runId: run.id } },
+      { kind: "final", text: "The trace shows that the provider rejected record 42." },
+    ]);
+    const service = createService(claude, new FakeActionRunner(), true, new FakeChatApprovals(), flows);
+
+    const response = await service.respond({
+      messages: [{ role: "user", content: "Why did the latest Record check Flow fail?" }],
+    });
+
+    expect(response.toolActivity).toMatchObject([
+      {
+        label: "List flow runs",
+        ok: true,
+        output: {
+          runs: [
+            {
+              id: run.id,
+              flowId: flow.id,
+              flowName: flow.name,
+              status: "failed",
+              errorCode: "action_failed",
+            },
+          ],
+        },
+      },
+      {
+        label: "Get flow run",
+        ok: true,
+        output: {
+          run: { id: run.id, errorCode: "action_failed" },
+          steps: [
+            { id: "step-1", sequence: 1 },
+            { id: "step-2", sequence: 2, errorCode: "provider_error" },
+          ],
+        },
+      },
+    ]);
+    expect(flows.listRunInputs).toEqual([{ flowId: flow.id, limit: 5 }]);
+    expect(flows.getRunInputs).toEqual([run.id]);
+    expect(claude.inputs[0]?.systemPrompt).toContain("inspect list_flow_runs and get_flow_run before diagnosing");
+    expect(claude.inputs[0]?.prompt).toContain('"name":"get_flow_run"');
+  });
+
   it("pauses on approval and resumes the exact action with saved agent context", async () => {
     const approvalId = "26d9fa1f-ff35-4bc8-b9af-12bb33389e61";
     const approval = createChatApproval(approvalId);
@@ -738,6 +846,7 @@ describe("AgentChatService", () => {
       },
       actions: new FakeActionRunner(),
       flows: new FakeFlowService(),
+      flowRuns: new FakeFlowService(),
       approvals: new FakeChatApprovals(),
       getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
     });
@@ -794,6 +903,7 @@ function createService(
     claudeCode,
     actions,
     flows,
+    flowRuns: flows,
     approvals,
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
     now,
@@ -804,6 +914,9 @@ class FakeFlowService {
   readonly createInputs: FlowDefinitionInput[] = [];
   readonly updateInputs: Array<{ id: string; input: FlowDefinitionInput }> = [];
   readonly deleteInputs: string[] = [];
+  readonly listRunInputs: Array<{ flowId?: string; limit?: number }> = [];
+  readonly getRunInputs: string[] = [];
+  readonly runDetails: FlowRunDetail[] = [];
   private readonly flows = new Map<string, FlowDefinition>();
 
   async create(input: unknown): Promise<FlowDefinition> {
@@ -835,6 +948,19 @@ class FakeFlowService {
   async delete(id: string): Promise<void> {
     this.deleteInputs.push(id);
     this.flows.delete(id);
+  }
+
+  async listRuns(flowId?: string, limit?: number): Promise<FlowRun[]> {
+    this.listRunInputs.push({ flowId, limit });
+    const runs = this.runDetails.map((detail) => detail.run).filter((run) => !flowId || run.flowId === flowId);
+    return structuredClone(runs.slice(0, limit));
+  }
+
+  async getRunDetail(id: string): Promise<FlowRunDetail> {
+    this.getRunInputs.push(id);
+    const detail = this.runDetails.find((candidate) => candidate.run.id === id);
+    if (!detail) throw new Error(`Flow run not found: ${id}`);
+    return structuredClone(detail);
   }
 }
 

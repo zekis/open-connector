@@ -10,6 +10,7 @@ import type { IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { CodexClient } from "../agents/codex-client.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
+import type { FlowRunner } from "../flows/flow-runner.ts";
 import type { FlowService } from "../flows/flow-service.ts";
 import type {
   AgentChatApprovalResult,
@@ -53,6 +54,7 @@ export interface AgentChatServiceOptions {
   codex?: Pick<CodexClient, "completeTurn">;
   actions: IActionRunner;
   flows: Pick<FlowService, "create" | "delete" | "getRequired" | "list" | "update">;
+  flowRuns: Pick<FlowRunner, "getRunDetail" | "listRuns">;
   approvals: Pick<
     ConnectionApprovalService,
     "attachChatContinuation" | "consumeApproved" | "getActionApproval" | "storeChatResponse"
@@ -613,9 +615,16 @@ export class AgentChatService implements IAgentChatService {
     }
     const flowActivity = await runAgentChatFlowTool(toolName, input, {
       flows: this.options.flows,
+      flowRuns: this.options.flowRuns,
       agentConnectionId: context.agentConnectionId,
     });
-    if (flowActivity) return flowActivity;
+    if (flowActivity) {
+      return {
+        ...flowActivity,
+        input: boundedValue(flowActivity.input),
+        output: boundedValue(flowActivity.output),
+      };
+    }
     const extensionActivity = await extension?.runTool(toolName, input);
     if (extensionActivity) return extensionActivity;
     return failedActivity("action", `Unknown chat tool: ${toolName}.`, input, {
@@ -822,6 +831,7 @@ Rules:
 Flow rules:
 - OOMOL Connect itself owns Flow scheduling; never search connected applications for a scheduler
 - list existing Flows before creating persistent automation so you can avoid accidental duplicates
+- when asked what happened in a Flow run or why it failed, inspect list_flow_runs and get_flow_run before diagnosing; clearly distinguish recorded trace facts from any remaining inference
 - include every connector the Flow reads from in sourceConnectionIds; multi-source Flows may grant source tools from any listed connection
 - search for each connector action before granting it to a Flow unless its exact action id and schema already appear in this turn's tool history
 - use schedule triggers with a five-field cron expression and an IANA time zone for recurring Flows
