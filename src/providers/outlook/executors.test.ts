@@ -3,6 +3,27 @@ import { ProviderRequestError } from "../provider-runtime.ts";
 import { outlookActionHandlers } from "./executors.ts";
 
 describe("Outlook executors", () => {
+  it("deletes a message by ID", async () => {
+    const fetcher = createFetch(async () => new Response(null, { status: 204 }));
+
+    await expect(
+      outlookActionHandlers.delete_message!(
+        { messageId: "message 1" },
+        {
+          accessToken: "access-token",
+          tokenType: "Bearer",
+          fetcher,
+        },
+      ),
+    ).resolves.toEqual({ success: true });
+
+    const [request, init] = vi.mocked(fetcher).mock.calls[0]!;
+    expect(new URL(request instanceof Request ? request.url : request.toString()).pathname).toBe(
+      "/v1.0/me/messages/message%201",
+    );
+    expect(init?.method).toBe("DELETE");
+  });
+
   it("creates an editable reply draft with replacement content and additional recipients", async () => {
     const fetcher = createFetch(async () =>
       Response.json({ id: "reply-draft-1", subject: "RE: Project update", isDraft: true }, { status: 201 }),

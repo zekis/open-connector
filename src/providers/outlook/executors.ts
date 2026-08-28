@@ -61,6 +61,9 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   update_draft(input, deps) {
     return updateDraft(input, deps);
   },
+  delete_message(input, deps) {
+    return deleteMessage(input, deps);
+  },
   send_draft(input, deps) {
     return sendDraft(input, deps);
   },
@@ -476,6 +479,16 @@ async function updateDraft(input: Record<string, unknown>, { accessToken, fetche
       requireBody: false,
     }),
   });
+}
+
+async function deleteMessage(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
+  await outlookRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+    accessToken,
+    fetcher,
+    method: "DELETE",
+  });
+
+  return { success: true };
 }
 
 async function sendDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {

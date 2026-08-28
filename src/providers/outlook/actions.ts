@@ -286,6 +286,14 @@ const actions: OutlookActionSource[] = [
     outlookMessage,
   ),
   action(
+    "delete_message",
+    "Delete an Outlook message or draft by message ID. This action is irreversible.",
+    outlookWriteScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input({ messageId }, ["messageId"]),
+    success,
+  ),
+  action(
     "send_draft",
     "Send an existing Outlook draft message by message ID.",
     outlookSendScopes,
