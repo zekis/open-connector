@@ -10,7 +10,7 @@
 .kanban-toolbar,
 .kanban-board-picker,
 .kanban-toolbar-actions,
-.kanban-editor-presets,
+.kanban-generation-controls,
 .kanban-card-topline,
 .kanban-card-meta,
 .kanban-card-labels,
@@ -41,6 +41,7 @@
 .kanban-board-picker select,
 .kanban-editor select,
 .kanban-editor input,
+.kanban-prompt-field textarea,
 .kanban-definition-field textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -59,6 +60,7 @@
 .kanban-board-picker select:focus,
 .kanban-editor select:focus,
 .kanban-editor input:focus,
+.kanban-prompt-field textarea:focus,
 .kanban-definition-field textarea:focus {
   border-color: var(--ring);
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 35%, transparent);
@@ -349,13 +351,22 @@
   margin-top: 4px;
 }
 
-.kanban-editor-presets {
-  align-items: flex-end;
-  flex-wrap: wrap;
+.kanban-generation-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid color-mix(in oklab, var(--primary) 22%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--primary) 4%, var(--card));
+}
+
+.kanban-generation-controls {
+  justify-content: flex-end;
   gap: 10px;
 }
 
-.kanban-editor-presets label,
+.kanban-generation-controls label,
+.kanban-prompt-field,
 .kanban-definition-field {
   display: grid;
   gap: 6px;
@@ -364,8 +375,56 @@
   font-weight: 620;
 }
 
-.kanban-editor-presets .kanban-limit-field {
+.kanban-prompt-field textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  padding: 12px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.kanban-draft-summary {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+}
+
+.kanban-draft-summary > div,
+.kanban-draft-summary label {
+  display: grid;
+  gap: 4px;
+}
+
+.kanban-draft-summary span,
+.kanban-draft-summary label {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.kanban-limit-field {
   min-width: 130px;
+}
+
+.kanban-advanced-definition {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.kanban-advanced-definition summary {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.kanban-advanced-definition[open] summary {
+  margin-bottom: 12px;
 }
 
 .kanban-definition-field {

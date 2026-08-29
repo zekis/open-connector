@@ -87,6 +87,18 @@ const definition: KanbanBoardDefinitionInput = {
 };
 
 describe("KanbanService", () => {
+  it("validates agent-generated definitions before returning them to the editor", async () => {
+    const harness = createHarness({
+      async generate() {
+        return definition;
+      },
+    });
+
+    await expect(
+      harness.service.generate({ prompt: "Show delivery work", agentConnectionId: "agent-1" }),
+    ).resolves.toMatchObject(definition);
+  });
+
   it("persists a board and deterministically projects connector JSON", async () => {
     const harness = createHarness();
     const board = await harness.service.create(definition);
@@ -224,7 +236,7 @@ describe("KanbanService", () => {
   });
 });
 
-function createHarness(): {
+function createHarness(generator?: { generate(input: unknown): Promise<unknown> }): {
   service: KanbanService;
   actions: FakeKanbanActions;
 } {
@@ -259,6 +271,7 @@ function createHarness(): {
         },
       },
       store,
+      generator,
       getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
     }),
     actions,

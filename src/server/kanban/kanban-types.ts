@@ -57,6 +57,16 @@ export interface KanbanBoardDefinitionInput {
   sources: KanbanSource[];
 }
 
+export interface KanbanGenerationInput {
+  prompt: string;
+  agentConnectionId: string;
+  current?: KanbanBoardDefinitionInput;
+}
+
+export interface IKanbanBoardGenerator {
+  generate(input: unknown): Promise<unknown>;
+}
+
 export interface KanbanBoardSummary {
   id: string;
   name: string;

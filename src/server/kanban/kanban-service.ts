@@ -5,6 +5,7 @@ import type { IActionRunner } from "../actions/action-runner.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type {
   IKanbanStore,
+  IKanbanBoardGenerator,
   KanbanBoardDefinition,
   KanbanBoardDefinitionInput,
   KanbanBoardSnapshot,
@@ -46,6 +47,7 @@ export interface KanbanServiceOptions {
   actions: Pick<IActionRunner, "run">;
   approvals?: Pick<ConnectionApprovalService, "getActionApproval">;
   store: IKanbanStore;
+  generator?: IKanbanBoardGenerator;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
 }
 
@@ -97,6 +99,15 @@ export class KanbanService {
 
   async get(id: string): Promise<KanbanBoardDefinition> {
     return structuredClone(await this.requiredBoard(id));
+  }
+
+  async generate(input: unknown): Promise<KanbanBoardDefinitionInput> {
+    if (!this.options.generator) {
+      throw new KanbanError("kanban_agent_unavailable", "Kanban generation is unavailable in this runtime.", 503);
+    }
+    const definition = readBoardInput(await this.options.generator.generate(input));
+    await this.validateSources(definition.sources);
+    return structuredClone(definition);
   }
 
   async create(input: unknown): Promise<KanbanBoardDefinition> {

@@ -79,6 +79,7 @@ import { AgentChatError } from "./chat/agent-chat-service.ts";
 import { FeedError } from "./feed/feed-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
+import { KanbanGenerationError } from "./kanban/kanban-generator.ts";
 import { kanbanPresets } from "./kanban/kanban-presets.ts";
 import { KanbanError } from "./kanban/kanban-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
@@ -328,6 +329,7 @@ export class ConnectServer {
       app.get("/api/kanban-presets", (context) => context.json(kanbanPresets));
       app.get("/api/kanban-boards", (context) => this.listKanbanBoards(context));
       app.post("/api/kanban-boards", (context) => this.createKanbanBoard(context));
+      app.post("/api/kanban-boards/generate", (context) => this.generateKanbanBoard(context));
       app.post("/api/kanban-boards/preview", (context) => this.previewKanbanBoard(context));
       app.get("/api/kanban-boards/:id", (context) => this.getKanbanBoard(context, context.req.param("id")));
       app.put("/api/kanban-boards/:id", (context) => this.updateKanbanBoard(context, context.req.param("id")));
@@ -391,6 +393,9 @@ export class ConnectServer {
         return jsonError(context, error.status, error.code, error.message);
       }
       if (error instanceof KanbanError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      if (error instanceof KanbanGenerationError) {
         return jsonError(context, error.status, error.code, error.message);
       }
       this.options.logger?.error(
@@ -1239,6 +1244,10 @@ export class ConnectServer {
 
   private async createKanbanBoard(context: Context): Promise<Response> {
     return context.json(await this.options.kanban!.create(await readJsonBody(context)), 201);
+  }
+
+  private async generateKanbanBoard(context: Context): Promise<Response> {
+    return context.json(await this.options.kanban!.generate(await readJsonBody(context)));
   }
 
   private async previewKanbanBoard(context: Context): Promise<Response> {

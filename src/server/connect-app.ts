@@ -27,6 +27,7 @@ import { CodexFlowAgent } from "./flows/codex-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
+import { KanbanGenerator } from "./kanban/kanban-generator.ts";
 import { KanbanService } from "./kanban/kanban-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import { SynapseService } from "./synapse/synapse-service.ts";
@@ -103,6 +104,14 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     actions,
     approvals: connectionApprovals,
     store: options.runtimeDatabase.kanbanStore,
+    generator: new KanbanGenerator({
+      catalog: options.catalog,
+      connections,
+      agents: agentCredentials,
+      agentSettings,
+      claudeCode,
+      codex,
+    }),
     getPolicySnapshot,
   });
   let synapse: SynapseService;

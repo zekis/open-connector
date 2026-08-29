@@ -1,9 +1,6 @@
 import type {
-  ActionDefinition,
+  AgentConnectionSummary,
   AppData,
-  ConnectionRecord,
-  FullActionDefinition,
-  JsonSchema,
   KanbanBoardDefinition,
   KanbanBoardDefinitionInput,
   KanbanBoardSnapshot,
@@ -11,7 +8,6 @@ import type {
   KanbanCard,
   KanbanColumn,
   KanbanMoveResult,
-  KanbanPreset,
   ProviderDefinition,
 } from "./model";
 import type { DragEvent, FormEvent, ReactNode } from "react";
@@ -25,6 +21,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Sparkles,
   Settings2,
   Trash2,
   X,
@@ -36,7 +33,6 @@ import { Button } from "@/components/ui/button";
 
 export function KanbanPage(props: { data: AppData; onRefresh(): void }): ReactNode {
   const [boards, setBoards] = useState<KanbanBoardSummary[]>([]);
-  const [presets, setPresets] = useState<KanbanPreset[]>([]);
   const [selectedBoardId, setSelectedBoardId] = useState<string>();
   const [snapshot, setSnapshot] = useState<KanbanBoardSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -67,11 +63,10 @@ export function KanbanPage(props: { data: AppData; onRefresh(): void }): ReactNo
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([apiGet<KanbanBoardSummary[]>("/api/kanban-boards"), apiGet<KanbanPreset[]>("/api/kanban-presets")])
-      .then(([nextBoards, nextPresets]) => {
+    apiGet<KanbanBoardSummary[]>("/api/kanban-boards")
+      .then((nextBoards) => {
         if (cancelled) return;
         setBoards(nextBoards);
-        setPresets(nextPresets);
         setSelectedBoardId(nextBoards[0]?.id);
       })
       .catch((caught) => {
@@ -202,9 +197,8 @@ export function KanbanPage(props: { data: AppData; onRefresh(): void }): ReactNo
       {editorOpen ? (
         <KanbanEditor
           current={snapshot?.board}
-          connections={configuredConnections}
-          providers={props.data.providers}
-          presets={presets}
+          agentConnections={props.data.agentConnections ?? []}
+          connectionCount={configuredConnections.length}
           onCancel={() => setEditorOpen(false)}
           onSave={saveBoard}
         />
@@ -224,7 +218,7 @@ export function KanbanPage(props: { data: AppData; onRefresh(): void }): ReactNo
         <EmptyState
           icon={<Columns3 size={22} />}
           title="Turn connector data into a board"
-          description="Start from a connector preset or map any JSON collection into deterministic Kanban cards."
+          description="Describe the board you need. A connected agent will choose the right connector actions and map their data into cards."
           action={
             <Button onClick={() => setEditorOpen(true)}>
               <Plus size={15} />
@@ -396,65 +390,33 @@ function KanbanCardView(props: { card: KanbanCard; provider?: ProviderDefinition
 
 function KanbanEditor(props: {
   current?: KanbanBoardDefinition;
-  connections: ConnectionRecord[];
-  providers: ProviderDefinition[];
-  presets: KanbanPreset[];
+  agentConnections: AgentConnectionSummary[];
+  connectionCount: number;
   onCancel(): void;
   onSave(definition: KanbanBoardDefinitionInput): Promise<void>;
 }): ReactNode {
-  const initialConnectionId = props.current?.sources[0]?.connectionId ?? props.connections[0]?.id ?? "";
-  const [connectionId, setConnectionId] = useState(initialConnectionId);
-  const [presetId, setPresetId] = useState("");
-  const [actionId, setActionId] = useState(props.current?.sources[0]?.actionId ?? "");
+  const [prompt, setPrompt] = useState("");
+  const [agentConnectionId, setAgentConnectionId] = useState(props.agentConnections[0]?.id ?? "");
   const [definitionText, setDefinitionText] = useState(() =>
-    JSON.stringify(props.current ? boardInput(props.current) : genericBoard(props.connections[0]), null, 2),
+    props.current ? JSON.stringify(boardInput(props.current), null, 2) : "",
   );
   const [preview, setPreview] = useState<KanbanBoardSnapshot>();
-  const [busy, setBusy] = useState<"map" | "preview" | "save">();
+  const [busy, setBusy] = useState<"generate" | "preview" | "save">();
   const [error, setError] = useState<string>();
-  const selectedConnection = props.connections.find((connection) => connection.id === connectionId);
-  const availablePresets = props.presets.filter(
-    (preset) => !selectedConnection || preset.service === selectedConnection.service,
-  );
-  const availableActions = useMemo(
-    () => readableActions(props.providers.find((provider) => provider.service === selectedConnection?.service)),
-    [props.providers, selectedConnection?.service],
-  );
 
-  const parsed = useMemo(() => {
-    try {
-      return JSON.parse(definitionText) as KanbanBoardDefinitionInput;
-    } catch {
-      return undefined;
-    }
-  }, [definitionText]);
+  const parsed = useMemo(() => parseKanbanDefinitionText(definitionText), [definitionText]);
 
-  function applyPreset(): void {
-    const preset = props.presets.find((candidate) => candidate.id === presetId);
-    if (!preset || !connectionId) return;
-    setDefinitionText(
-      JSON.stringify(
-        {
-          name: preset.boardName,
-          cardLimit: 50,
-          columns: preset.columns,
-          sources: [{ ...preset.source, connectionId }],
-        } satisfies KanbanBoardDefinitionInput,
-        null,
-        2,
-      ),
-    );
-    setPreview(undefined);
-  }
-
-  async function applyGenericAction(): Promise<void> {
-    const action = availableActions.find((candidate) => candidate.id === actionId);
-    if (!selectedConnection || !action) return;
-    setBusy("map");
+  async function generateDefinition(): Promise<void> {
+    if (!prompt.trim() || !agentConnectionId) return;
+    setBusy("generate");
     setError(undefined);
     try {
-      const fullAction = await apiGet<FullActionDefinition>(`/api/actions/${encodeURIComponent(action.id)}`);
-      setDefinitionText(JSON.stringify(genericBoard(selectedConnection, fullAction), null, 2));
+      const generated = await apiPost<KanbanBoardDefinitionInput>("/api/kanban-boards/generate", {
+        prompt,
+        agentConnectionId,
+        current: parsed,
+      });
+      setDefinitionText(JSON.stringify(generated, null, 2));
       setPreview(undefined);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -494,104 +456,89 @@ function KanbanEditor(props: {
       <header>
         <div>
           <h2>{props.current ? "Configure Connected Kanban" : "Create Connected Kanban"}</h2>
-          <p>Start with a reliable connector preset or map any JSON collection using deterministic paths.</p>
+          <p>Tell your agent what should appear and how you want it organized.</p>
         </div>
         <Button variant="ghost" size="icon-sm" type="button" onClick={props.onCancel} aria-label="Close editor">
           <X size={16} />
         </Button>
       </header>
-      <div className="kanban-editor-presets">
-        <label>
-          <span>Connection</span>
-          <select
-            value={connectionId}
-            onChange={(event) => {
-              const nextConnectionId = event.target.value;
-              const nextConnection = props.connections.find((connection) => connection.id === nextConnectionId);
-              const nextActions = readableActions(
-                props.providers.find((provider) => provider.service === nextConnection?.service),
-              );
-              setConnectionId(nextConnectionId);
-              setPresetId("");
-              setActionId(nextActions[0]?.id ?? "");
-            }}
-          >
-            {props.connections.map((connection) => (
-              <option value={connection.id} key={connection.id}>
-                {connectionLabel(connection)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Preset</span>
-          <select value={presetId} onChange={(event) => setPresetId(event.target.value)}>
-            <option value="">Generic JSON mapping</option>
-            {availablePresets.map((preset) => (
-              <option value={preset.id} key={preset.id}>
-                {preset.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="kanban-limit-field">
-          <span>Maximum cards</span>
-          <input
-            type="number"
-            min={Math.max(1, parsed?.sources.length ?? 1)}
-            max={100}
-            value={parsed?.cardLimit ?? 50}
-            disabled={!parsed}
-            onChange={(event) => {
-              if (!parsed) return;
-              setDefinitionText(JSON.stringify({ ...parsed, cardLimit: Number(event.target.value) }, null, 2));
-              setPreview(undefined);
-            }}
+      <section className="kanban-generation-panel">
+        <label className="kanban-prompt-field">
+          <span>Describe your board</span>
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Show my open work items by status, with priority, assignee, and due date. Let me move cards between statuses."
+            maxLength={4000}
           />
         </label>
-        {presetId ? (
-          <Button type="button" variant="outline" disabled={!connectionId} onClick={applyPreset}>
-            <Check size={15} /> Use preset
+        <div className="kanban-generation-controls">
+          <label>
+            <span>Agent</span>
+            <select value={agentConnectionId} onChange={(event) => setAgentConnectionId(event.target.value)}>
+              <option value="">Choose an agent</option>
+              {props.agentConnections.map((agent) => (
+                <option value={agent.id} key={agent.id}>
+                  {agent.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="button"
+            disabled={!prompt.trim() || !agentConnectionId || Boolean(busy) || props.connectionCount === 0}
+            onClick={() => void generateDefinition()}
+          >
+            {busy === "generate" ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
+            {parsed ? "Regenerate board" : "Generate board"}
           </Button>
-        ) : (
-          <>
-            <label>
-              <span>Read action</span>
-              <select value={actionId} onChange={(event) => setActionId(event.target.value)}>
-                <option value="">Choose an action</option>
-                {availableActions.map((action) => (
-                  <option value={action.id} key={action.id}>
-                    {action.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!connectionId || !actionId || Boolean(busy)}
-              onClick={() => void applyGenericAction()}
-            >
-              {busy === "map" ? <Loader2 className="spin" size={15} /> : <Check size={15} />} Use action
-            </Button>
-          </>
-        )}
-      </div>
-      {props.connections.length === 0 ? (
+        </div>
+      </section>
+      {props.connectionCount === 0 ? (
         <InlineError message="Connect at least one provider before creating a Connected Kanban board." />
       ) : null}
-      <label className="kanban-definition-field">
-        <span>Board definition</span>
-        <textarea
-          value={definitionText}
-          onChange={(event) => setDefinitionText(event.target.value)}
-          spellCheck={false}
-        />
-      </label>
-      <p className="kanban-template-help">
-        Paths support keys, quoted keys, indexes, and <code>[*]</code>. Write templates support typed references such as{" "}
-        <code>$raw.id</code>, <code>$card.id</code>, <code>$source.input.project</code>, and <code>$target.value</code>.
-      </p>
+      {props.agentConnections.length === 0 ? (
+        <InlineError message="Connect a subscription agent from the Agents page before generating a board." />
+      ) : null}
+      {parsed ? (
+        <div className="kanban-draft-summary">
+          <div>
+            <strong>{parsed.name}</strong>
+            <span>
+              {parsed.columns.length} columns · {parsed.sources.length} source{parsed.sources.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <label className="kanban-limit-field">
+            <span>Maximum cards</span>
+            <input
+              type="number"
+              min={Math.max(1, parsed.sources.length)}
+              max={100}
+              value={parsed.cardLimit ?? 50}
+              onChange={(event) => {
+                setDefinitionText(JSON.stringify({ ...parsed, cardLimit: Number(event.target.value) }, null, 2));
+                setPreview(undefined);
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+      <details className="kanban-advanced-definition">
+        <summary>Advanced board definition</summary>
+        <label className="kanban-definition-field">
+          <span>JSON definition</span>
+          <textarea
+            value={definitionText}
+            onChange={(event) => setDefinitionText(event.target.value)}
+            spellCheck={false}
+          />
+        </label>
+        <p className="kanban-template-help">
+          Paths support keys, quoted keys, indexes, and <code>[*]</code>. Write templates support typed references such
+          as <code>$raw.id</code>, <code>$card.id</code>, <code>$source.input.project</code>, and{" "}
+          <code>$target.value</code>.
+        </p>
+      </details>
       {error ? <InlineError message={error} /> : null}
       {preview ? (
         <div className="kanban-preview-result">
@@ -612,7 +559,7 @@ function KanbanEditor(props: {
           {busy === "preview" ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
           Preview mapping
         </Button>
-        <Button type="submit" disabled={!parsed || Boolean(busy) || props.connections.length === 0}>
+        <Button type="submit" disabled={!parsed || Boolean(busy) || props.connectionCount === 0}>
           {busy === "save" ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
           {props.current ? "Save board" : "Create board"}
         </Button>
@@ -621,133 +568,27 @@ function KanbanEditor(props: {
   );
 }
 
-function genericBoard(
-  connection: ConnectionRecord | undefined,
-  action?: Pick<ActionDefinition, "id" | "name" | "outputSchema">,
-): KanbanBoardDefinitionInput {
-  const service = connection?.service ?? "connector";
-  const shape = inferKanbanActionShape(action);
-  return {
-    name: `${service.replaceAll("_", " ")} board`,
-    cardLimit: 50,
-    columns: shape.columns,
-    sources: [
-      {
-        id: `${service}-items`,
-        name: `${service.replaceAll("_", " ")} items`,
-        connectionId: connection?.id ?? "REPLACE_WITH_CONNECTION_ID",
-        actionId: action?.id ?? `${service}.REPLACE_WITH_LIST_ACTION`,
-        input: {},
-        itemsPath: `$[${JSON.stringify(shape.collection)}][*]`,
-        mapping: {
-          id: jsonPathProperty(shape.id),
-          title: jsonPathProperty(shape.title),
-          column: jsonPathProperty(shape.column),
-        },
-      },
-    ],
-  };
-}
-
-function readableActions(provider: ProviderDefinition | undefined): ActionDefinition[] {
-  if (!provider) return [];
-  const executable = provider.actions.filter((action) => action.execution.locallyExecutable);
-  return executable
-    .filter((action) => /(?:^|[._])(get|list|query|search|find|read|fetch)(?:[._]|$)/i.test(action.id))
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-export interface GenericKanbanActionShape {
-  collection: string;
-  id: string;
-  title: string;
-  column: string;
-  columns: KanbanColumn[];
-}
-
-/** Infers a safe starting mapping from the selected connector action's output schema. */
-export function inferKanbanActionShape(
-  action: Pick<ActionDefinition, "id" | "name" | "outputSchema"> | undefined,
-): GenericKanbanActionShape {
-  const outputProperties = schemaProperties(action?.outputSchema);
-  const collectionEntry = Object.entries(outputProperties).find(([, schema]) => readRecord(schema)?.type === "array");
-  const collection = collectionEntry?.[0] ?? inferredCollectionName(action);
-  const collectionSchema = readRecord(collectionEntry?.[1]);
-  const itemProperties = schemaProperties(readRecord(collectionSchema?.items));
-  const id = firstProperty(itemProperties, ["id", "key", "number", "uid"]) ?? "id";
-  const title =
-    firstProperty(itemProperties, ["title", "name", "subject", "content", "summary", "displayName"]) ?? "title";
-  const column = firstProperty(itemProperties, ["status", "state", "priority", "category", "stage"]) ?? "status";
-  return { collection, id, title, column, columns: inferredColumns(readRecord(itemProperties[column])) };
-}
-
-function inferredCollectionName(action: Pick<ActionDefinition, "id" | "name"> | undefined): string {
-  if (!action) return "items";
-  const actionName = action.id.split(".").at(-1) ?? action.name;
-  return actionName.replace(/^(?:get|list|query|search|find|read|fetch)[_-]?/i, "") || "items";
-}
-
-function inferredColumns(schema: Record<string, unknown> | undefined): KanbanColumn[] {
-  const values = Array.isArray(schema?.enum) ? schema.enum.filter(isKanbanScalar).slice(0, 24) : [];
-  if (values.length > 0) {
-    return values.map((value, index) => ({ id: `column-${index + 1}`, label: humanize(value), value }));
-  }
-  if (schema?.type === "integer" && Number.isInteger(schema.minimum) && Number.isInteger(schema.maximum)) {
-    const minimum = Number(schema.minimum);
-    const maximum = Number(schema.maximum);
-    if (maximum >= minimum && maximum - minimum < 24) {
-      return Array.from({ length: maximum - minimum + 1 }, (_, index) => {
-        const value = minimum + index;
-        return { id: `column-${value}`, label: String(value), value };
-      });
-    }
-  }
-  return [
-    { id: "todo", label: "To do", value: "todo" },
-    { id: "doing", label: "Doing", value: "doing" },
-    { id: "done", label: "Done", value: "done" },
-  ];
-}
-
-function schemaProperties(schema: JsonSchema | Record<string, unknown> | undefined): Record<string, unknown> {
-  return readRecord(schema?.properties) ?? {};
-}
-
-function firstProperty(properties: Record<string, unknown>, candidates: string[]): string | undefined {
-  const keys = Object.keys(properties);
-  return candidates.map((candidate) => keys.find((key) => key.toLowerCase() === candidate.toLowerCase())).find(Boolean);
-}
-
-function jsonPathProperty(property: string): string {
-  return `$[${JSON.stringify(property)}]`;
-}
-
-function humanize(value: string | number | boolean | null): string {
-  return String(value ?? "None")
-    .replaceAll(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-function isKanbanScalar(value: unknown): value is string | number | boolean | null {
-  return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
 function boardInput(board: KanbanBoardDefinition): KanbanBoardDefinitionInput {
   return { name: board.name, cardLimit: board.cardLimit ?? 50, columns: board.columns, sources: board.sources };
 }
 
-function displayedColumnId(card: KanbanCard): string {
-  return card.pending?.columnId ?? card.columnId;
+/** Parses the advanced editor without letting incomplete JSON crash the natural-language workflow. */
+export function parseKanbanDefinitionText(value: string): KanbanBoardDefinitionInput | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const board = parsed as Record<string, unknown>;
+    if (typeof board.name !== "string" || !Array.isArray(board.columns) || !Array.isArray(board.sources)) {
+      return undefined;
+    }
+    return board as unknown as KanbanBoardDefinitionInput;
+  } catch {
+    return undefined;
+  }
 }
 
-function connectionLabel(connection: ConnectionRecord): string {
-  const profile = connection.profile as { displayName?: unknown } | null | undefined;
-  const displayName = typeof profile?.displayName === "string" ? profile.displayName : undefined;
-  return `${connection.service.replaceAll("_", " ")} · ${displayName ?? connection.connectionName ?? "default"}`;
+function displayedColumnId(card: KanbanCard): string {
+  return card.pending?.columnId ?? card.columnId;
 }
 
 function errorMessage(error: unknown): string {
