@@ -45,6 +45,7 @@
     "agents": "Agents",
     "chat": "Chat",
     "synapse": "Synapse",
+    "kanban": "Kanban",
     "flows": "Flows",
     "triggers": "Triggers",
     "approvals": "Approvals",
@@ -94,6 +95,10 @@
       "synapse": {
         "title": "Synapse",
         "subtitle": "Explore connected providers and artifacts on an agent-powered canvas."
+      },
+      "kanban": {
+        "title": "Connected Kanban",
+        "subtitle": "Organize live connector data and write changes back safely."
       },
       "flows": {
         "title": "Flows",

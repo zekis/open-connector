@@ -45,6 +45,7 @@
     "agents": "エージェント",
     "chat": "チャット",
     "synapse": "Synapse",
+    "kanban": "カンバン",
     "flows": "フロー",
     "triggers": "トリガー",
     "approvals": "承認",
@@ -94,6 +95,10 @@
       "synapse": {
         "title": "Synapse",
         "subtitle": "エージェント搭載キャンバスで接続済みプロバイダーと成果物を探索します。"
+      },
+      "kanban": {
+        "title": "コネクテッドカンバン",
+        "subtitle": "接続先のデータを整理し、変更を安全に書き戻します。"
       },
       "flows": {
         "title": "フロー",

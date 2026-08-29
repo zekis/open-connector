@@ -1,5 +1,6 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
 import type { FlowApproval, FlowDefinition, FlowRun, FlowStep } from "../flows/flow-types.ts";
+import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 
 import { readFileSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -18,6 +19,30 @@ const githubProfile = {
   displayName: "octocat",
   grantedScopes: [],
 };
+
+function testKanbanBoard(): KanbanBoardDefinition {
+  return {
+    id: "kanban-1",
+    name: "Delivery",
+    columns: [
+      { id: "todo", label: "To do", value: "notStarted" },
+      { id: "done", label: "Done", value: "completed" },
+    ],
+    sources: [
+      {
+        id: "tasks",
+        name: "Tasks",
+        connectionId: "todo-1",
+        actionId: "microsoft_todo.list_tasks",
+        input: { taskListId: "list-1" },
+        itemsPath: "$.tasks[*]",
+        mapping: { id: "$.id", title: "$.title", column: "$.status" },
+      },
+    ],
+    createdAt: "2026-08-29T01:00:00.000Z",
+    updatedAt: "2026-08-29T01:00:00.000Z",
+  };
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -57,6 +82,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0014_feed.sql",
       "0015_synapse.sql",
       "0016_mobile_auth.sql",
+      "0017_kanban.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -116,6 +142,24 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.synapseStore.getWorkspace(workspace.id)).resolves.toEqual(workspace);
     await expect(second.synapseStore.listWorkspaces()).resolves.toEqual([workspace]);
     await expect(second.synapseStore.deleteWorkspace(workspace.id)).resolves.toBe(true);
+    second.close();
+  });
+
+  it("persists encrypted Connected Kanban definitions", async () => {
+    const databasePath = await createDatabasePath();
+    const board = testKanbanBoard();
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("kanban-key"),
+    });
+    await first.kanbanStore.setBoard(board);
+    first.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("kanban-key"),
+    });
+    await expect(second.kanbanStore.getBoard(board.id)).resolves.toEqual(board);
+    await expect(second.kanbanStore.listBoards()).resolves.toEqual([board]);
+    await expect(second.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
     second.close();
   });
 

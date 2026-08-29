@@ -27,6 +27,7 @@ import { CodexFlowAgent } from "./flows/codex-flow-agent.ts";
 import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
+import { KanbanService } from "./kanban/kanban-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import { SynapseService } from "./synapse/synapse-service.ts";
 
@@ -96,6 +97,14 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     const record = await options.runtimeDatabase.runtimePolicyStore.get();
     return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
   };
+  const kanban = new KanbanService({
+    catalog: options.catalog,
+    connections,
+    actions,
+    approvals: connectionApprovals,
+    store: options.runtimeDatabase.kanbanStore,
+    getPolicySnapshot,
+  });
   let synapse: SynapseService;
   const flowSynapses = {
     create: (input: unknown) => synapse.create(input),
@@ -174,6 +183,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       agentChat,
       feed,
       synapse,
+      kanban,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,

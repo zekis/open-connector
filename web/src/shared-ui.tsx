@@ -172,6 +172,7 @@ interface EmptyStateProps {
   icon?: ReactNode | null;
   density?: "regular" | "compact";
   tone?: "neutral" | "success";
+  action?: ReactNode;
 }
 
 export function EmptyState(props: EmptyStateProps): ReactNode {
@@ -190,6 +191,7 @@ export function EmptyState(props: EmptyStateProps): ReactNode {
       {icon}
       <strong>{props.title}</strong>
       <p>{props.description}</p>
+      {props.action}
     </div>
   );
 }

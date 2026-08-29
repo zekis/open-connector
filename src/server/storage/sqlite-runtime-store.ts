@@ -20,6 +20,7 @@ import type {
   FlowTriggerState,
   IFlowStore,
 } from "../flows/flow-types.ts";
+import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
@@ -91,7 +92,8 @@ type IdSecretTable =
   | "feed_threads"
   | "connection_action_permissions"
   | "action_approvals"
-  | "synapse_workspaces";
+  | "synapse_workspaces"
+  | "kanban_boards";
 
 /**
  * Shared SQLite connection for local runtime state.
@@ -109,6 +111,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly feedStore: SqliteFeedStore;
   readonly connectionApprovalStore: SqliteConnectionApprovalStore;
   readonly synapseStore: SqliteSynapseStore;
+  readonly kanbanStore: SqliteKanbanStore;
 
   private readonly database: DatabaseSync;
   private readonly secretCodec: ISecretCodec;
@@ -129,6 +132,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.feedStore = new SqliteFeedStore(this.database, this.secretCodec);
     this.connectionApprovalStore = new SqliteConnectionApprovalStore(this.database, this.secretCodec);
     this.synapseStore = new SqliteSynapseStore(this.database, this.secretCodec);
+    this.kanbanStore = new SqliteKanbanStore(this.database, this.secretCodec);
   }
 
   close(): void {
@@ -156,6 +160,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "connection_action_permissions",
           "action_approvals",
           "synapse_workspaces",
+          "kanban_boards",
         ] as IdSecretTable[]
       ).map((table) => readRotatedIdSecrets(this.database, this.secretCodec, nextSecretCodec, table)),
     );
@@ -174,6 +179,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "connection_action_permissions",
           "action_approvals",
           "synapse_workspaces",
+          "kanban_boards",
         ] as IdSecretTable[]
       ).entries()) {
         writeRotatedIdSecrets(this.database, table, flowRecords[index]!);
@@ -196,6 +202,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from connection_action_permissions;
       delete from feed_threads;
       delete from synapse_workspaces;
+      delete from kanban_boards;
       delete from flow_trigger_states;
       delete from flow_approvals;
       delete from flow_steps;
@@ -1043,6 +1050,51 @@ export class SqliteSynapseStore implements ISynapseStore {
 
   async deleteWorkspace(id: string): Promise<boolean> {
     return this.database.prepare("delete from synapse_workspaces where id = ?").run(id).changes > 0;
+  }
+}
+
+export class SqliteKanbanStore implements IKanbanStore {
+  private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setBoard(board: KanbanBoardDefinition): Promise<void> {
+    this.database
+      .prepare(
+        `
+        insert into kanban_boards (id, updated_at, value)
+        values (?, ?, ?)
+        on conflict(id) do update set
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .run(board.id, board.updatedAt, await this.secretCodec.encode(JSON.stringify(board)));
+  }
+
+  async getBoard(id: string): Promise<KanbanBoardDefinition | undefined> {
+    const row = this.database.prepare("select value from kanban_boards where id = ?").get(id);
+    return row ? parseJson<KanbanBoardDefinition>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listBoards(limit = 100): Promise<KanbanBoardDefinition[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    const rows = this.database
+      .prepare("select value from kanban_boards order by updated_at desc, id desc limit ?")
+      .all(boundedLimit);
+    return await Promise.all(
+      rows.map(async (row) =>
+        parseJson<KanbanBoardDefinition>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
+  }
+
+  async deleteBoard(id: string): Promise<boolean> {
+    return this.database.prepare("delete from kanban_boards where id = ?").run(id).changes > 0;
   }
 }
 

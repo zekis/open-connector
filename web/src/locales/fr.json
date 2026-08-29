@@ -45,6 +45,7 @@
     "agents": "Agents",
     "chat": "Discussion",
     "synapse": "Synapse",
+    "kanban": "Kanban",
     "flows": "Flux",
     "triggers": "Déclencheurs",
     "approvals": "Approbations",
@@ -94,6 +95,10 @@
       "synapse": {
         "title": "Synapse",
         "subtitle": "Explorez les fournisseurs et les artefacts connectés sur un canevas piloté par agent."
+      },
+      "kanban": {
+        "title": "Kanban connecté",
+        "subtitle": "Organisez les données connectées et répercutez les modifications en toute sécurité."
       },
       "flows": {
         "title": "Flux",

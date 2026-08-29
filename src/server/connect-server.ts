@@ -17,6 +17,7 @@ import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
+import type { KanbanService } from "./kanban/kanban-service.ts";
 import type { Logger } from "./logger.ts";
 import type { ProviderPreviewContent } from "./previews/provider-preview.ts";
 import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
@@ -78,6 +79,8 @@ import { AgentChatError } from "./chat/agent-chat-service.ts";
 import { FeedError } from "./feed/feed-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
+import { kanbanPresets } from "./kanban/kanban-presets.ts";
+import { KanbanError } from "./kanban/kanban-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
 import { SynapseError } from "./synapse/synapse-service.ts";
@@ -94,6 +97,7 @@ export interface IConnectServerOptions {
   agentChat?: IAgentChatService;
   feed?: FeedService;
   synapse?: SynapseService;
+  kanban?: KanbanService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
@@ -320,6 +324,21 @@ export class ConnectServer {
         this.syncSynapseApproval(context, context.req.param("id"), context.req.param("nodeId")),
       );
     }
+    if (this.options.kanban) {
+      app.get("/api/kanban-presets", (context) => context.json(kanbanPresets));
+      app.get("/api/kanban-boards", (context) => this.listKanbanBoards(context));
+      app.post("/api/kanban-boards", (context) => this.createKanbanBoard(context));
+      app.post("/api/kanban-boards/preview", (context) => this.previewKanbanBoard(context));
+      app.get("/api/kanban-boards/:id", (context) => this.getKanbanBoard(context, context.req.param("id")));
+      app.put("/api/kanban-boards/:id", (context) => this.updateKanbanBoard(context, context.req.param("id")));
+      app.delete("/api/kanban-boards/:id", (context) => this.deleteKanbanBoard(context, context.req.param("id")));
+      app.post("/api/kanban-boards/:id/refresh", (context) =>
+        this.refreshKanbanBoard(context, context.req.param("id")),
+      );
+      app.post("/api/kanban-boards/:id/cards/:cardKey/move", (context) =>
+        this.moveKanbanCard(context, context.req.param("id"), context.req.param("cardKey")),
+      );
+    }
 
     app.get("/api/runs", (context) => this.listRuns(context));
     app.get("/api/runs/:id", (context) => this.getRun(context, context.req.param("id")));
@@ -369,6 +388,9 @@ export class ConnectServer {
     this.options.registerStaticRoutes?.(app);
     app.onError((error, context) => {
       if (error instanceof HttpRequestError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      if (error instanceof KanbanError) {
         return jsonError(context, error.status, error.code, error.message);
       }
       this.options.logger?.error(
@@ -1209,6 +1231,40 @@ export class ConnectServer {
       if (error instanceof AgentChatError) return jsonError(context, error.status, error.code, error.message);
       throw error;
     }
+  }
+
+  private async listKanbanBoards(context: Context): Promise<Response> {
+    return context.json(await this.options.kanban!.list());
+  }
+
+  private async createKanbanBoard(context: Context): Promise<Response> {
+    return context.json(await this.options.kanban!.create(await readJsonBody(context)), 201);
+  }
+
+  private async previewKanbanBoard(context: Context): Promise<Response> {
+    return context.json(await this.options.kanban!.preview(await readJsonBody(context)));
+  }
+
+  private async getKanbanBoard(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.kanban!.get(id));
+  }
+
+  private async updateKanbanBoard(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.kanban!.update(id, await readJsonBody(context)));
+  }
+
+  private async deleteKanbanBoard(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.kanban!.delete(id));
+  }
+
+  private async refreshKanbanBoard(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.kanban!.refresh(id));
+  }
+
+  private async moveKanbanCard(context: Context, id: string, cardKey: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    const columnId = requiredString(body.columnId, "columnId", (message) => new KanbanError("invalid_kanban", message));
+    return context.json(await this.options.kanban!.moveCard(id, cardKey, columnId));
   }
 
   private async listFlows(context: Context): Promise<Response> {

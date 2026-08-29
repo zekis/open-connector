@@ -45,6 +45,7 @@
     "agents": "智能体",
     "chat": "聊天",
     "synapse": "Synapse",
+    "kanban": "看板",
     "flows": "流程",
     "triggers": "触发器",
     "approvals": "审批",
@@ -94,6 +95,10 @@
       "synapse": {
         "title": "Synapse",
         "subtitle": "在智能体驱动的画布上探索已连接的提供商和工件。"
+      },
+      "kanban": {
+        "title": "连接看板",
+        "subtitle": "整理实时连接器数据，并安全地写回更改。"
       },
       "flows": {
         "title": "流程",

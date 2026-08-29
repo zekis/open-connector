@@ -1,5 +1,6 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
 import type { D1DatabaseBinding, D1PreparedStatementBinding } from "../cloudflare/cloudflare-bindings.ts";
+import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -13,6 +14,30 @@ const githubProfile = {
   displayName: "octocat",
   grantedScopes: [],
 };
+
+function testKanbanBoard(): KanbanBoardDefinition {
+  return {
+    id: "kanban-1",
+    name: "Delivery",
+    columns: [
+      { id: "todo", label: "To do", value: "notStarted" },
+      { id: "done", label: "Done", value: "completed" },
+    ],
+    sources: [
+      {
+        id: "tasks",
+        name: "Tasks",
+        connectionId: "todo-1",
+        actionId: "microsoft_todo.list_tasks",
+        input: { taskListId: "list-1" },
+        itemsPath: "$.tasks[*]",
+        mapping: { id: "$.id", title: "$.title", column: "$.status" },
+      },
+    ],
+    createdAt: "2026-08-29T01:00:00.000Z",
+    updatedAt: "2026-08-29T01:00:00.000Z",
+  };
+}
 
 describe("D1RuntimeDatabase", () => {
   it("persists encrypted Synapse workspaces", async () => {
@@ -34,6 +59,19 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.synapseStore.getWorkspace(workspace.id)).resolves.toEqual(workspace);
     await expect(database.synapseStore.listWorkspaces()).resolves.toEqual([workspace]);
     await expect(database.synapseStore.deleteWorkspace(workspace.id)).resolves.toBe(true);
+  });
+
+  it("persists encrypted Connected Kanban definitions", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("kanban-key"),
+    });
+    const board = testKanbanBoard();
+
+    await database.kanbanStore.setBoard(board);
+
+    await expect(database.kanbanStore.getBoard(board.id)).resolves.toEqual(board);
+    await expect(database.kanbanStore.listBoards()).resolves.toEqual([board]);
+    await expect(database.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
   });
 
   it("persists encrypted Feed conversation threads", async () => {
@@ -604,6 +642,8 @@ class SqliteD1Database implements D1DatabaseBinding {
     );
     this.database.exec(readFileSync(new URL("../../../migrations/0014_feed.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0015_synapse.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0016_mobile_auth.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0017_kanban.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

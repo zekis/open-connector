@@ -21,6 +21,7 @@ import type {
   FlowTriggerState,
   IFlowStore,
 } from "../flows/flow-types.ts";
+import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
@@ -60,6 +61,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly feedStore: D1FeedStore;
   readonly connectionApprovalStore: D1ConnectionApprovalStore;
   readonly synapseStore: D1SynapseStore;
+  readonly kanbanStore: D1KanbanStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -75,6 +77,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.feedStore = new D1FeedStore(database, secretCodec);
     this.connectionApprovalStore = new D1ConnectionApprovalStore(database, secretCodec);
     this.synapseStore = new D1SynapseStore(database, secretCodec);
+    this.kanbanStore = new D1KanbanStore(database, secretCodec);
   }
 }
 
@@ -975,6 +978,57 @@ export class D1SynapseStore implements ISynapseStore {
 
   async deleteWorkspace(id: string): Promise<boolean> {
     const result = await this.database.prepare("delete from synapse_workspaces where id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export class D1KanbanStore implements IKanbanStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setBoard(board: KanbanBoardDefinition): Promise<void> {
+    await this.database
+      .prepare(
+        `
+        insert into kanban_boards (id, updated_at, value)
+        values (?, ?, ?)
+        on conflict(id) do update set
+          updated_at = excluded.updated_at,
+          value = excluded.value
+      `,
+      )
+      .bind(board.id, board.updatedAt, await this.secretCodec.encode(JSON.stringify(board)))
+      .run();
+  }
+
+  async getBoard(id: string): Promise<KanbanBoardDefinition | undefined> {
+    const row = await this.database
+      .prepare("select value from kanban_boards where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row ? parseJson<KanbanBoardDefinition>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listBoards(limit = 100): Promise<KanbanBoardDefinition[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    const { results } = await this.database
+      .prepare("select value from kanban_boards order by updated_at desc, id desc limit ?")
+      .bind(boundedLimit)
+      .all<RuntimeRow>();
+    return await Promise.all(
+      results.map(async (row) =>
+        parseJson<KanbanBoardDefinition>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
+  }
+
+  async deleteBoard(id: string): Promise<boolean> {
+    const result = await this.database.prepare("delete from kanban_boards where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
   }
 }

@@ -26,6 +26,7 @@ import {
   BookOpen,
   BrainCircuit,
   Cable,
+  Columns3,
   Home,
   Inbox,
   KeyRound,
@@ -54,6 +55,7 @@ import { FeedPageView } from "./feed-page";
 import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
+import { KanbanPage } from "./kanban-page";
 import { MobileConnectionPage, MobileConnectLanding } from "./mobile-connection-page";
 import { emptyData } from "./model";
 import { OverviewPage } from "./overview-page";
@@ -77,6 +79,7 @@ const navItems = [
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
   { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
   { path: "/synapse", labelKey: "nav.synapse", icon: BrainCircuit },
+  { path: "/kanban", labelKey: "nav.kanban", icon: Columns3 },
   { path: "/flows", labelKey: "nav.flows", icon: Workflow },
   { path: "/triggers", labelKey: "nav.triggers", icon: Zap },
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
@@ -397,7 +400,8 @@ function AppShell(props: {
   const heading = headingForPath(location.pathname);
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
-  const isBrowserPage = section === "actions" || section === "runs" || section === "chat" || section === "synapse";
+  const isBrowserPage =
+    section === "actions" || section === "runs" || section === "chat" || section === "synapse" || section === "kanban";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
   const isSynapsePage = section === "synapse";
@@ -503,6 +507,7 @@ function AppShell(props: {
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/synapse" element={<SynapsePage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/kanban" element={<KanbanPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
@@ -694,6 +699,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "synapse") {
     return "synapse";
+  }
+  if (section === "kanban") {
+    return "kanban";
   }
   if (section === "access") {
     return "access";

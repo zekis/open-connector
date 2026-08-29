@@ -45,6 +45,7 @@
     "agents": "代理",
     "chat": "聊天",
     "synapse": "Synapse",
+    "kanban": "看板",
     "flows": "流程",
     "triggers": "觸發器",
     "approvals": "核准",
@@ -94,6 +95,10 @@
       "synapse": {
         "title": "Synapse",
         "subtitle": "在代理驅動的畫布上探索已連線的供應商和成品。"
+      },
+      "kanban": {
+        "title": "連線看板",
+        "subtitle": "整理即時連接器資料，並安全地寫回變更。"
       },
       "flows": {
         "title": "流程",
