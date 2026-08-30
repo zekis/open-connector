@@ -456,7 +456,7 @@ function KanbanEditor(props: {
       <header>
         <div>
           <h2>{props.current ? "Configure Connected Kanban" : "Create Connected Kanban"}</h2>
-          <p>Tell your agent what should appear and how you want it organized.</p>
+          <p>Your agent can inspect connected data to resolve required list, project, and board IDs.</p>
         </div>
         <Button variant="ghost" size="icon-sm" type="button" onClick={props.onCancel} aria-label="Close editor">
           <X size={16} />
@@ -490,7 +490,7 @@ function KanbanEditor(props: {
             onClick={() => void generateDefinition()}
           >
             {busy === "generate" ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
-            {parsed ? "Regenerate board" : "Generate board"}
+            {busy === "generate" ? "Discovering and generating…" : parsed ? "Regenerate board" : "Generate board"}
           </Button>
         </div>
       </section>

@@ -80,6 +80,9 @@ export interface AgentChatExtension {
   systemPrompt: string;
   context?: unknown;
   tools: AgentChatExtensionTool[];
+  connectorActionIds?: ReadonlySet<string>;
+  connectorApprovalPolicy?: "enforce" | "bypass";
+  includeFlowTools?: boolean;
   runTool(toolName: string, input: Record<string, unknown>): Promise<AgentChatToolActivity | undefined>;
 }
 
@@ -453,6 +456,7 @@ export class AgentChatService implements IAgentChatService {
             options.timeZone,
             options.extension?.tools,
             options.extension?.context,
+            options.extension?.includeFlowTools,
           ),
           outputSchema: claudeAgentDecisionSchema,
           signal: options.signal,
@@ -608,22 +612,31 @@ export class AgentChatService implements IAgentChatService {
     signal?: AbortSignal,
   ): Promise<AgentChatToolActivity> {
     if (toolName === searchToolName) {
-      return this.searchActions(input, context);
+      return this.searchActions(input, context, extension?.connectorActionIds);
     }
     if (toolName === runToolName) {
-      return await this.runAction(input, context, "enforce", signal);
+      const actionId = readRequiredText(input.actionId, "actionId", 200);
+      if (extension?.connectorActionIds && !extension.connectorActionIds.has(actionId)) {
+        return failedActivity("action", actionId, input, {
+          code: "action_not_available",
+          message: `Action is not available for this task: ${actionId}.`,
+        });
+      }
+      return await this.runAction(input, context, extension?.connectorApprovalPolicy ?? "enforce", signal);
     }
-    const flowActivity = await runAgentChatFlowTool(toolName, input, {
-      flows: this.options.flows,
-      flowRuns: this.options.flowRuns,
-      agentConnectionId: context.agentConnectionId,
-    });
-    if (flowActivity) {
-      return {
-        ...flowActivity,
-        input: boundedValue(flowActivity.input),
-        output: boundedValue(flowActivity.output),
-      };
+    if (extension?.includeFlowTools !== false) {
+      const flowActivity = await runAgentChatFlowTool(toolName, input, {
+        flows: this.options.flows,
+        flowRuns: this.options.flowRuns,
+        agentConnectionId: context.agentConnectionId,
+      });
+      if (flowActivity) {
+        return {
+          ...flowActivity,
+          input: boundedValue(flowActivity.input),
+          output: boundedValue(flowActivity.output),
+        };
+      }
     }
     const extensionActivity = await extension?.runTool(toolName, input);
     if (extensionActivity) return extensionActivity;
@@ -633,7 +646,11 @@ export class AgentChatService implements IAgentChatService {
     });
   }
 
-  private searchActions(input: Record<string, unknown>, context: ChatContext): AgentChatToolActivity {
+  private searchActions(
+    input: Record<string, unknown>,
+    context: ChatContext,
+    allowedActionIds?: ReadonlySet<string>,
+  ): AgentChatToolActivity {
     const query = readRequiredText(input.query, "query", 256);
     const connectionId = readOptionalText(input.connectionId, "connectionId", 200);
     const limit = readOptionalInteger(input.limit, "limit", 1, maxSearchResults) ?? 5;
@@ -645,21 +662,25 @@ export class AgentChatService implements IAgentChatService {
       });
     }
 
-    const results = searchActions(context.actionSearch, query, { limit, service: connection?.service }).map(
-      (result) => {
-        const action = context.actionsById.get(result.id)!;
-        return {
-          actionId: action.id,
-          service: action.service,
-          description: action.description,
-          requiredScopes: action.requiredScopes,
-          compatibleConnections: context.connections
-            .filter((item) => item.service === action.service)
-            .map(connectionReference),
-          inputSchema: action.inputSchema,
-        };
-      },
-    );
+    const actionSearch = allowedActionIds
+      ? buildActionSearchIndex(context.actions.filter((action) => allowedActionIds.has(action.id)))
+      : context.actionSearch;
+    const results = searchActions(actionSearch, query, {
+      limit,
+      service: connection?.service,
+    }).map((result) => {
+      const action = context.actionsById.get(result.id)!;
+      return {
+        actionId: action.id,
+        service: action.service,
+        description: action.description,
+        requiredScopes: action.requiredScopes,
+        compatibleConnections: context.connections
+          .filter((item) => item.service === action.service)
+          .map(connectionReference),
+        inputSchema: action.inputSchema,
+      };
+    });
     return {
       id: crypto.randomUUID(),
       type: "search",
@@ -880,7 +901,11 @@ function createChatPrompt(
   timeZone: string,
   extensionTools: AgentChatExtensionTool[] = [],
   extensionContext?: unknown,
+  includeFlowTools = true,
 ): string {
+  const availableTools = includeFlowTools
+    ? [...chatTools, ...agentChatFlowTools, ...extensionTools]
+    : [...chatTools, ...extensionTools];
   return `Continue this conversation and choose the next single step.
 
 Return kind "tool_call" with one supplied toolName and an arguments object when connector access is needed.
@@ -893,7 +918,7 @@ Current date and time:
 ${JSON.stringify(createDateTimeContext(now, timeZone))}
 
 Available host tools:
-${JSON.stringify([...chatTools, ...agentChatFlowTools, ...extensionTools])}
+${JSON.stringify(availableTools)}
 
 Workspace context:
 ${JSON.stringify(extensionContext ?? null)}

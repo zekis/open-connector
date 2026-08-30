@@ -19,6 +19,7 @@ import type {
   KanbanSourceResult,
 } from "./kanban-types.ts";
 
+import { validateActionInput } from "../../core/validation.ts";
 import { selectKanbanItems, selectKanbanPath } from "./kanban-path.ts";
 
 const maximumBoardNameCharacters = 120;
@@ -341,6 +342,12 @@ export class KanbanService {
             `${source.actionId} cannot use connection ${source.connectionId}.`,
           );
         }
+        if (!validateActionInput(readAction, source.input).valid) {
+          throw new KanbanError(
+            "invalid_kanban_source_input",
+            `${source.actionId} input does not match its action schema. Regenerate the board or correct the source input.`,
+          );
+        }
         if (!source.writeBack) return;
         const writeAction = this.options.catalog.actionsById.get(source.writeBack.actionId);
         if (!writeAction || !writeAction.execution.locallyExecutable) {
@@ -356,6 +363,11 @@ export class KanbanService {
             `${source.writeBack.actionId} cannot use connection ${source.connectionId}.`,
           );
         }
+        validateTemplateShape(
+          source.writeBack.inputTemplate,
+          writeAction.inputSchema,
+          `sources.${source.id}.writeBack.inputTemplate`,
+        );
       }),
     );
   }
@@ -628,6 +640,12 @@ function validatePath(path: string): void {
 }
 
 function validateWriteTemplate(value: unknown): void {
+  if (typeof value === "string" && /\{\{|\}\}/.test(value)) {
+    throw new KanbanError(
+      "invalid_kanban_template",
+      "Write template references must use exact $card, $raw, $source, or $target paths without braces.",
+    );
+  }
   if (typeof value === "string" && value.startsWith("$")) {
     validatePath(value);
     return;
@@ -638,6 +656,36 @@ function validateWriteTemplate(value: unknown): void {
   }
   if (isRecord(value)) {
     for (const item of Object.values(value)) validateWriteTemplate(item);
+  }
+}
+
+function validateTemplateShape(template: unknown, schema: unknown, field: string): void {
+  if (typeof template === "string" && template.startsWith("$")) return;
+  if (!isRecord(schema)) return;
+  if (Array.isArray(template)) {
+    for (const [index, item] of template.entries()) {
+      validateTemplateShape(item, schema.items, `${field}[${index}]`);
+    }
+    return;
+  }
+  if (!isRecord(template)) return;
+  const properties = readObjectProperty(schema, "properties");
+  if (!properties) return;
+  if (schema.additionalProperties === false) {
+    const unknown = Object.keys(template).find((key) => !Object.hasOwn(properties, key));
+    if (unknown) {
+      throw new KanbanError("invalid_kanban_template", `${field}.${unknown} is not accepted by the write action.`);
+    }
+  }
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((item): item is string => typeof item === "string")
+    : [];
+  const missing = required.find((key) => !Object.hasOwn(template, key));
+  if (missing) {
+    throw new KanbanError("invalid_kanban_template", `${field}.${missing} is required by the write action.`);
+  }
+  for (const [key, value] of Object.entries(template)) {
+    validateTemplateShape(value, properties[key], `${field}.${key}`);
   }
 }
 

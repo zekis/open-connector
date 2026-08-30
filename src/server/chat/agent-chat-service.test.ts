@@ -777,6 +777,49 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.prompt).toContain('"selectedNodeId":"node-1"');
   });
 
+  it("lets an extension restrict connector discovery and safely bypass approval for allowed reads", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "search_connector_actions", arguments: { query: "lookup" } },
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "example.lookup",
+          connectionId: connection.id,
+          input: { query: "record-42" },
+        },
+      },
+      { kind: "final", text: "Discovery complete." },
+    ]);
+    const actions = new FakeActionRunner();
+    const service = createService(claude, actions);
+
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Discover the record" }] },
+      {
+        systemPrompt: "Use read-only discovery.",
+        tools: [],
+        connectorActionIds: new Set(["example.lookup"]),
+        connectorApprovalPolicy: "bypass",
+        includeFlowTools: false,
+        async runTool() {
+          return undefined;
+        },
+      },
+    );
+
+    expect(response.status).toBe("completed");
+    expect(actions.inputs).toEqual([
+      expect.objectContaining({
+        actionId: "example.lookup",
+        approvalPolicy: "bypass",
+        caller: "chat",
+      }),
+    ]);
+    expect(claude.inputs[1]?.prompt).toContain("example.lookup");
+    expect(claude.inputs[0]?.prompt).not.toContain('"name":"create_flow"');
+  });
+
   it("uses Claude to decide whether a live voice interruption cancels the running task", async () => {
     const claude = new FakeClaudeCodeClient([
       { cancelCurrentTask: true, reason: "The user explicitly replaced the request." },

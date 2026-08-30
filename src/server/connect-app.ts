@@ -98,22 +98,6 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     const record = await options.runtimeDatabase.runtimePolicyStore.get();
     return actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), undefined, record?.updatedAt);
   };
-  const kanban = new KanbanService({
-    catalog: options.catalog,
-    connections,
-    actions,
-    approvals: connectionApprovals,
-    store: options.runtimeDatabase.kanbanStore,
-    generator: new KanbanGenerator({
-      catalog: options.catalog,
-      connections,
-      agents: agentCredentials,
-      agentSettings,
-      claudeCode,
-      codex,
-    }),
-    getPolicySnapshot,
-  });
   let synapse: SynapseService;
   const flowSynapses = {
     create: (input: unknown) => synapse.create(input),
@@ -153,6 +137,20 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     flows,
     flowRuns: flowRunner,
     approvals: connectionApprovals,
+    getPolicySnapshot,
+  });
+  const kanban = new KanbanService({
+    catalog: options.catalog,
+    connections,
+    actions,
+    approvals: connectionApprovals,
+    store: options.runtimeDatabase.kanbanStore,
+    generator: new KanbanGenerator({
+      catalog: options.catalog,
+      connections,
+      agents: agentCredentials,
+      agentChat,
+    }),
     getPolicySnapshot,
   });
   const feed = new FeedService({

@@ -150,6 +150,18 @@ describe("KanbanService", () => {
     const malformedTemplate = structuredClone(definition);
     malformedTemplate.sources[0]!.writeBack!.inputTemplate.id = "$raw[?(@.id)]";
     await expect(harness.service.create(malformedTemplate)).rejects.toMatchObject({ code: "invalid_kanban_path" });
+
+    const handlebarsTemplate = structuredClone(definition);
+    handlebarsTemplate.sources[0]!.writeBack!.inputTemplate.id = "{{$card.id}}";
+    await expect(harness.service.create(handlebarsTemplate)).rejects.toMatchObject({
+      code: "invalid_kanban_template",
+    });
+
+    const invalidSourceInput = structuredClone(definition);
+    invalidSourceInput.sources[0]!.input = { limit: 0 };
+    await expect(harness.service.create(invalidSourceInput)).rejects.toMatchObject({
+      code: "invalid_kanban_source_input",
+    });
   });
 
   it("rejects duplicate raw column values that would make refreshes ambiguous", async () => {
