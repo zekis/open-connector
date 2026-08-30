@@ -135,6 +135,47 @@ const artifactNode: SynapseArtifactNode = {
 };
 
 describe("SynapseNodeCard", () => {
+  it("renders the opening research prompt as a question node", () => {
+    const node: SynapseArtifactNode = {
+      ...artifactNode,
+      id: "question-1",
+      artifactKind: "question",
+      title: "Research question",
+      content: "How are customers responding to the latest product release?",
+    };
+
+    const html = renderToStaticMarkup(
+      <SynapseNodeCard
+        node={node}
+        selected
+        linking={false}
+        speechAvailable={false}
+        speaking={false}
+        speechConnecting={false}
+        checked={false}
+        refreshing={false}
+        refreshDisabled={false}
+        onPointerDown={() => {}}
+        onPointerMove={() => {}}
+        onPointerUp={() => {}}
+        onPointerCancel={() => {}}
+        onContextMenu={() => {}}
+        onResizePointerDown={() => {}}
+        onResizePointerMove={() => {}}
+        onResizePointerUp={() => {}}
+        onSelect={() => {}}
+        onOpen={() => {}}
+        onRefresh={() => {}}
+        onToggleSpeech={() => {}}
+        onCheckedChange={() => {}}
+      />,
+    );
+
+    expect(html).toContain("artifact question selected");
+    expect(html).toContain("Question");
+    expect(html).toContain("How are customers responding to the latest product release?");
+  });
+
   it("renders a provider source with the same normal node card shell", () => {
     const html = renderToStaticMarkup(
       <SynapseNodeCard

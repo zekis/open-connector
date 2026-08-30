@@ -2,7 +2,15 @@ import type { AgentChatProgress, AgentChatToolActivity } from "../chat/agent-cha
 import type { ProviderPreview } from "../previews/provider-preview.ts";
 
 export type SynapseNodeKind = "provider" | "artifact";
-export type SynapseArtifactKind = "email" | "draft" | "document" | "search_result" | "note" | "task" | "generic";
+export type SynapseArtifactKind =
+  | "question"
+  | "email"
+  | "draft"
+  | "document"
+  | "search_result"
+  | "note"
+  | "task"
+  | "generic";
 
 export interface SynapsePosition {
   x: number;

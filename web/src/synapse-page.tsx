@@ -28,6 +28,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  CircleHelp,
   CopyPlus,
   ExternalLink,
   File,
@@ -409,14 +410,16 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     };
   }, [applyWorkspace, pendingApprovalKey, workspace?.id]);
 
-  async function createWorkspace(name: string): Promise<void> {
-    const next = await apiPost<SynapseWorkspace>("/api/synapses", { name });
+  async function createWorkspace(question: string): Promise<void> {
+    const next = await apiPost<SynapseWorkspace>("/api/synapses", { question });
+    const questionNode = next.nodes.find((node) => node.kind === "artifact" && node.artifactKind === "question");
     setWorkspace(next);
-    setSelectedNodeId(undefined);
+    setSelectedNodeId(questionNode?.id);
     setExpandedNodeId(undefined);
     setSelectedNodeIds([]);
     setSummaries((current) => [workspaceSummary(next), ...current]);
     setCreateOpen(false);
+    if (questionNode) requestNodeChat(questionNode.id, question, true);
   }
 
   async function deleteWorkspace(): Promise<void> {
@@ -2757,19 +2760,19 @@ function SynapseContextMenu(props: {
 function CreateWorkspaceDialog(props: {
   open: boolean;
   onOpenChange(open: boolean): void;
-  onCreate(name: string): Promise<void>;
+  onCreate(question: string): Promise<void>;
 }): ReactNode {
-  const [name, setName] = useState("New Synapse");
+  const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!name.trim() || busy) return;
+    if (!question.trim() || busy) return;
     setBusy(true);
     try {
-      await props.onCreate(name.trim());
-      setName("New Synapse");
+      await props.onCreate(question.trim());
+      setQuestion("");
       setError(undefined);
     } catch (caught) {
       setError(messageFrom(caught, "Could not create the canvas."));
@@ -2783,22 +2786,27 @@ function CreateWorkspaceDialog(props: {
       <DialogContent>
         <form onSubmit={(event) => void submit(event)}>
           <DialogHeader>
-            <DialogTitle>Create a Synapse</DialogTitle>
-            <DialogDescription>
-              Start a durable canvas for one investigation, project, or chain of actions.
-            </DialogDescription>
+            <DialogTitle>Start a Synapse</DialogTitle>
+            <DialogDescription>Your question becomes the first node and starts the research chat.</DialogDescription>
           </DialogHeader>
           <Label className="field synapse-dialog-field">
-            <span>Canvas name</span>
-            <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} />
+            <span>What would you like to research?</span>
+            <Textarea
+              value={question}
+              autoFocus
+              rows={4}
+              maxLength={20_000}
+              placeholder="For example: How are our customers responding to the latest product release?"
+              onChange={(event) => setQuestion(event.target.value)}
+            />
           </Label>
           {error ? <div className="synapse-panel-error">{error}</div> : null}
           <DialogFooter>
             <Button variant="outline" type="button" onClick={() => props.onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || busy}>
-              {busy ? <Loader2 className="spin" size={14} /> : <BrainCircuit size={14} />} Create canvas
+            <Button type="submit" disabled={!question.trim() || busy}>
+              {busy ? <Loader2 className="spin" size={14} /> : <BrainCircuit size={14} />} Start researching
             </Button>
           </DialogFooter>
         </form>
@@ -2979,8 +2987,8 @@ function SynapseEmpty(props: { loading: boolean; onCreate(): void }): ReactNode 
       <span>
         <BrainCircuit size={34} />
       </span>
-      <h2>{props.loading ? "Loading Synapse…" : "Turn connected data into a map you can talk to."}</h2>
-      <p>Start with a provider, let the agent fan results into artifacts, then follow the branch that matters.</p>
+      <h2>{props.loading ? "Loading Synapse…" : "Start with a question. Build a map of the answer."}</h2>
+      <p>The agent can bring in connected data as the research develops.</p>
       <Button disabled={props.loading} onClick={props.onCreate}>
         {props.loading ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Create your first Synapse
       </Button>
@@ -3327,6 +3335,8 @@ function workspaceSummary(workspace: SynapseWorkspace): SynapseWorkspaceSummary 
 
 function artifactLabel(kind: SynapseArtifactKind): string {
   switch (kind) {
+    case "question":
+      return "Question";
     case "search_result":
       return "Search result";
     case "email":
@@ -3345,6 +3355,7 @@ function artifactLabel(kind: SynapseArtifactKind): string {
 }
 
 function artifactIcon(kind: SynapseArtifactKind): typeof FileText {
+  if (kind === "question") return CircleHelp;
   if (kind === "email" || kind === "draft") return Mail;
   if (kind === "note") return StickyNote;
   if (kind === "search_result") return Search;

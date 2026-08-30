@@ -532,7 +532,15 @@ export interface FeedPage {
   items: FeedItem[];
 }
 
-export type SynapseArtifactKind = "email" | "draft" | "document" | "search_result" | "note" | "task" | "generic";
+export type SynapseArtifactKind =
+  | "question"
+  | "email"
+  | "draft"
+  | "document"
+  | "search_result"
+  | "note"
+  | "task"
+  | "generic";
 
 export interface SynapsePosition {
   x: number;

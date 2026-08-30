@@ -78,16 +78,31 @@ export class SynapseService {
 
   async create(input: unknown): Promise<SynapseWorkspace> {
     const body = readObject(input, "Synapse workspace");
+    const question = optionalText(body.question, "question", maximumChatCharacters);
+    const requestedName = optionalText(body.name, "name", maximumWorkspaceNameCharacters);
+    const name = requestedName ?? (question ? truncatedText(question, maximumWorkspaceNameCharacters) : undefined);
+    if (!name) throw new SynapseError("invalid_synapse", "question or name is required.");
     const now = new Date().toISOString();
     const workspace: SynapseWorkspace = {
       id: crypto.randomUUID(),
-      name: readText(body.name, "name", maximumWorkspaceNameCharacters),
+      name,
       nodes: [],
       edges: [],
       threads: [],
       createdAt: now,
       updatedAt: now,
     };
+    if (question) {
+      this.addArtifactNode(
+        workspace,
+        { x: 120, y: 120 },
+        {
+          artifactKind: "question",
+          title: "Research question",
+          content: question,
+        },
+      );
+    }
     await this.options.store.setWorkspace(workspace);
     return workspace;
   }
@@ -2315,6 +2330,7 @@ function readArtifactInput(body: Record<string, unknown>): ArtifactInput {
 
 function readArtifactKind(value: unknown): SynapseArtifactKind {
   if (
+    value === "question" ||
     value === "email" ||
     value === "draft" ||
     value === "document" ||
@@ -2326,6 +2342,12 @@ function readArtifactKind(value: unknown): SynapseArtifactKind {
     return value;
   }
   throw new SynapseError("invalid_synapse_artifact", "artifactKind is invalid.");
+}
+
+function truncatedText(text: string, maximum: number): string {
+  const singleLine = text.replace(/\s+/gu, " ").trim();
+  if (singleLine.length <= maximum) return singleLine;
+  return `${singleLine.slice(0, maximum - 1).trimEnd()}…`;
 }
 
 function readSelectedNodeIds(value: unknown): string[] {

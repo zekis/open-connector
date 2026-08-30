@@ -48,6 +48,29 @@ const connections = [
 ];
 
 describe("SynapseService", () => {
+  it("starts a new research canvas with a question node while retaining named empty canvases for Flow destinations", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const question = "How are customers responding to the latest product release?";
+
+    const research = await service.create({ question });
+    const flowDestination = await service.create({ name: "Daily digest" });
+
+    expect(research).toMatchObject({ name: question, edges: [], threads: [] });
+    expect(research.nodes).toEqual([
+      expect.objectContaining({
+        kind: "artifact",
+        artifactKind: "question",
+        title: "Research question",
+        content: question,
+        position: { x: 120, y: 120 },
+      }),
+    ]);
+    expect(flowDestination).toMatchObject({ name: "Daily digest", nodes: [] });
+  });
+
   it("converges multiple selected nodes into one durable result with their joint context and conversation", async () => {
     let extensionSeen: AgentChatExtension | undefined;
     let messagesSeen: Array<{ role: string; content: string }> = [];
