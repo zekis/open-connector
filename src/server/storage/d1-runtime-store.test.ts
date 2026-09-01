@@ -5,6 +5,7 @@ import type {
   TeamsGatewayAgent,
   TeamsGatewayContact,
   TeamsGatewayGroup,
+  TeamsGatewaySubscription,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 
@@ -90,6 +91,7 @@ describe("D1RuntimeDatabase", () => {
     await database.teamsGatewayStore.setThread(records.thread);
     await database.teamsGatewayStore.setContact(records.contact);
     await database.teamsGatewayStore.setGroup(records.group);
+    await database.teamsGatewayStore.setSubscription(records.subscription);
 
     await expect(database.teamsGatewayStore.listAgents()).resolves.toEqual([records.agent]);
     await expect(database.teamsGatewayStore.getThread(records.agent.id, records.thread.chatId)).resolves.toEqual(
@@ -97,10 +99,14 @@ describe("D1RuntimeDatabase", () => {
     );
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
     await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
+    await expect(database.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
+      records.subscription,
+    );
     await expect(database.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
     await expect(database.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
     await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([]);
+    await expect(database.teamsGatewayStore.listSubscriptions(records.agent.id)).resolves.toEqual([]);
   });
 
   it("persists encrypted Feed conversation threads", async () => {
@@ -645,6 +651,7 @@ function testTeamsGatewayRecords(): {
   thread: TeamsGatewayThread;
   contact: TeamsGatewayContact;
   group: TeamsGatewayGroup;
+  subscription: TeamsGatewaySubscription;
 } {
   const agent: TeamsGatewayAgent = {
     id: "teams-agent-1",
@@ -694,7 +701,17 @@ function testTeamsGatewayRecords(): {
     discoveredAt: agent.watchStartedAt,
     updatedAt: agent.updatedAt,
   };
-  return { agent, thread, contact, group };
+  const subscription: TeamsGatewaySubscription = {
+    sourceKey: `${agent.id}:chat_messages`,
+    subscriptionId: "graph-subscription-1",
+    agentId: agent.id,
+    kind: "chat_messages",
+    resource: "/users/user-1/chats/getAllMessages",
+    clientState: "subscription-secret",
+    expiresAt: "2026-09-01T01:55:00.000Z",
+    updatedAt: "2026-09-01T01:00:00.000Z",
+  };
+  return { agent, thread, contact, group, subscription };
 }
 
 class SqliteD1Database implements D1DatabaseBinding {
@@ -733,6 +750,9 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(readFileSync(new URL("../../../migrations/0018_teams_gateway.sql", import.meta.url), "utf8"));
     this.database.exec(
       readFileSync(new URL("../../../migrations/0019_teams_gateway_groups.sql", import.meta.url), "utf8"),
+    );
+    this.database.exec(
+      readFileSync(new URL("../../../migrations/0020_teams_gateway_subscriptions.sql", import.meta.url), "utf8"),
     );
   }
 

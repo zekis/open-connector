@@ -29,6 +29,7 @@ import type {
   TeamsGatewayAgent,
   TeamsGatewayContact,
   TeamsGatewayGroup,
+  TeamsGatewaySubscription,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 import type {
@@ -1031,6 +1032,7 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
     await this.database.prepare("delete from teams_gateway_contacts where agent_id = ?").bind(id).run();
     await this.database.prepare("delete from teams_gateway_threads where agent_id = ?").bind(id).run();
     await this.database.prepare("delete from teams_gateway_groups where agent_id = ?").bind(id).run();
+    await this.database.prepare("delete from teams_gateway_subscriptions where agent_id = ?").bind(id).run();
     const result = await this.database.prepare("delete from teams_gateway_agents where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
   }
@@ -1155,6 +1157,55 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
         .filter((group) => !retained.has(group.id))
         .map((group) => this.database.prepare("delete from teams_gateway_groups where id = ?").bind(group.id).run()),
     );
+  }
+
+  async setSubscription(subscription: TeamsGatewaySubscription): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into teams_gateway_subscriptions
+           (id, subscription_id, agent_id, expires_at, updated_at, value)
+         values (?, ?, ?, ?, ?, ?)
+         on conflict(id) do update set subscription_id = excluded.subscription_id,
+           agent_id = excluded.agent_id, expires_at = excluded.expires_at,
+           updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(
+        subscription.sourceKey,
+        subscription.subscriptionId,
+        subscription.agentId,
+        subscription.expiresAt,
+        subscription.updatedAt,
+        await this.secretCodec.encode(JSON.stringify(subscription)),
+      )
+      .run();
+  }
+
+  async getSubscriptionById(subscriptionId: string): Promise<TeamsGatewaySubscription | undefined> {
+    const row = await this.database
+      .prepare("select value from teams_gateway_subscriptions where subscription_id = ?")
+      .bind(subscriptionId)
+      .first<RuntimeRow>();
+    return row
+      ? parseJson<TeamsGatewaySubscription>(await this.secretCodec.decode(readString(row, "value")))
+      : undefined;
+  }
+
+  async listSubscriptions(agentId?: string): Promise<TeamsGatewaySubscription[]> {
+    const statement = agentId
+      ? this.database
+          .prepare("select value from teams_gateway_subscriptions where agent_id = ? order by id")
+          .bind(agentId)
+      : this.database.prepare("select value from teams_gateway_subscriptions order by id");
+    const { results } = await statement.all<RuntimeRow>();
+    return Promise.all(
+      results.map(async (row) =>
+        parseJson<TeamsGatewaySubscription>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
+  }
+
+  async deleteSubscription(sourceKey: string): Promise<void> {
+    await this.database.prepare("delete from teams_gateway_subscriptions where id = ?").bind(sourceKey).run();
   }
 }
 

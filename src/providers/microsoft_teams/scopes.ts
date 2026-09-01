@@ -9,6 +9,8 @@ export const microsoftTeamsProviderScopes = {
   chatRead: "Chat.Read",
   chatCreate: "Chat.Create",
   chatMessageSend: "ChatMessage.Send",
+  filesReadWriteAll: "Files.ReadWrite.All",
+  sitesReadWriteAll: "Sites.ReadWrite.All",
   offlineAccess: "offline_access",
 } as const;
 
@@ -23,5 +25,7 @@ export const microsoftTeamsOAuthScopes: string[] = [
   microsoftTeamsProviderScopes.chatRead,
   microsoftTeamsProviderScopes.chatCreate,
   microsoftTeamsProviderScopes.chatMessageSend,
+  microsoftTeamsProviderScopes.filesReadWriteAll,
+  microsoftTeamsProviderScopes.sitesReadWriteAll,
   microsoftTeamsProviderScopes.offlineAccess,
 ];

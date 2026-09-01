@@ -20,6 +20,7 @@ import { D1RuntimeDatabase } from "./storage/d1-runtime-store.ts";
 import { DEFAULT_RUN_LIMIT } from "./storage/runtime-store.ts";
 
 interface CloudflareExecutionContext {
+  props: Record<string, unknown>;
   waitUntil(promise: Promise<unknown>): void;
   passThroughOnException(): void;
 }
@@ -38,7 +39,7 @@ export default {
     }
 
     const { app } = await cachedApp.app;
-    const response = await app.fetch(request, env);
+    const response = await app.fetch(request, env, _ctx);
     if (response.status === 404 && env.ASSETS && shouldServeAsset(request)) {
       return env.ASSETS.fetch(request);
     }

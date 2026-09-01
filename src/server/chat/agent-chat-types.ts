@@ -1,6 +1,17 @@
+export interface AgentChatAttachment {
+  id?: string;
+  fileId?: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  downloadUrl?: string;
+  error?: string;
+}
+
 export interface AgentChatMessage {
   role: "user" | "assistant";
   content: string;
+  attachments?: AgentChatAttachment[];
 }
 
 export interface AgentChatToolActivity {

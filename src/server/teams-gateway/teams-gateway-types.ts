@@ -68,6 +68,7 @@ export interface TeamsGatewayPlan {
   summary: string;
   steps: string[];
   originalRequest: string;
+  messageId?: string;
   createdAt: string;
 }
 
@@ -128,6 +129,20 @@ export interface TeamsGatewayContact {
   lastInboundAt: string;
 }
 
+export type TeamsGatewaySubscriptionKind = "chat_messages" | "channel_messages" | "team_channels";
+
+/** Durable mapping between a watched Teams source and its Microsoft Graph subscription. */
+export interface TeamsGatewaySubscription {
+  sourceKey: string;
+  subscriptionId: string;
+  agentId: string;
+  kind: TeamsGatewaySubscriptionKind;
+  resource: string;
+  clientState: string;
+  expiresAt: string;
+  updatedAt: string;
+}
+
 export interface ITeamsGatewayStore {
   setAgent(agent: TeamsGatewayAgent): Promise<void>;
   getAgent(id: string): Promise<TeamsGatewayAgent | undefined>;
@@ -142,4 +157,8 @@ export interface ITeamsGatewayStore {
   setGroup(group: TeamsGatewayGroup): Promise<void>;
   listGroups(agentId?: string): Promise<TeamsGatewayGroup[]>;
   deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void>;
+  setSubscription(subscription: TeamsGatewaySubscription): Promise<void>;
+  getSubscriptionById(subscriptionId: string): Promise<TeamsGatewaySubscription | undefined>;
+  listSubscriptions(agentId?: string): Promise<TeamsGatewaySubscription[]>;
+  deleteSubscription(sourceKey: string): Promise<void>;
 }

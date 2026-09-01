@@ -141,6 +141,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     flowRuns: flowRunner,
     approvals: connectionApprovals,
     getPolicySnapshot,
+    transitFiles: options.transitFiles,
   });
   const teamsGateway = new TeamsGatewayService({
     catalog: options.catalog,
@@ -149,8 +150,10 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     agentChat,
     approvals: connectionApprovals,
     graph: new TeamsGatewayGraphClient(connections, oauthClientConfigs),
+    files: options.transitFiles,
     store: options.runtimeDatabase.teamsGatewayStore,
     logger: options.logger,
+    publicOrigin: options.publicOrigin,
   });
   const kanban = new KanbanService({
     catalog: options.catalog,

@@ -27,6 +27,7 @@ export interface MicrosoftTeamsRequestOptions {
   query?: Record<string, string | number | undefined>;
   headers?: Record<string, string | undefined>;
   body?: unknown;
+  rawBody?: BodyInit;
   nextLinkKind?: MicrosoftTeamsNextLinkKind;
 }
 
@@ -97,7 +98,10 @@ export async function microsoftTeamsRequest(
   options: MicrosoftTeamsRequestOptions = {},
 ): Promise<Response> {
   const url = buildMicrosoftTeamsUrl(pathOrUrl, options.query, options.nextLinkKind);
-  const hasBody = options.body !== undefined;
+  if (options.body !== undefined && options.rawBody !== undefined) {
+    throw new ProviderRequestError(400, "Microsoft Teams requests cannot include both JSON and raw bodies.");
+  }
+  const hasBody = options.body !== undefined || options.rawBody !== undefined;
   const method = (options.method ?? (hasBody ? "POST" : "GET")).toUpperCase();
   if ((method === "GET" || method === "HEAD") && hasBody) {
     throw new ProviderRequestError(400, `Microsoft Teams ${method} request must not include a body.`);
@@ -111,14 +115,14 @@ export async function microsoftTeamsRequest(
       headers.set(name, value);
     }
   }
-  if (hasBody && !headers.has("content-type")) {
+  if (options.body !== undefined && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
 
   const response = await deps.fetcher(url, {
     method,
     headers,
-    body: hasBody ? JSON.stringify(options.body) : undefined,
+    body: options.rawBody ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined),
     signal: deps.signal,
   });
   if (!response.ok) {

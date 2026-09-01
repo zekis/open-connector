@@ -253,6 +253,8 @@ Issues and pull requests are welcome.
 - [Docker image (GHCR)](docs/docker-ghcr.md)
 - [Configuration](docs/configuration.md)
 - [Credentials and OAuth](docs/credentials.md)
+- [Microsoft Teams gateway](docs/teams-gateway.md)
+- [Microsoft Graph Admin](docs/microsoft-graph-admin.md)
 - [Catalog format](docs/catalog-format.md)
 - [Verification language](docs/verification.md)
 - [Contributing](CONTRIBUTING.md)

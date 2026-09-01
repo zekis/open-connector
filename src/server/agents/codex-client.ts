@@ -1,6 +1,8 @@
 import type { AgentModelOption, AgentModelSource } from "./agent-settings-service.ts";
 import type { AgentTurnRequest, AgentTurnResult, IAgentTurnClient } from "./agent-turn.ts";
 
+import { agentTurnAttachmentPrompt, stageAgentTurnAttachments } from "./agent-turn-attachments.ts";
+
 export interface CodexCommandResult {
   exitCode: number;
   stdout: string;
@@ -65,6 +67,7 @@ export class CodexClient implements IAgentTurnClient, AgentModelSource {
     const schemaPath = join(directory, "decision.schema.json");
     const outputPath = join(directory, "decision.json");
     try {
+      const attachments = await stageAgentTurnAttachments(directory, input.attachments);
       await writeFile(schemaPath, JSON.stringify(input.outputSchema), { encoding: "utf8", mode: 0o600 });
       const result = await this.runner.run({
         args: [
@@ -86,11 +89,14 @@ export class CodexClient implements IAgentTurnClient, AgentModelSource {
           "--output-last-message",
           outputPath,
           "--json",
+          ...attachments.flatMap((attachment) =>
+            attachment.mimeType.startsWith("image/") ? ["--image", attachment.path] : [],
+          ),
           "-",
         ],
         timeoutMs: 120_000,
         cwd: directory,
-        stdin: createCodexPrompt(input),
+        stdin: `${createCodexPrompt(input)}${agentTurnAttachmentPrompt(attachments)}`,
         signal: input.signal,
       });
       if (result.exitCode !== 0) {

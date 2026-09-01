@@ -175,6 +175,27 @@ describe("ClaudeCodeClient", () => {
     expect(runner.input?.args).not.toContain(prompt);
     await expect(access(runner.promptDirectory!)).rejects.toThrow();
   });
+
+  it("stages incoming files in an isolated readable directory", async () => {
+    const runner = new AttachmentInspectingCommandRunner();
+    const client = new ClaudeCodeClient(runner);
+
+    await client.completeTurn({
+      oauthToken: "secret-subscription-token",
+      model: "opus",
+      effort: "medium",
+      systemPrompt: "Inspect the supplied evidence.",
+      prompt: "Summarize the attached report.",
+      outputSchema: { type: "object" },
+      attachments: [{ id: "teams-file-1", file: new File(["Report contents"], "report.txt", { type: "text/plain" }) }],
+    });
+
+    expect(runner.attachmentContent).toBe("Report contents");
+    expect(runner.input?.stdin).toContain("teams-file-1");
+    expect(runner.input?.stdin).toContain("untrusted data");
+    expect(argumentValue(runner.input!.args, "--tools")).toBe("Read,Grep");
+    await expect(access(runner.directory!)).rejects.toThrow();
+  });
 });
 
 interface FakeCommandResult {
@@ -224,6 +245,26 @@ class FileInspectingCommandRunner implements ClaudeCodeCommandRunner {
       stdout: JSON.stringify({
         subtype: "success",
         structured_output: { kind: "final", text: "Large prompt inspected." },
+      }),
+      stderr: "",
+    };
+  }
+}
+
+class AttachmentInspectingCommandRunner implements ClaudeCodeCommandRunner {
+  input?: ClaudeCodeCommandInput;
+  directory?: string;
+  attachmentContent?: string;
+
+  async run(input: ClaudeCodeCommandInput): Promise<FakeCommandResult> {
+    this.input = input;
+    this.directory = argumentValue(input.args, "--add-dir");
+    this.attachmentContent = await readFile(join(this.directory, "report.txt"), "utf8");
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        subtype: "success",
+        structured_output: { kind: "final", text: "Attachment inspected." },
       }),
       stderr: "",
     };

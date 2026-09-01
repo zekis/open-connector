@@ -110,6 +110,7 @@ function isPublicPath(path: string, method: string): boolean {
     (method === "GET" && path === "/api/auth/session") ||
     (method === "POST" && path === "/api/auth/logout") ||
     (method === "POST" && path === "/api/mobile-auth/exchange") ||
+    (method === "POST" && path === "/api/teams-gateway/webhook") ||
     (method === "GET" && path.startsWith("/api/files/")) ||
     isConsoleShellRequest(path, method)
   );

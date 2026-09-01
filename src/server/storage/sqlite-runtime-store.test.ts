@@ -5,6 +5,7 @@ import type {
   TeamsGatewayAgent,
   TeamsGatewayContact,
   TeamsGatewayGroup,
+  TeamsGatewaySubscription,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 
@@ -91,6 +92,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0017_kanban.sql",
       "0018_teams_gateway.sql",
       "0019_teams_gateway_groups.sql",
+      "0020_teams_gateway_subscriptions.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -181,6 +183,7 @@ describe("SqliteRuntimeDatabase", () => {
     await first.teamsGatewayStore.setThread(records.thread);
     await first.teamsGatewayStore.setContact(records.contact);
     await first.teamsGatewayStore.setGroup(records.group);
+    await first.teamsGatewayStore.setSubscription(records.subscription);
     first.close();
 
     const second = new SqliteRuntimeDatabase(databasePath, {
@@ -192,10 +195,14 @@ describe("SqliteRuntimeDatabase", () => {
     );
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
     await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
+    await expect(second.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
+      records.subscription,
+    );
     await expect(second.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
     await expect(second.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
     await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([]);
+    await expect(second.teamsGatewayStore.listSubscriptions(records.agent.id)).resolves.toEqual([]);
     second.close();
   });
 
@@ -1124,6 +1131,7 @@ describe("SqliteRuntimeDatabase", () => {
     await database.teamsGatewayStore.setThread(teamsGateway.thread);
     await database.teamsGatewayStore.setContact(teamsGateway.contact);
     await database.teamsGatewayStore.setGroup(teamsGateway.group);
+    await database.teamsGatewayStore.setSubscription(teamsGateway.subscription);
     await database.rotateSecretCodec(new AesGcmSecretCodec("new-key"));
     database.close();
 
@@ -1136,6 +1144,9 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withOldKey.feedStore.getThread(feedThread.id)).rejects.toThrow();
     await expect(withOldKey.connectionApprovalStore.getActionApproval("action-approval-rotation")).rejects.toThrow();
     await expect(withOldKey.teamsGatewayStore.getAgent(teamsGateway.agent.id)).rejects.toThrow();
+    await expect(
+      withOldKey.teamsGatewayStore.getSubscriptionById(teamsGateway.subscription.subscriptionId),
+    ).rejects.toThrow();
     withOldKey.close();
 
     const withNewKey = new SqliteRuntimeDatabase(databasePath, {
@@ -1165,6 +1176,9 @@ describe("SqliteRuntimeDatabase", () => {
       teamsGateway.contact,
     ]);
     await expect(withNewKey.teamsGatewayStore.listGroups(teamsGateway.agent.id)).resolves.toEqual([teamsGateway.group]);
+    await expect(
+      withNewKey.teamsGatewayStore.getSubscriptionById(teamsGateway.subscription.subscriptionId),
+    ).resolves.toEqual(teamsGateway.subscription);
     await expect(withNewKey.idempotencyStore.claim({ ...claim, claimId: "claim-3" })).resolves.toEqual({
       kind: "completed",
       response: successResponse({ token: "rotated-idempotency-secret" }),
@@ -1251,6 +1265,7 @@ function testTeamsGatewayRecords(): {
   thread: TeamsGatewayThread;
   contact: TeamsGatewayContact;
   group: TeamsGatewayGroup;
+  subscription: TeamsGatewaySubscription;
 } {
   const agent: TeamsGatewayAgent = {
     id: "teams-agent-1",
@@ -1301,7 +1316,17 @@ function testTeamsGatewayRecords(): {
     discoveredAt: agent.watchStartedAt,
     updatedAt: agent.updatedAt,
   };
-  return { agent, thread, contact, group };
+  const subscription: TeamsGatewaySubscription = {
+    sourceKey: `${agent.id}:chat_messages`,
+    subscriptionId: "graph-subscription-1",
+    agentId: agent.id,
+    kind: "chat_messages",
+    resource: "/users/user-1/chats/getAllMessages",
+    clientState: "subscription-secret",
+    expiresAt: "2026-09-01T01:55:00.000Z",
+    updatedAt: "2026-09-01T01:00:00.000Z",
+  };
+  return { agent, thread, contact, group, subscription };
 }
 
 async function expectDatabaseDirectoryNotToContain(databasePath: string, needle: string): Promise<void> {

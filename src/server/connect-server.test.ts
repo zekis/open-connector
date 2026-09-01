@@ -46,6 +46,7 @@ import type {
 import type { IRuntimePolicyStore, RuntimePolicyRecord } from "./storage/runtime-policy-store.ts";
 import type { IRunLogStore, RunLog, RunLogListInput, RunLogPage } from "./storage/runtime-store.ts";
 import type { IRuntimeTokenStore, RuntimeTokenRecord } from "./storage/runtime-token-service.ts";
+import type { TeamsGatewayService } from "./teams-gateway/teams-gateway-service.ts";
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1335,6 +1336,31 @@ describe("ConnectServer", () => {
     } finally {
       await rm(staticRoot, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the Teams webhook public while validating subscriptions in the gateway service", async () => {
+    const handleNotifications = vi.fn(async () => 1);
+    const teamsGateway = { handleNotifications } as unknown as TeamsGatewayService;
+    const app = createTestServer([], {
+      auth: { adminToken: "local-token" },
+      teamsGateway,
+    }).createApp();
+
+    const validation = await app.request("/api/teams-gateway/webhook?validationToken=graph-validation-token", {
+      method: "POST",
+    });
+    expect(validation.status).toBe(200);
+    expect(validation.headers.get("content-type")).toContain("text/plain");
+    await expect(validation.text()).resolves.toBe("graph-validation-token");
+
+    const notification = await app.request("/api/teams-gateway/webhook", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value: [{ subscriptionId: "subscription-1", clientState: "secret" }] }),
+    });
+    expect(notification.status).toBe(202);
+    await expect(notification.json()).resolves.toEqual({ accepted: 1 });
+    expect(handleNotifications).toHaveBeenCalledOnce();
   });
 
   it("reports local admin auth session state", async () => {
@@ -3762,6 +3788,7 @@ interface CreateTestServerOptions {
   transitFiles?: TransitFileService;
   connectionApprovalStore?: IConnectionApprovalStore;
   mobileAuth?: MobileAuthService;
+  teamsGateway?: TeamsGatewayService;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -3828,6 +3855,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     transitFiles,
     runtimeTokens,
     mobileAuth: options.mobileAuth,
+    teamsGateway: options.teamsGateway,
     runtimePolicyStore: options.runtimePolicyStore ?? new MemoryRuntimePolicyStore(),
     registerStaticRoutes: staticRoot ? (app) => registerStaticRoutes(app, staticRoot) : undefined,
     auth: {

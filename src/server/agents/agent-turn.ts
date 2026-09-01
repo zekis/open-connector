@@ -6,7 +6,13 @@ export interface AgentTurnRequest {
   systemPrompt: string;
   prompt: string;
   outputSchema: JsonSchema;
+  attachments?: AgentTurnAttachment[];
   signal?: AbortSignal;
+}
+
+export interface AgentTurnAttachment {
+  id: string;
+  file: File;
 }
 
 export interface AgentTurnResult {

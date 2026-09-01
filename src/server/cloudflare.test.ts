@@ -163,6 +163,7 @@ function createEnv(): CloudflareEnv {
 
 function createExecutionContext(): Parameters<typeof worker.fetch>[2] {
   return {
+    props: {},
     waitUntil() {},
     passThroughOnException() {},
   };

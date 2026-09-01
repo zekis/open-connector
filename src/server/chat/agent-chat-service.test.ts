@@ -6,6 +6,7 @@ import type { AgentModelOption } from "../agents/agent-settings-service.ts";
 import type { AgentTurnRequest } from "../agents/agent-turn.ts";
 import type { ClaudeCodeTurnInput, ClaudeCodeTurnResult, IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
+import type { ITransitFileService } from "../files/transit-file-store.ts";
 import type { FlowRunDetail } from "../flows/flow-runner.ts";
 import type { FlowDefinition, FlowDefinitionInput, FlowRun } from "../flows/flow-types.ts";
 import type { AgentChatProgress, AgentChatResponse } from "./agent-chat-types.ts";
@@ -960,6 +961,39 @@ describe("AgentChatService", () => {
     expect(response.message.content).toBe("Answered by Codex.");
     expect(codexInputs[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "medium" });
   });
+
+  it("resolves transit-file references into native agent attachments", async () => {
+    const claude = new FakeClaudeCodeClient([{ kind: "final", text: "I reviewed the attachment." }]);
+    const file = new File(["attachment contents"], "report.txt", { type: "text/plain" });
+    const service = createService(
+      claude,
+      new FakeActionRunner(),
+      true,
+      new FakeChatApprovals(),
+      new FakeFlowService(),
+      undefined,
+      [connection],
+      {
+        async read(fileId) {
+          expect(fileId).toBe("file-1");
+          return { file, sizeBytes: file.size, name: file.name, mimeType: file.type };
+        },
+      },
+    );
+
+    await service.respond({
+      messages: [
+        {
+          role: "user",
+          content: "Review the attachment.",
+          attachments: [{ fileId: "file-1", name: "report.txt", mimeType: "text/plain", sizeBytes: file.size }],
+        },
+      ],
+    });
+
+    expect(claude.inputs[0]?.attachments?.[0]?.id).toBe("file-1");
+    await expect(claude.inputs[0]?.attachments?.[0]?.file.text()).resolves.toBe("attachment contents");
+  });
 });
 
 function createService(
@@ -970,6 +1004,7 @@ function createService(
   flows = new FakeFlowService(),
   now?: () => Date,
   connections: ConnectionSummary[] = [connection],
+  transitFiles?: Pick<ITransitFileService, "read">,
 ): AgentChatService {
   const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
   return new AgentChatService({
@@ -1008,6 +1043,7 @@ function createService(
     flowRuns: flows,
     approvals,
     getPolicySnapshot: async () => new ActionPolicyService().createSnapshot(),
+    transitFiles,
     now,
   });
 }

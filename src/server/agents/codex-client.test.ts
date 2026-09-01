@@ -58,6 +58,26 @@ describe("CodexClient", () => {
     await expect(access(runner.input!.cwd!)).rejects.toThrow();
   });
 
+  it("stages incoming images for a structured turn and removes them afterward", async () => {
+    const runner = new StructuredCodexCommandRunner();
+    const client = new CodexClient(runner);
+
+    await client.completeTurn({
+      model: "gpt-5.6-sol",
+      effort: "medium",
+      systemPrompt: "Use only host tools.",
+      prompt: "Describe the attached status image.",
+      outputSchema: { type: "object", properties: { kind: { type: "string" } } },
+      attachments: [{ id: "teams-image-1", file: new File(["image bytes"], "status.png", { type: "image/png" }) }],
+    });
+
+    expect(runner.attachmentContent).toBe("image bytes");
+    expect(runner.input?.stdin).toContain("teams-image-1");
+    expect(runner.input?.stdin).toContain("untrusted data");
+    expect(argumentValue(runner.input!.args, "--image")).toContain("status.png");
+    await expect(access(runner.input!.cwd!)).rejects.toThrow();
+  });
+
   it("lists the current recommended subscription models", async () => {
     await expect(new CodexClient(new FakeCodexCommandRunner([])).listModels()).resolves.toEqual([
       { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" },
@@ -84,12 +104,16 @@ class FakeCodexCommandRunner implements CodexCommandRunner {
 class StructuredCodexCommandRunner implements CodexCommandRunner {
   input?: CodexCommandInput;
   schema?: Record<string, unknown>;
+  attachmentContent?: string;
 
   async run(input: CodexCommandInput): Promise<CodexCommandResult> {
     this.input = input;
     const schemaPath = argumentValue(input.args, "--output-schema");
     const outputPath = argumentValue(input.args, "--output-last-message");
     this.schema = JSON.parse(await readFile(schemaPath, "utf8")) as Record<string, unknown>;
+    if (input.args.includes("--image")) {
+      this.attachmentContent = await readFile(argumentValue(input.args, "--image"), "utf8");
+    }
     await writeFile(outputPath, JSON.stringify({ kind: "final", text: "Synchronization complete." }));
     return {
       exitCode: 0,

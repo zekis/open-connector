@@ -2,8 +2,9 @@ import type { ConnectionService } from "../../connection-service.ts";
 import type { OAuthClientConfigService } from "../../oauth/oauth-client-config-service.ts";
 import type { MicrosoftTeamsRuntimeDeps } from "../../providers/microsoft_teams/graph-client.ts";
 
+import { Buffer } from "node:buffer";
 import { optionalRecord, optionalString, requiredRecord, requiredString } from "../../core/cast.ts";
-import { encodePathSegment } from "../../core/request.ts";
+import { encodePathSegment, readBoundedResponseBytes } from "../../core/request.ts";
 import {
   microsoftTeamsCollectionRequest,
   microsoftTeamsJsonRequest,
@@ -50,7 +51,27 @@ export interface TeamsGatewayGraphMessage {
   senderId?: string;
   senderName: string;
   text: string;
+  attachments: TeamsGatewayGraphAttachment[];
   modifiedAt?: string;
+}
+
+export interface TeamsGatewayGraphAttachment {
+  id: string;
+  kind: "reference" | "hosted";
+  name: string;
+  contentType?: string;
+  contentUrl: string;
+}
+
+export interface TeamsGatewayGraphFile {
+  name: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+export interface TeamsGatewayGraphReaction {
+  reactionType: string;
+  userId: string;
 }
 
 export interface TeamsGatewayGraphChannelThread {
@@ -63,6 +84,20 @@ export interface TeamsGatewayGraphContext {
   selfEmail: string;
   presenceSessionId?: string;
   deps: MicrosoftTeamsRuntimeDeps;
+}
+
+export interface TeamsGatewayGraphSubscriptionInput {
+  changeType: string;
+  notificationUrl: string;
+  resource: string;
+  clientState: string;
+  expiresAt: string;
+}
+
+export interface TeamsGatewayGraphSubscription {
+  id: string;
+  resource: string;
+  expiresAt: string;
 }
 
 export interface ITeamsGatewayGraphClient {
@@ -84,6 +119,23 @@ export interface ITeamsGatewayGraphClient {
     since: string,
   ): Promise<TeamsGatewayGraphMessage[]>;
   listMessages(context: TeamsGatewayGraphContext, chatId: string, since: string): Promise<TeamsGatewayGraphMessage[]>;
+  getChatMessageReactions(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphReaction[]>;
+  getChannelReplyReactions(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string,
+  ): Promise<TeamsGatewayGraphReaction[]>;
+  downloadAttachment(
+    context: TeamsGatewayGraphContext,
+    attachment: TeamsGatewayGraphAttachment,
+    maxBytes: number,
+  ): Promise<TeamsGatewayGraphFile>;
   resolveUser(context: TeamsGatewayGraphContext, userId: string): Promise<TeamsGatewayGraphMember>;
   sendMessage(context: TeamsGatewayGraphContext, chatId: string, text: string): Promise<{ id?: string }>;
   sendChannelReply(
@@ -93,7 +145,31 @@ export interface ITeamsGatewayGraphClient {
     rootMessageId: string,
     text: string,
   ): Promise<{ id?: string }>;
+  sendChatAttachment(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    file: File,
+    caption?: string,
+  ): Promise<{ id?: string; name: string; webUrl: string }>;
+  sendChannelReplyAttachment(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    file: File,
+    caption?: string,
+  ): Promise<{ id?: string; name: string; webUrl: string }>;
   createOneOnOneChat(context: TeamsGatewayGraphContext, recipientEmail: string): Promise<{ id: string }>;
+  createSubscription(
+    context: TeamsGatewayGraphContext,
+    input: TeamsGatewayGraphSubscriptionInput,
+  ): Promise<TeamsGatewayGraphSubscription>;
+  renewSubscription(
+    context: TeamsGatewayGraphContext,
+    subscriptionId: string,
+    expiresAt: string,
+  ): Promise<TeamsGatewayGraphSubscription>;
+  deleteSubscription(context: TeamsGatewayGraphContext, subscriptionId: string): Promise<void>;
   setPresence(context: TeamsGatewayGraphContext): Promise<void>;
   clearPresence(context: TeamsGatewayGraphContext): Promise<void>;
 }
@@ -321,6 +397,58 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
     return messages.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
   }
 
+  async getChatMessageReactions(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphReaction[]> {
+    const message = await microsoftTeamsJsonRequest<unknown>(
+      `chats/${encodePathSegment(chatId)}/messages/${encodePathSegment(messageId)}`,
+      context.deps,
+    );
+    return readReactions(message);
+  }
+
+  async getChannelReplyReactions(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string,
+  ): Promise<TeamsGatewayGraphReaction[]> {
+    const message = await microsoftTeamsJsonRequest<unknown>(
+      `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}` +
+        `/messages/${encodePathSegment(rootMessageId)}/replies/${encodePathSegment(replyId)}`,
+      context.deps,
+    );
+    return readReactions(message);
+  }
+
+  async downloadAttachment(
+    context: TeamsGatewayGraphContext,
+    attachment: TeamsGatewayGraphAttachment,
+    maxBytes: number,
+  ): Promise<TeamsGatewayGraphFile> {
+    const response =
+      attachment.kind === "reference"
+        ? await microsoftTeamsRequest(
+            `shares/u!${Buffer.from(attachment.contentUrl, "utf8").toString("base64url")}/driveItem/content`,
+            context.deps,
+          )
+        : await microsoftTeamsRequest(hostedContentPath(attachment.contentUrl), context.deps);
+    const bytes = await readBoundedResponseBytes(response, {
+      maxBytes,
+      fieldName: `Microsoft Teams attachment ${attachment.name}`,
+      createError: (message) => new ProviderRequestError(413, message),
+    });
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "application/octet-stream";
+    return {
+      name: attachment.kind === "hosted" ? ensureImageExtension(attachment.name, contentType) : attachment.name,
+      contentType,
+      bytes,
+    };
+  }
+
   async resolveUser(context: TeamsGatewayGraphContext, userId: string): Promise<TeamsGatewayGraphMember> {
     const value = requiredRecord(
       await microsoftTeamsJsonRequest<unknown>(`users/${encodePathSegment(userId)}`, context.deps, {
@@ -364,6 +492,81 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
     return { id: optionalString(value.id) };
   }
 
+  async sendChatAttachment(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    file: File,
+    caption = "",
+  ): Promise<{ id?: string; name: string; webUrl: string }> {
+    const item = await uploadOneDriveFile(context, file);
+    const driveId = requiredString(optionalRecord(item.parentReference)?.driveId, "OneDrive item drive ID");
+    const itemId = requiredString(item.id, "OneDrive item ID");
+    const shareLink = optionalRecord(
+      await microsoftTeamsJsonRequest<unknown>(
+        `drives/${encodePathSegment(driveId)}/items/${encodePathSegment(itemId)}/createLink`,
+        context.deps,
+        { method: "POST", body: { type: "view", scope: "organization" } },
+      ),
+    );
+    const webUrl = optionalString(optionalRecord(shareLink?.link)?.webUrl) ?? optionalString(item.webUrl);
+    if (!webUrl) throw new ProviderRequestError(502, "Microsoft Teams file share link is missing.");
+    const sent = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(`chats/${encodePathSegment(chatId)}/messages`, context.deps, {
+        method: "POST",
+        body: {
+          body: {
+            contentType: "html",
+            content: `${caption ? `${escapeHtml(caption)}<br>` : ""}📎 <a href="${escapeHtml(webUrl)}">${escapeHtml(file.name)}</a>`,
+          },
+        },
+      }),
+      "Microsoft Teams sent file message",
+    );
+    return { id: optionalString(sent.id), name: optionalString(item.name) ?? file.name, webUrl };
+  }
+
+  async sendChannelReplyAttachment(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    file: File,
+    caption = "",
+  ): Promise<{ id?: string; name: string; webUrl: string }> {
+    const folder = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(
+        `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}/filesFolder`,
+        context.deps,
+      ),
+      "Microsoft Teams channel files folder",
+    );
+    const driveId = requiredString(optionalRecord(folder.parentReference)?.driveId, "Channel files drive ID");
+    const folderId = requiredString(folder.id, "Channel files folder ID");
+    const item = await uploadDriveFile(context, driveId, folderId, file);
+    const webUrl = requiredString(item.webUrl, "Channel file web URL");
+    const name = optionalString(item.name) ?? file.name;
+    const attachmentId = driveItemAttachmentId(item);
+    const sent = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(
+        `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}` +
+          `/messages/${encodePathSegment(rootMessageId)}/replies`,
+        context.deps,
+        {
+          method: "POST",
+          body: {
+            body: {
+              contentType: "html",
+              content: `${caption ? escapeHtml(caption) : ""}<attachment id="${escapeHtml(attachmentId)}"></attachment>`,
+            },
+            attachments: [{ id: attachmentId, contentType: "reference", contentUrl: webUrl, name }],
+          },
+        },
+      ),
+      "Microsoft Teams sent channel file reply",
+    );
+    return { id: optionalString(sent.id), name, webUrl };
+  }
+
   async createOneOnOneChat(context: TeamsGatewayGraphContext, recipientEmail: string): Promise<{ id: string }> {
     const members = [context.selfEmail, recipientEmail].map((email) => ({
       "@odata.type": "#microsoft.graph.aadUserConversationMember",
@@ -378,6 +581,47 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
       "Microsoft Teams chat",
     );
     return { id: requiredString(value.id, "Microsoft Teams chat id") };
+  }
+
+  async createSubscription(
+    context: TeamsGatewayGraphContext,
+    input: TeamsGatewayGraphSubscriptionInput,
+  ): Promise<TeamsGatewayGraphSubscription> {
+    const value = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>("subscriptions", context.deps, {
+        method: "POST",
+        body: {
+          changeType: input.changeType,
+          notificationUrl: input.notificationUrl,
+          resource: input.resource,
+          clientState: input.clientState,
+          expirationDateTime: input.expiresAt,
+        },
+      }),
+      "Microsoft Graph subscription",
+    );
+    return readGraphSubscription(value, input.resource);
+  }
+
+  async renewSubscription(
+    context: TeamsGatewayGraphContext,
+    subscriptionId: string,
+    expiresAt: string,
+  ): Promise<TeamsGatewayGraphSubscription> {
+    const value = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(`subscriptions/${encodePathSegment(subscriptionId)}`, context.deps, {
+        method: "PATCH",
+        body: { expirationDateTime: expiresAt },
+      }),
+      "Microsoft Graph subscription",
+    );
+    return readGraphSubscription(value, "");
+  }
+
+  async deleteSubscription(context: TeamsGatewayGraphContext, subscriptionId: string): Promise<void> {
+    await microsoftTeamsRequest(`subscriptions/${encodePathSegment(subscriptionId)}`, context.deps, {
+      method: "DELETE",
+    });
   }
 
   async setPresence(context: TeamsGatewayGraphContext): Promise<void> {
@@ -412,6 +656,17 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
   }
 }
 
+function readGraphSubscription(
+  value: Record<string, unknown>,
+  fallbackResource: string,
+): TeamsGatewayGraphSubscription {
+  return {
+    id: requiredString(value.id, "Microsoft Graph subscription id"),
+    resource: optionalString(value.resource) ?? fallbackResource,
+    expiresAt: requiredString(value.expirationDateTime, "Microsoft Graph subscription expiration"),
+  };
+}
+
 function readMessage(value: unknown): TeamsGatewayGraphMessage[] {
   const item = optionalRecord(value);
   const createdAt = optionalString(item?.createdDateTime);
@@ -419,8 +674,10 @@ function readMessage(value: unknown): TeamsGatewayGraphMessage[] {
   if (!item || !createdAt || !id || (optionalString(item.messageType) ?? "message") !== "message") return [];
   const from = optionalRecord(optionalRecord(item.from)?.user);
   const body = optionalRecord(item.body);
-  const text = htmlToText(optionalString(body?.content) ?? "");
-  if (!text) return [];
+  const bodyContent = optionalString(body?.content) ?? "";
+  const text = htmlToText(bodyContent);
+  const attachments = readAttachments(item.attachments, bodyContent);
+  if (!text && attachments.length === 0) return [];
   return [
     {
       id,
@@ -429,8 +686,43 @@ function readMessage(value: unknown): TeamsGatewayGraphMessage[] {
       senderId: optionalString(from?.id),
       senderName: optionalString(from?.displayName) ?? "Unknown",
       text,
+      attachments,
     },
   ];
+}
+
+function readAttachments(value: unknown, bodyContent: string): TeamsGatewayGraphAttachment[] {
+  const attachments = Array.isArray(value)
+    ? value.flatMap((entry, index): TeamsGatewayGraphAttachment[] => {
+        const attachment = optionalRecord(entry);
+        if (optionalString(attachment?.contentType)?.toLowerCase() !== "reference") return [];
+        const contentUrl = optionalString(attachment?.contentUrl);
+        if (!attachment || !contentUrl) return [];
+        return [
+          {
+            id: optionalString(attachment.id) ?? `reference-${index + 1}`,
+            kind: "reference",
+            name: optionalString(attachment.name) ?? `attachment-${index + 1}`,
+            contentType: "reference",
+            contentUrl,
+          },
+        ];
+      })
+    : [];
+  const hostedPattern =
+    /<img[^>]+src=["'](https:\/\/graph\.microsoft\.com\/[^"']+\/hostedContents\/[^"']+\/\$value)["']/giu;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = hostedPattern.exec(bodyContent))) {
+    index += 1;
+    attachments.push({
+      id: `hosted-${index}`,
+      kind: "hosted",
+      name: `image-${index}`,
+      contentUrl: match[1]!.replaceAll("&amp;", "&"),
+    });
+  }
+  return attachments;
 }
 
 function readMember(value: unknown): TeamsGatewayGraphMember[] {
@@ -448,6 +740,167 @@ function readMember(value: unknown): TeamsGatewayGraphMember[] {
   ];
 }
 
+function readReactions(value: unknown): TeamsGatewayGraphReaction[] {
+  const reactions = optionalRecord(value)?.reactions;
+  if (!Array.isArray(reactions)) return [];
+  return reactions.flatMap((value) => {
+    const reaction = optionalRecord(value);
+    const reactionType = optionalString(reaction?.reactionType);
+    const user = optionalRecord(optionalRecord(reaction?.user)?.user);
+    const userId = optionalString(user?.id);
+    return reactionType && userId ? [{ reactionType, userId }] : [];
+  });
+}
+
+const simpleUploadMaxBytes = 4 * 1024 * 1024;
+const uploadChunkBytes = 5 * 320 * 1024;
+const uploadResponseMaxBytes = 8 * 1024 * 1024;
+
+async function uploadOneDriveFile(context: TeamsGatewayGraphContext, file: File): Promise<Record<string, unknown>> {
+  const folder = await ensureOneDriveFolder(context);
+  const driveId = requiredString(optionalRecord(folder.parentReference)?.driveId, "OneDrive folder drive ID");
+  const folderId = requiredString(folder.id, "OneDrive folder ID");
+  return uploadDriveFile(context, driveId, folderId, file);
+}
+
+async function ensureOneDriveFolder(context: TeamsGatewayGraphContext): Promise<Record<string, unknown>> {
+  try {
+    return requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>("me/drive/root:/OpenConnector", context.deps),
+      "OpenConnector OneDrive folder",
+    );
+  } catch (error) {
+    if (!(error instanceof ProviderRequestError) || error.status !== 404) throw error;
+  }
+  try {
+    return requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>("me/drive/root/children", context.deps, {
+        method: "POST",
+        body: {
+          name: "OpenConnector",
+          folder: {},
+          "@microsoft.graph.conflictBehavior": "fail",
+        },
+      }),
+      "OpenConnector OneDrive folder",
+    );
+  } catch (error) {
+    if (!(error instanceof ProviderRequestError) || error.status !== 409) throw error;
+    return requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>("me/drive/root:/OpenConnector", context.deps),
+      "OpenConnector OneDrive folder",
+    );
+  }
+}
+
+async function uploadDriveFile(
+  context: TeamsGatewayGraphContext,
+  driveId: string,
+  parentItemId: string,
+  file: File,
+): Promise<Record<string, unknown>> {
+  const itemPath =
+    `drives/${encodePathSegment(driveId)}/items/${encodePathSegment(parentItemId)}` +
+    `:/${encodePathSegment(file.name)}:`;
+  if (file.size <= simpleUploadMaxBytes) {
+    return requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(`${itemPath}/content`, context.deps, {
+        method: "PUT",
+        headers: { "content-type": file.type || "application/octet-stream" },
+        rawBody: file,
+      }),
+      "Microsoft Teams uploaded file",
+    );
+  }
+  const session = requiredRecord(
+    await microsoftTeamsJsonRequest<unknown>(`${itemPath}/createUploadSession`, context.deps, {
+      method: "POST",
+      body: { item: { "@microsoft.graph.conflictBehavior": "replace", name: file.name } },
+    }),
+    "Microsoft Teams upload session",
+  );
+  const uploadUrl = requiredString(session.uploadUrl, "Microsoft Teams upload URL");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let finalItem: Record<string, unknown> | undefined;
+  for (let start = 0; start < bytes.byteLength; start += uploadChunkBytes) {
+    const end = Math.min(start + uploadChunkBytes, bytes.byteLength);
+    const chunk = bytes.slice(start, end);
+    const response = await context.deps.fetcher(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "content-length": String(chunk.byteLength),
+        "content-range": `bytes ${start}-${end - 1}/${bytes.byteLength}`,
+      },
+      body: chunk,
+      signal: context.deps.signal,
+    });
+    if (!response.ok) {
+      throw new ProviderRequestError(
+        response.status,
+        `Microsoft Teams file upload failed with HTTP ${response.status}.`,
+      );
+    }
+    const payload = await readBoundedResponseBytes(response, {
+      maxBytes: uploadResponseMaxBytes,
+      fieldName: "Microsoft Teams upload response",
+      createError: (message) => new ProviderRequestError(502, message),
+    });
+    if (response.status !== 202 && payload.byteLength > 0) {
+      try {
+        finalItem = requiredRecord(JSON.parse(new TextDecoder().decode(payload)), "Microsoft Teams uploaded file");
+      } catch (error) {
+        if (error instanceof ProviderRequestError) throw error;
+        throw new ProviderRequestError(502, "Microsoft Teams returned an invalid upload response.", error);
+      }
+    }
+  }
+  if (!finalItem) throw new ProviderRequestError(502, "Microsoft Teams upload session returned no drive item.");
+  return finalItem;
+}
+
+function driveItemAttachmentId(item: Record<string, unknown>): string {
+  const tag = optionalString(item.eTag) ?? optionalString(item.cTag) ?? "";
+  return (
+    tag.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu)?.[0] ??
+    requiredString(item.id, "Microsoft Teams drive item ID")
+  );
+}
+
+function hostedContentPath(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ProviderRequestError(400, "Microsoft Teams hosted content URL is invalid.");
+  }
+  const pattern =
+    /^\/v1\.0\/(?:chats\/[^/]+\/messages\/[^/]+|teams\/[^/]+\/channels\/[^/]+\/messages\/[^/]+(?:\/replies\/[^/]+)?)\/hostedContents\/[^/]+\/\$value$/u;
+  if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || !pattern.test(url.pathname)) {
+    throw new ProviderRequestError(400, "Microsoft Teams hosted content URL is outside Microsoft Graph.");
+  }
+  return `${url.pathname.slice("/v1.0/".length)}${url.search}`;
+}
+
+function ensureImageExtension(name: string, contentType: string): string {
+  if (/\.[a-z0-9]{1,10}$/iu.test(name)) return name;
+  const extension: Record<string, string> = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+  };
+  return `${name}.${extension[contentType] ?? "img"}`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function htmlToText(value: string): string {
   return value
     .replace(/<br\s*\/?\s*>/giu, "\n")
@@ -459,7 +912,15 @@ function htmlToText(value: string): string {
     .replace(/&gt;/giu, ">")
     .replace(/&quot;/giu, '"')
     .replace(/&#39;/giu, "'")
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/giu, decodeNumericHtmlEntity)
     .replace(/[ \t]+/gu, " ")
     .replace(/\n\s+/gu, "\n")
     .trim();
+}
+
+function decodeNumericHtmlEntity(match: string, hexadecimal: string | undefined, decimal: string | undefined): string {
+  const codePoint = Number.parseInt(hexadecimal ?? decimal ?? "", hexadecimal ? 16 : 10);
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
+  if (codePoint >= 0xd800 && codePoint <= 0xdfff) return match;
+  return String.fromCodePoint(codePoint);
 }

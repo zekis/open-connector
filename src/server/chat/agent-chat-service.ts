@@ -10,6 +10,7 @@ import type { IClaudeCodeClient } from "../agents/claude-code-client.ts";
 import type { CodexClient } from "../agents/codex-client.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
+import type { ITransitFileService } from "../files/transit-file-store.ts";
 import type { FlowRunner } from "../flows/flow-runner.ts";
 import type { FlowService } from "../flows/flow-service.ts";
 import type {
@@ -60,6 +61,7 @@ export interface AgentChatServiceOptions {
     "attachChatContinuation" | "consumeApproved" | "getActionApproval" | "storeChatResponse"
   >;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
+  transitFiles?: Pick<ITransitFileService, "read">;
   now?(): Date;
 }
 
@@ -463,6 +465,7 @@ export class AgentChatService implements IAgentChatService {
   ): Promise<AgentChatResponse> {
     const toolActivity = [...initialToolActivity];
     const queuedApprovalIds: string[] = [];
+    const attachments = await this.resolveTurnAttachments(messages);
     try {
       for (let step = 0; step <= maxToolSteps; step++) {
         assertChatNotCancelled(options.signal);
@@ -481,6 +484,7 @@ export class AgentChatService implements IAgentChatService {
             options.extension?.includeFlowTools,
           ),
           outputSchema: claudeAgentDecisionSchema,
+          attachments,
           signal: options.signal,
         });
         const decision = readClaudeAgentDecision(result.structuredOutput);
@@ -552,6 +556,25 @@ export class AgentChatService implements IAgentChatService {
       throw error;
     }
     throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
+  }
+
+  private async resolveTurnAttachments(messages: AgentChatMessage[]): Promise<AgentTurnRequest["attachments"]> {
+    if (!this.options.transitFiles) return undefined;
+    const references = new Map(
+      messages
+        .flatMap((message) => message.attachments ?? [])
+        .flatMap((attachment) => (attachment.fileId ? [[attachment.fileId, attachment] as const] : [])),
+    );
+    const attachments: NonNullable<AgentTurnRequest["attachments"]> = [];
+    for (const [fileId, reference] of references) {
+      try {
+        const stored = await this.options.transitFiles.read(fileId);
+        attachments.push({ id: reference.id ?? fileId, file: stored.file });
+      } catch {
+        // The metadata remains in the prompt even when a temporary file has expired.
+      }
+    }
+    return attachments;
   }
 
   private async pauseForApprovals(
@@ -842,7 +865,8 @@ function readMessages(body: Record<string, unknown>): AgentChatMessage[] {
     }
     const content = readRequiredText(message.content, `messages[${index}].content`, maxMessageCharacters);
     totalCharacters += content.length;
-    return { role, content };
+    const attachments = readMessageAttachments(message.attachments, index);
+    return attachments ? { role, content, attachments } : { role, content };
   });
   if (totalCharacters > maxConversationCharacters) {
     throw new AgentChatError(
@@ -854,6 +878,27 @@ function readMessages(body: Record<string, unknown>): AgentChatMessage[] {
     throw new AgentChatError("invalid_chat", "The last chat message must be from the user.");
   }
   return messages;
+}
+
+function readMessageAttachments(value: unknown, messageIndex: number): AgentChatMessage["attachments"] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 10) {
+    throw new AgentChatError("invalid_chat", `messages[${messageIndex}].attachments must contain at most 10 items.`);
+  }
+  return value.map((item, attachmentIndex) => {
+    const field = `messages[${messageIndex}].attachments[${attachmentIndex}]`;
+    const attachment = readRequiredObject(item, field);
+    const sizeBytes = readOptionalInteger(attachment.sizeBytes, `${field}.sizeBytes`, 0, 25 * 1024 * 1024) ?? 0;
+    return {
+      id: readOptionalText(attachment.id, `${field}.id`, 300),
+      fileId: readOptionalText(attachment.fileId, `${field}.fileId`, 300),
+      name: readRequiredText(attachment.name, `${field}.name`, 300),
+      mimeType: readRequiredText(attachment.mimeType, `${field}.mimeType`, 200),
+      sizeBytes,
+      downloadUrl: readOptionalText(attachment.downloadUrl, `${field}.downloadUrl`, 2_000),
+      error: readOptionalText(attachment.error, `${field}.error`, 1_000),
+    };
+  });
 }
 
 function createSystemPrompt(voiceMode: boolean, extensionPrompt?: string): string {

@@ -280,6 +280,7 @@ export class ConnectServer {
       );
     }
     if (this.options.teamsGateway) {
+      app.post("/api/teams-gateway/webhook", (context) => this.receiveTeamsGatewayWebhook(context));
       app.get("/api/teams-gateway/agents", (context) => this.listTeamsGatewayAgents(context));
       app.post("/api/teams-gateway/agents", (context) => this.createTeamsGatewayAgent(context));
       app.put("/api/teams-gateway/agents/:id", (context) =>
@@ -1304,6 +1305,21 @@ export class ConnectServer {
 
   private async listTeamsGatewayAgents(context: Context): Promise<Response> {
     return context.json(await this.options.teamsGateway!.listAgents());
+  }
+
+  private async receiveTeamsGatewayWebhook(context: Context): Promise<Response> {
+    const validationToken = optionalString(context.req.query("validationToken"));
+    if (validationToken) {
+      return context.text(validationToken, 200, { "Content-Type": "text/plain" });
+    }
+    const accepted = await this.options.teamsGateway!.handleNotifications(await readJsonBody(context), (promise) => {
+      try {
+        context.executionCtx.waitUntil(promise);
+      } catch {
+        // Node's Hono adapter has no execution context; the already-started promise remains active.
+      }
+    });
+    return context.json({ accepted }, 202);
   }
 
   private async createTeamsGatewayAgent(context: Context): Promise<Response> {

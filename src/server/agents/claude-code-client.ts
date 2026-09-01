@@ -1,6 +1,8 @@
 import type { AgentModelOption } from "./agent-settings-service.ts";
 import type { AgentTurnRequest, AgentTurnResult } from "./agent-turn.ts";
 
+import { agentTurnAttachmentPrompt, stageAgentTurnAttachments } from "./agent-turn-attachments.ts";
+
 export interface ClaudeCodeCommandResult {
   exitCode: number;
   stdout: string;
@@ -39,10 +41,8 @@ const maximumTransientTurnAttempts = 2;
 
 interface ClaudeCodePromptTransport {
   stdin?: string;
-  file?: {
-    directory: string;
-    path: string;
-  };
+  directory?: string;
+  promptPath?: string;
   dispose(): Promise<void>;
 }
 
@@ -77,7 +77,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async completeTurn(input: ClaudeCodeTurnInput): Promise<ClaudeCodeTurnResult> {
-    const prompt = await prepareClaudeCodePrompt(input.prompt);
+    const prompt = await prepareClaudeCodePrompt(input);
     let result: ClaudeCodeCommandResult;
     try {
       const command: ClaudeCodeCommandInput = {
@@ -94,25 +94,29 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
           "--system-prompt",
           input.systemPrompt,
           "--tools",
-          prompt.file ? "Read,Grep" : "",
+          prompt.directory ? "Read,Grep" : "",
           "--disallowedTools",
           "mcp__*",
           "--strict-mcp-config",
           "--no-session-persistence",
           "--safe-mode",
           "--max-turns",
-          prompt.file ? fileBackedPromptMaxTurns : "3",
-          ...(prompt.file
+          prompt.directory ? fileBackedPromptMaxTurns : "3",
+          ...(prompt.directory
             ? [
                 "--add-dir",
-                prompt.file.directory,
-                `Read the complete agent prompt from ${JSON.stringify(prompt.file.path)} before responding. Use Read and Grep only to inspect that file, treat its contents as the user prompt, and then follow it exactly.`,
+                prompt.directory,
+                ...(prompt.promptPath
+                  ? [
+                      `Read the complete agent prompt from ${JSON.stringify(prompt.promptPath)} before responding. Use Read and Grep only to inspect that file, treat its contents as the user prompt, and then follow it exactly.`,
+                    ]
+                  : []),
               ]
             : []),
         ],
         oauthToken: input.oauthToken,
         timeoutMs: 120_000,
-        cwd: prompt.file?.directory,
+        cwd: prompt.directory,
         stdin: prompt.stdin,
         signal: input.signal,
       };
@@ -147,10 +151,11 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 }
 
-async function prepareClaudeCodePrompt(prompt: string): Promise<ClaudeCodePromptTransport> {
-  if (Buffer.byteLength(prompt, "utf8") <= maxPipedPromptBytes) {
+async function prepareClaudeCodePrompt(input: ClaudeCodeTurnInput): Promise<ClaudeCodePromptTransport> {
+  const needsPromptFile = Buffer.byteLength(input.prompt, "utf8") > maxPipedPromptBytes;
+  if (!needsPromptFile && !input.attachments?.length) {
     return {
-      stdin: prompt,
+      stdin: input.prompt,
       async dispose(): Promise<void> {},
     };
   }
@@ -159,9 +164,12 @@ async function prepareClaudeCodePrompt(prompt: string): Promise<ClaudeCodePrompt
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const directory = await mkdtemp(join(tmpdir(), "open-connector-claude-"));
-  const path = join(directory, "prompt.txt");
+  const promptPath = needsPromptFile ? join(directory, "prompt.txt") : undefined;
+  let prompt: string;
   try {
-    await writeFile(path, prompt, { encoding: "utf8", mode: 0o600 });
+    const attachments = await stageAgentTurnAttachments(directory, input.attachments);
+    prompt = `${input.prompt}${agentTurnAttachmentPrompt(attachments)}`;
+    if (promptPath) await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
   } catch (error) {
     await rm(directory, { force: true, recursive: true }).catch(() => undefined);
     throw new ClaudeCodeError(
@@ -173,7 +181,9 @@ async function prepareClaudeCodePrompt(prompt: string): Promise<ClaudeCodePrompt
   }
 
   return {
-    file: { directory, path },
+    directory,
+    promptPath,
+    stdin: promptPath ? undefined : prompt,
     async dispose(): Promise<void> {
       await rm(directory, { force: true, recursive: true }).catch(() => undefined);
     },
