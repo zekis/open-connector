@@ -233,6 +233,32 @@ describe("FeedService", () => {
     });
   });
 
+  it("keeps Feed posts and standalone approvals within the latest 48 hours", async () => {
+    const expiredDetail = structuredClone(detail);
+    expiredDetail.run.id = "run-expired";
+    expiredDetail.run.triggerEvent!.occurredAt = "2026-08-12T00:00:00.000Z";
+    expiredDetail.run.startedAt = "2026-08-12T00:00:00.000Z";
+    expiredDetail.run.updatedAt = "2026-08-12T00:05:00.000Z";
+    const recentApproval = createActionApproval();
+    const expiredApproval = {
+      ...createActionApproval(),
+      id: "approval-expired",
+      requestedAt: "2026-08-12T00:00:00.000Z",
+    };
+    const service = createService(
+      new MemoryFeedStore(),
+      [recentApproval, expiredApproval],
+      completedResponse("Done."),
+      undefined,
+      undefined,
+      [detail, expiredDetail],
+    );
+
+    const page = await service.list();
+
+    expect(page.items.map((item) => item.id)).toEqual([`approval:${recentApproval.id}`, "flow:run-1"]);
+  });
+
   it("loads one attachment through its originating connection without exposing provider credentials", async () => {
     const actions = {
       run: vi.fn(async () => ({
@@ -299,6 +325,7 @@ function createService(
     agentChat: { respond },
     actions,
     store,
+    now: () => new Date("2026-08-15T01:00:00.000Z"),
   });
 }
 

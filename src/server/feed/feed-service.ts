@@ -35,6 +35,7 @@ const maximumFeedLimit = 100;
 const maximumCommentCharacters = 20_000;
 const maximumContextCharacters = 30_000;
 const maximumStoredComments = 100;
+const feedWindowMilliseconds = 48 * 60 * 60 * 1_000;
 
 export interface FeedServiceOptions {
   flows: Pick<FlowRunner, "listRuns" | "getRunDetail" | "listApprovals">;
@@ -43,6 +44,7 @@ export interface FeedServiceOptions {
   actions?: Pick<IActionRunner, "run">;
   getPolicySnapshot?(): Promise<ActionPolicySnapshot>;
   store: IFeedStore;
+  now?(): Date;
 }
 
 /** Projects Flow activity into a durable, conversational activity feed. */
@@ -55,6 +57,7 @@ export class FeedService {
 
   async list(limit: number = defaultFeedLimit): Promise<FeedPage> {
     const boundedLimit = Math.max(1, Math.min(limit, maximumFeedLimit));
+    const cutoff = new Date((this.options.now?.() ?? new Date()).getTime() - feedWindowMilliseconds).toISOString();
     const [runs, threads, actionApprovals, flowApprovals] = await Promise.all([
       this.options.flows.listRuns(undefined, 500),
       this.options.store.listThreads(500),
@@ -62,8 +65,13 @@ export class FeedService {
       this.options.flows.listApprovals(),
     ]);
     const threadByRunId = new Map(threads.map((thread) => [thread.flowRunId, thread]));
-    const linkedActionApprovalIds = new Set(threads.flatMap((thread) => thread.pendingApprovalId ?? []));
-    const activityRuns = runs.slice(0, boundedLimit);
+    const activityRuns = runs.filter((run) => feedRunTimestamp(run) >= cutoff).slice(0, boundedLimit);
+    const activityRunIds = new Set(activityRuns.map((run) => run.id));
+    const linkedActionApprovalIds = new Set(
+      threads
+        .filter((thread) => activityRunIds.has(thread.flowRunId))
+        .flatMap((thread) => thread.pendingApprovalId ?? []),
+    );
     const runItems = await Promise.all(
       activityRuns.map(async (run) =>
         this.flowItem(await this.options.flows.getRunDetail(run.id), threadByRunId.get(run.id), actionApprovals),
@@ -72,10 +80,18 @@ export class FeedService {
     const linkedFlowApprovalIds = new Set(runItems.flatMap((item) => item.approvals.map((approval) => approval.id)));
     const standaloneItems = [
       ...actionApprovals
-        .filter((approval) => approval.status === "pending" && !linkedActionApprovalIds.has(approval.id))
+        .filter(
+          (approval) =>
+            approval.status === "pending" &&
+            approval.requestedAt >= cutoff &&
+            !linkedActionApprovalIds.has(approval.id),
+        )
         .map(actionApprovalItem),
       ...flowApprovals
-        .filter((approval) => approval.status === "pending" && !linkedFlowApprovalIds.has(approval.id))
+        .filter(
+          (approval) =>
+            approval.status === "pending" && approval.requestedAt >= cutoff && !linkedFlowApprovalIds.has(approval.id),
+        )
         .map(flowApprovalItem),
     ];
     return {
@@ -239,6 +255,10 @@ export class FeedService {
       canReply: true,
     };
   }
+}
+
+function feedRunTimestamp(run: FlowRun): string {
+  return run.triggerEvent?.occurredAt ?? run.startedAt;
 }
 
 export class FeedError extends Error {

@@ -109,10 +109,15 @@ describe("FeedCard", () => {
     expect(html.indexOf('class="feed-generated-image')).toBeLessThan(html.indexOf('class="feed-social-copy"'));
   });
 
-  it("builds an ordered speech playlist for Feed playback", () => {
-    expect(feedSpeechSequence([item, { ...item, id: "flow:run-2", title: "Second update" }])).toEqual([
-      expect.stringContaining("Feed post 1. Roy Hill weekly update."),
-      expect.stringContaining("Feed post 2. Second update."),
-    ]);
+  it("queues only post bodies and caps Feed playback at ten posts", () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      ...item,
+      id: `flow:run-${index}`,
+      title: `Heading ${index}`,
+      post: { ...item.post, text: `Post body ${index}` },
+    }));
+
+    expect(feedSpeechSequence(items)).toEqual(Array.from({ length: 10 }, (_, index) => `Post body ${index}`));
+    expect(feedSpeechSequence([{ ...item, post: { ...item.post, text: "   " } }])).toEqual([]);
   });
 });

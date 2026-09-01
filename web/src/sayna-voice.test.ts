@@ -167,6 +167,35 @@ describe("Sayna voice helpers", () => {
     client.close();
   });
 
+  it("lets a caller advance to the next independent post after playback completes", async () => {
+    const runtime = installVoiceRuntime();
+    const posts = ["First post.", "Second post.", "Third post."];
+    let nextIndex = 1;
+    let client: SaynaVoiceClient;
+    const completed = vi.fn(() => {
+      const next = posts[nextIndex];
+      nextIndex += 1;
+      if (next) void client.speak(next);
+    });
+    client = createClient({ onPlaybackComplete: completed });
+    const speaking = client.speak(posts[0]!);
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await speaking;
+
+    for (let index = 1; index <= posts.length; index += 1) {
+      expect(sentSpeech(runtime.sockets[0]!)).toHaveLength(index);
+      runtime.sockets[0]!.receive('{"type":"tts_playback_complete"}');
+      if (index < posts.length) {
+        await vi.waitFor(() => expect(sentSpeech(runtime.sockets[0]!)).toHaveLength(index + 1));
+      }
+    }
+
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(posts.length));
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual(posts);
+    client.close();
+  });
+
   it("ignores playback echo but lets finalized user speech interrupt the response", async () => {
     const runtime = installVoiceRuntime();
     const transcripts: string[] = [];

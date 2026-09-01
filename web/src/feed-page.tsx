@@ -52,6 +52,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Textarea } from "@/components/ui/textarea";
 
 const feedRefreshIntervalMs = 5_000;
+const maximumSpokenFeedPosts = 10;
+
+interface FeedPlayback {
+  posts: string[];
+  nextIndex: number;
+}
 
 export function FeedPageView(props: { data: AppData; onRefresh(): void }): ReactNode {
   const [page, setPage] = useState<FeedPage>({ items: [] });
@@ -65,6 +71,8 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
   const [replyBusy, setReplyBusy] = useState<string | undefined>(undefined);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
+  const feedPlaybackRef = useRef<FeedPlayback | undefined>(undefined);
+  const advanceFeedPlaybackRef = useRef<() => void>(() => {});
   const providersByService = useMemo(
     () => new Map(props.data.providers.map((provider) => [provider.service, provider])),
     [props.data.providers],
@@ -108,15 +116,19 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
     const client = new SaynaVoiceClient(voiceConfiguration, {
       onStateChange: (nextState) => {
         setVoiceState(nextState);
-        if (nextState === "error" || nextState === "offline") setFeedPlaying(false);
+        if (nextState === "error" || nextState === "offline") {
+          feedPlaybackRef.current = undefined;
+          setFeedPlaying(false);
+        }
       },
       onListeningChange: () => {},
       onTranscript: () => {},
       onError: (message) => {
         setVoiceError(message);
+        feedPlaybackRef.current = undefined;
         setFeedPlaying(false);
       },
-      onPlaybackComplete: () => setFeedPlaying(false),
+      onPlaybackComplete: () => advanceFeedPlaybackRef.current(),
     });
     voiceClientRef.current = client;
     return () => {
@@ -124,6 +136,24 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
       if (voiceClientRef.current === client) voiceClientRef.current = undefined;
     };
   }, [voiceConfiguration]);
+
+  advanceFeedPlaybackRef.current = (): void => {
+    const playback = feedPlaybackRef.current;
+    const client = voiceClientRef.current;
+    if (!playback || !client) {
+      feedPlaybackRef.current = undefined;
+      setFeedPlaying(false);
+      return;
+    }
+    const post = playback.posts[playback.nextIndex];
+    if (!post) {
+      feedPlaybackRef.current = undefined;
+      setFeedPlaying(false);
+      return;
+    }
+    playback.nextIndex += 1;
+    void client.speak(post);
+  };
 
   function toggleFeedPlayback(): void {
     const client = voiceClientRef.current;
@@ -133,14 +163,16 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
     }
     if (feedPlaying) {
       client.stopSpeaking();
+      feedPlaybackRef.current = undefined;
       setFeedPlaying(false);
       return;
     }
-    const speech = feedSpeechSequence(page.items);
-    if (speech.length === 0) return;
+    const posts = feedSpeechSequence(page.items);
+    if (posts.length === 0) return;
     setVoiceError(null);
+    feedPlaybackRef.current = { posts, nextIndex: 0 };
     setFeedPlaying(true);
-    void client.speakSequence(speech);
+    advanceFeedPlaybackRef.current();
   }
 
   async function decide(approval: FeedApprovalSummary, decision: "approve" | "deny"): Promise<void> {
@@ -261,9 +293,12 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
   );
 }
 
-/** Builds the ordered speech playlist used by the Feed's shared Sayna player. */
+/** Returns at most ten post bodies in the same order shown in the Feed. */
 export function feedSpeechSequence(items: readonly FeedItem[]): string[] {
-  return items.map((item, index) => `Feed post ${index + 1}. ${item.title}.\n\n${item.post.text}`);
+  return items
+    .map((item) => item.post.text.trim())
+    .filter(Boolean)
+    .slice(0, maximumSpokenFeedPosts);
 }
 
 export function FeedCard(props: {
