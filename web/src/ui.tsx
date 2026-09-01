@@ -65,6 +65,7 @@ import { ResourcesPage } from "./resources-page";
 import { RunsPage } from "./runs-page";
 import { InlineError, StatusDot } from "./shared-ui";
 import { SynapsePage } from "./synapse-page";
+import { TeamsGatewayAgentPage } from "./teams-gateway-agent-page";
 import { TeamsGatewayPage } from "./teams-gateway-page";
 import { useThemeMode } from "./theme";
 import { TriggersPage } from "./triggers-page";
@@ -509,6 +510,8 @@ function AppShell(props: {
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/teams-gateway" element={<TeamsGatewayPage data={props.data} />} />
+            <Route path="/teams-gateway/new" element={<TeamsGatewayAgentPage data={props.data} />} />
+            <Route path="/teams-gateway/:agentId/edit" element={<TeamsGatewayAgentPage data={props.data} />} />
             <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/synapse" element={<SynapsePage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/kanban" element={<KanbanPage data={props.data} onRefresh={props.onRefresh} />} />

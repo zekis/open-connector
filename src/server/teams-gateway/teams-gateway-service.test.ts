@@ -89,6 +89,29 @@ describe("TeamsGatewayService", () => {
     ).rejects.toMatchObject({ code: "agent_connection_not_found" });
   });
 
+  it("keeps an enabled gateway agent online when Teams presence publishing is unavailable", async () => {
+    const store = new MemoryTeamsGatewayStore();
+    const graph = new FakeTeamsGraph([]);
+    graph.presenceError = new Error("Presence publishing is forbidden.");
+    const service = createService(store, graph, new FakeAgentChat([]));
+
+    const created = await service.upsertAgent(undefined, {
+      name: "Operations agent",
+      enabled: true,
+      teamsConnectionId: teamsConnection.id,
+      agentProvider: "claude_code",
+      allowedDomains: ["company.test"],
+      allowedExternalUsers: [],
+      proactiveDmUsers: [],
+      confirmBeforeTools: true,
+      threadWindowHours: 12,
+      toolGrants: [],
+    });
+
+    expect(created.presence).toMatchObject({ status: "online", error: "Presence publishing is forbidden." });
+    expect(await service.getMetrics()).toMatchObject([{ agentId: created.id, presence: "online" }]);
+  });
+
   it("processes authorized inbound DMs once and records prior contact", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
     const graph = new FakeTeamsGraph([
@@ -475,6 +498,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   channelThreads: TeamsGatewayGraphChannelThread[] = [];
   listedChannelReplies: ReturnType<typeof inboundMessage>[] = [];
   presenceSets = 0;
+  presenceError?: Error;
 
   constructor(messages: ReturnType<typeof inboundMessage>[]) {
     this.messages = messages;
@@ -556,6 +580,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
 
   async setPresence(): Promise<void> {
     this.presenceSets += 1;
+    if (this.presenceError) throw this.presenceError;
   }
 
   async clearPresence(): Promise<void> {}

@@ -61,7 +61,7 @@ export interface TeamsGatewayGraphChannelThread {
 export interface TeamsGatewayGraphContext {
   selfId: string;
   selfEmail: string;
-  presenceSessionId: string;
+  presenceSessionId?: string;
   deps: MicrosoftTeamsRuntimeDeps;
 }
 
@@ -114,9 +114,6 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
   async context(connectionId: string): Promise<TeamsGatewayGraphContext> {
     const execution = await this.connections.resolveForExecutionById("microsoft_teams", connectionId);
     const oauthClientConfig = await this.oauthClientConfigs.getConfig("microsoft_teams");
-    if (!oauthClientConfig?.clientId) {
-      throw new Error("Microsoft Teams OAuth client configuration is required for the presence session.");
-    }
     const credential = await execution.getCredential("microsoft_teams");
     if (!credential || credential.authType !== "oauth2") {
       throw new Error(`Microsoft Teams connection ${connectionId} does not have a delegated OAuth credential.`);
@@ -130,7 +127,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
     return {
       selfId: credential.profile.accountId,
       selfEmail: selfEmail.toLowerCase(),
-      presenceSessionId: oauthClientConfig.clientId,
+      presenceSessionId: oauthClientConfig?.clientId,
       deps: {
         accessToken: credential.accessToken,
         tokenType: credential.tokenType,
@@ -384,6 +381,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
   }
 
   async setPresence(context: TeamsGatewayGraphContext): Promise<void> {
+    if (!context.presenceSessionId) return;
     try {
       await microsoftTeamsRequest(`users/${encodePathSegment(context.selfId)}/presence/setPresence`, context.deps, {
         method: "POST",
@@ -406,6 +404,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
   }
 
   async clearPresence(context: TeamsGatewayGraphContext): Promise<void> {
+    if (!context.presenceSessionId) return;
     await microsoftTeamsRequest(`users/${encodePathSegment(context.selfId)}/presence/clearPresence`, context.deps, {
       method: "POST",
       body: { sessionId: context.presenceSessionId },

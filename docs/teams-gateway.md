@@ -10,13 +10,15 @@ and a second credential store are not required.
 1. Configure the Microsoft Teams OAuth client, then connect each Microsoft 365 account that should
    act as an agent. Reconnect older Teams connections so they receive `User.ReadBasic.All`,
    `Chat.Read`, `Chat.Create`, `ChatMessage.Send`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`,
-   `ChannelMessage.Read.All`, `ChannelMessage.Send`, and `Presence.ReadWrite`.
+   `ChannelMessage.Read.All`, and `ChannelMessage.Send`. `Presence.ReadWrite` is requested for
+   best-effort publishing of the identity's Teams availability, but the gateway does not depend on
+   tenants allowing that optional write.
 2. Connect a Claude or ChatGPT subscription on the **Agents** page.
 3. Open **Teams gateway**, create an agent, and select its Teams identity and agent runtime.
 4. Enter at least one internal email domain and choose the exact OpenConnector connections that the
    agent may use.
-5. Save the agent. OpenConnector marks the identity available in Teams and discovers its group
-   chats, joined Teams, and visible channels. The Node/Docker runtime polls every 30 seconds by default. Set
+5. Save the agent. OpenConnector marks the gateway agent online, attempts to publish its Teams
+   availability, and discovers its group chats, joined Teams, and visible channels. The Node/Docker runtime polls every 30 seconds by default. Set
    `OOMOL_CONNECT_TEAMS_GATEWAY_POLL_MS` to change the interval; the minimum is 10 seconds.
 
 Each Teams connection can belong to only one gateway agent. Automatic continuous polling currently

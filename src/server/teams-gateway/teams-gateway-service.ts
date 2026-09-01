@@ -82,7 +82,6 @@ const requiredTeamsGatewayScopes = [
   microsoftTeamsProviderScopes.channelReadBasicAll,
   microsoftTeamsProviderScopes.channelMessageReadAll,
   microsoftTeamsProviderScopes.channelMessageSend,
-  microsoftTeamsProviderScopes.presenceReadWrite,
 ];
 const maxThreadMessages = 40;
 const maxConcurrentChats = 4;
@@ -123,7 +122,7 @@ export class TeamsGatewayService {
       const agentThreads = threads.filter((thread) => thread.agentId === agent.id);
       return {
         agentId: agent.id,
-        presence: agent.presence?.status ?? (agent.enabled ? "pending" : "offline"),
+        presence: agent.enabled ? "online" : "offline",
         teamCount: agentGroups.filter((group) => group.kind === "team").length,
         channelCount: agentGroups.reduce((total, group) => total + group.channels.length, 0),
         groupChatCount: agentGroups.filter((group) => group.kind === "group_chat").length,
@@ -959,12 +958,14 @@ export class TeamsGatewayService {
     force = false,
   ): Promise<TeamsGatewayAgent> {
     const attemptedAt = this.now().toISOString();
-    if (
-      !force &&
-      agent.presence?.lastAttemptAt &&
-      Date.parse(attemptedAt) - Date.parse(agent.presence.lastAttemptAt) < presenceRefreshIntervalMs
-    ) {
-      return agent;
+    if (!force && agent.presence?.status === "online") {
+      if (agent.presence.error) return agent;
+      if (
+        agent.presence.lastAttemptAt &&
+        Date.parse(attemptedAt) - Date.parse(agent.presence.lastAttemptAt) < presenceRefreshIntervalMs
+      ) {
+        return agent;
+      }
     }
     try {
       const context = graphContext ?? (await this.options.graph.context(agent.teamsConnectionId));
@@ -979,14 +980,17 @@ export class TeamsGatewayService {
       const updated: TeamsGatewayAgent = {
         ...agent,
         presence: {
-          status: "error",
+          status: "online",
           lastAttemptAt: attemptedAt,
           lastSetAt: agent.presence?.lastSetAt,
           error: error instanceof Error ? error.message : "Unable to set Teams presence.",
         },
       };
       await this.options.store.setAgent(updated);
-      this.logError(error, "Teams gateway presence refresh failed", { agentId: agent.id });
+      this.options.logger?.warn(
+        { agentId: agent.id, err: error },
+        "Teams gateway is online but Microsoft Teams presence publishing is unavailable",
+      );
       return updated;
     }
   }

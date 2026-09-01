@@ -117,16 +117,8 @@
 .teams-presence-label.online {
   color: var(--success);
 }
-.teams-presence-label.error,
-.teams-presence-error {
-  color: var(--destructive);
-}
 .teams-presence-label.pending {
   color: var(--warning);
-}
-.teams-presence-error {
-  margin: -5px 0 0;
-  font-size: 11px;
 }
 .teams-metric-grid {
   display: grid;
@@ -235,16 +227,34 @@
   color: var(--foreground);
   font-size: 14px;
 }
-.teams-agent-panel {
-  display: flex !important;
-  flex-direction: column;
-  gap: 18px !important;
-  overflow-y: auto;
-  padding: 22px !important;
+.teams-agent-setup-page {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+.teams-agent-setup {
+  width: 100%;
+  max-height: none;
+}
+.teams-agent-setup-heading,
+.teams-agent-setup-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.teams-agent-setup-heading p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.teams-agent-setup-actions {
+  align-items: center;
 }
 .teams-agent-editor {
   display: grid;
   gap: 17px;
+  margin-top: 20px;
 }
 .teams-form-grid {
   display: grid;
@@ -311,6 +321,11 @@
 @media (max-width: 620px) {
   .teams-gateway-intro {
     flex-direction: column;
+  }
+  .teams-agent-setup-heading,
+  .teams-agent-setup-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
   .teams-summary-grid {
     grid-template-columns: 1fr;
