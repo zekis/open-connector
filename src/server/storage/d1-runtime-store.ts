@@ -25,6 +25,12 @@ import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
+  ITeamsGatewayStore,
+  TeamsGatewayAgent,
+  TeamsGatewayContact,
+  TeamsGatewayThread,
+} from "../teams-gateway/teams-gateway-types.ts";
+import type {
   AbandonIdempotencyInput,
   CompleteIdempotencyInput,
   IdempotencyClaimInput,
@@ -62,6 +68,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly connectionApprovalStore: D1ConnectionApprovalStore;
   readonly synapseStore: D1SynapseStore;
   readonly kanbanStore: D1KanbanStore;
+  readonly teamsGatewayStore: D1TeamsGatewayStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -78,6 +85,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.connectionApprovalStore = new D1ConnectionApprovalStore(database, secretCodec);
     this.synapseStore = new D1SynapseStore(database, secretCodec);
     this.kanbanStore = new D1KanbanStore(database, secretCodec);
+    this.teamsGatewayStore = new D1TeamsGatewayStore(database, secretCodec);
   }
 }
 
@@ -979,6 +987,131 @@ export class D1SynapseStore implements ISynapseStore {
   async deleteWorkspace(id: string): Promise<boolean> {
     const result = await this.database.prepare("delete from synapse_workspaces where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export class D1TeamsGatewayStore implements ITeamsGatewayStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setAgent(agent: TeamsGatewayAgent): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into teams_gateway_agents (id, updated_at, value) values (?, ?, ?)
+         on conflict(id) do update set updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(agent.id, agent.updatedAt, await this.secretCodec.encode(JSON.stringify(agent)))
+      .run();
+  }
+
+  async getAgent(id: string): Promise<TeamsGatewayAgent | undefined> {
+    const row = await this.database
+      .prepare("select value from teams_gateway_agents where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row ? parseJson<TeamsGatewayAgent>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listAgents(): Promise<TeamsGatewayAgent[]> {
+    const { results } = await this.database
+      .prepare("select value from teams_gateway_agents order by updated_at desc, id desc limit 500")
+      .all<RuntimeRow>();
+    return Promise.all(
+      results.map(async (row) => parseJson<TeamsGatewayAgent>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  async deleteAgent(id: string): Promise<boolean> {
+    await this.database.prepare("delete from teams_gateway_contacts where agent_id = ?").bind(id).run();
+    await this.database.prepare("delete from teams_gateway_threads where agent_id = ?").bind(id).run();
+    const result = await this.database.prepare("delete from teams_gateway_agents where id = ?").bind(id).run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async setThread(thread: TeamsGatewayThread): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into teams_gateway_threads (id, agent_id, chat_id, updated_at, value) values (?, ?, ?, ?, ?)
+         on conflict(id) do update set agent_id = excluded.agent_id, chat_id = excluded.chat_id,
+           updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(
+        thread.id,
+        thread.agentId,
+        thread.chatId,
+        thread.updatedAt,
+        await this.secretCodec.encode(JSON.stringify(thread)),
+      )
+      .run();
+  }
+
+  async getThread(agentId: string, chatId: string): Promise<TeamsGatewayThread | undefined> {
+    const row = await this.database
+      .prepare("select value from teams_gateway_threads where agent_id = ? and chat_id = ?")
+      .bind(agentId, chatId)
+      .first<RuntimeRow>();
+    return row ? parseJson<TeamsGatewayThread>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listThreads(agentId?: string, limit = 100): Promise<TeamsGatewayThread[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 500));
+    const statement = agentId
+      ? this.database
+          .prepare(
+            "select value from teams_gateway_threads where agent_id = ? order by updated_at desc, id desc limit ?",
+          )
+          .bind(agentId, boundedLimit)
+      : this.database
+          .prepare("select value from teams_gateway_threads order by updated_at desc, id desc limit ?")
+          .bind(boundedLimit);
+    const { results } = await statement.all<RuntimeRow>();
+    return Promise.all(
+      results.map(async (row) =>
+        parseJson<TeamsGatewayThread>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
+  }
+
+  async setContact(contact: TeamsGatewayContact): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into teams_gateway_contacts (id, agent_id, email, updated_at, value) values (?, ?, ?, ?, ?)
+         on conflict(id) do update set agent_id = excluded.agent_id, email = excluded.email,
+           updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(
+        contact.id,
+        contact.agentId,
+        contact.email,
+        contact.lastInboundAt,
+        await this.secretCodec.encode(JSON.stringify(contact)),
+      )
+      .run();
+  }
+
+  async getContact(agentId: string, email: string): Promise<TeamsGatewayContact | undefined> {
+    const row = await this.database
+      .prepare("select value from teams_gateway_contacts where agent_id = ? and email = ?")
+      .bind(agentId, email.toLowerCase())
+      .first<RuntimeRow>();
+    return row ? parseJson<TeamsGatewayContact>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
+  async listContacts(agentId: string): Promise<TeamsGatewayContact[]> {
+    const { results } = await this.database
+      .prepare("select value from teams_gateway_contacts where agent_id = ? order by updated_at desc, id desc")
+      .bind(agentId)
+      .all<RuntimeRow>();
+    return Promise.all(
+      results.map(async (row) =>
+        parseJson<TeamsGatewayContact>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
   }
 }
 

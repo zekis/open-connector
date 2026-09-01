@@ -43,6 +43,7 @@
     "providers": "プロバイダー",
     "actions": "アクション",
     "agents": "エージェント",
+    "teamsGateway": "Teams gateway",
     "chat": "チャット",
     "synapse": "Synapse",
     "kanban": "カンバン",
@@ -87,6 +88,10 @@
       "agents": {
         "title": "エージェント",
         "subtitle": "エージェントランタイムと API 認証情報を設定します。"
+      },
+      "teams-gateway": {
+        "title": "Teams gateway",
+        "subtitle": "Run policy-controlled 1:1 agents through Microsoft Teams accounts."
       },
       "chat": {
         "title": "チャット",

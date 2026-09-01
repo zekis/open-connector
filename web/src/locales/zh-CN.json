@@ -43,6 +43,7 @@
     "providers": "提供商",
     "actions": "操作",
     "agents": "智能体",
+    "teamsGateway": "Teams gateway",
     "chat": "聊天",
     "synapse": "Synapse",
     "kanban": "看板",
@@ -87,6 +88,10 @@
       "agents": {
         "title": "智能体",
         "subtitle": "设置智能体运行时及其 API 凭据。"
+      },
+      "teams-gateway": {
+        "title": "Teams gateway",
+        "subtitle": "Run policy-controlled 1:1 agents through Microsoft Teams accounts."
       },
       "chat": {
         "title": "聊天",

@@ -76,13 +76,26 @@ export interface AgentChatExtensionTool {
   inputSchema: Record<string, unknown>;
 }
 
+export interface AgentChatConnectorGrant {
+  connectionId: string;
+  actionIds: ReadonlySet<string>;
+}
+
 export interface AgentChatExtension {
   systemPrompt: string;
   context?: unknown;
   tools: AgentChatExtensionTool[];
+  /** Exact connection/action pairs visible to this workspace. */
+  connectorGrants?: readonly AgentChatConnectorGrant[];
+  /** Legacy action-only restriction used by workspaces that expose every compatible connection. */
   connectorActionIds?: ReadonlySet<string>;
   connectorApprovalPolicy?: "enforce" | "bypass";
   includeFlowTools?: boolean;
+  beforeConnectorAction?(
+    actionId: string,
+    connectionId: string,
+    input: Record<string, unknown>,
+  ): Promise<AgentChatToolActivity | undefined>;
   runTool(toolName: string, input: Record<string, unknown>): Promise<AgentChatToolActivity | undefined>;
 }
 
@@ -248,17 +261,25 @@ export class AgentChatService implements IAgentChatService {
   }
 
   async resume(approvalId: string): Promise<AgentChatResponse> {
+    return this.resumeWithExtension(approvalId);
+  }
+
+  async resumeWithExtension(approvalId: string, extension?: AgentChatExtension): Promise<AgentChatResponse> {
     const approval = await this.options.approvals.getActionApproval(approvalId);
     if (!approval || approval.caller !== "chat" || !approval.chat) {
       throw new AgentChatError("approval_not_found", `Chat approval not found: ${approvalId}.`, 404);
     }
     const batchApprovalIds = uniqueApprovalIds(approval.chat.batchApprovalIds ?? [approval.id]);
     return await this.withApprovalBatchLock(batchApprovalIds, async () =>
-      this.resumeApprovalBatch(approvalId, batchApprovalIds),
+      this.resumeApprovalBatch(approvalId, batchApprovalIds, extension),
     );
   }
 
-  private async resumeApprovalBatch(triggerApprovalId: string, batchApprovalIds: string[]): Promise<AgentChatResponse> {
+  private async resumeApprovalBatch(
+    triggerApprovalId: string,
+    batchApprovalIds: string[],
+    extension?: AgentChatExtension,
+  ): Promise<AgentChatResponse> {
     const approvals = await Promise.all(batchApprovalIds.map((id) => this.options.approvals.getActionApproval(id)));
     if (
       approvals.some((candidate) => !candidate || candidate.caller !== "chat" || !candidate.chat) ||
@@ -346,6 +367,7 @@ export class AgentChatService implements IAgentChatService {
       const response = await this.continueConversation(continuation.messages, prepared, toolActivity, {
         voiceMode: continuation.voiceMode ?? false,
         timeZone: continuation.timeZone ?? localTimeZone(),
+        extension,
       });
       await this.storeBatchResponse(
         chatApprovals.map((candidate) => candidate.id),
@@ -450,7 +472,7 @@ export class AgentChatService implements IAgentChatService {
           systemPrompt: createSystemPrompt(options.voiceMode, options.extension?.systemPrompt),
           prompt: createChatPrompt(
             messages,
-            prepared.context.connections,
+            visibleConnections(prepared.context.connections, options.extension),
             toolActivity,
             this.options.now?.() ?? new Date(),
             options.timeZone,
@@ -612,16 +634,19 @@ export class AgentChatService implements IAgentChatService {
     signal?: AbortSignal,
   ): Promise<AgentChatToolActivity> {
     if (toolName === searchToolName) {
-      return this.searchActions(input, context, extension?.connectorActionIds);
+      return this.searchActions(input, context, extension);
     }
     if (toolName === runToolName) {
       const actionId = readRequiredText(input.actionId, "actionId", 200);
-      if (extension?.connectorActionIds && !extension.connectorActionIds.has(actionId)) {
+      const connectionId = readRequiredText(input.connectionId, "connectionId", 200);
+      if (!connectorPairAllowed(extension, connectionId, actionId)) {
         return failedActivity("action", actionId, input, {
           code: "action_not_available",
-          message: `Action is not available for this task: ${actionId}.`,
+          message: `Action is not available on connection ${connectionId} for this task: ${actionId}.`,
         });
       }
+      const intercepted = await extension?.beforeConnectorAction?.(actionId, connectionId, input);
+      if (intercepted) return intercepted;
       return await this.runAction(input, context, extension?.connectorApprovalPolicy ?? "enforce", signal);
     }
     if (extension?.includeFlowTools !== false) {
@@ -649,19 +674,20 @@ export class AgentChatService implements IAgentChatService {
   private searchActions(
     input: Record<string, unknown>,
     context: ChatContext,
-    allowedActionIds?: ReadonlySet<string>,
+    extension?: AgentChatExtension,
   ): AgentChatToolActivity {
     const query = readRequiredText(input.query, "query", 256);
     const connectionId = readOptionalText(input.connectionId, "connectionId", 200);
     const limit = readOptionalInteger(input.limit, "limit", 1, maxSearchResults) ?? 5;
     const connection = connectionId ? context.connectionsById.get(connectionId) : undefined;
-    if (connectionId && !connection) {
+    if (connectionId && (!connection || !connectorConnectionAllowed(extension, connectionId))) {
       return failedActivity("search", "Search connected actions", input, {
         code: "connection_not_found",
         message: `Connection not found: ${connectionId}.`,
       });
     }
 
+    const allowedActionIds = connectorAllowedActionIds(extension);
     const actionSearch = allowedActionIds
       ? buildActionSearchIndex(context.actions.filter((action) => allowedActionIds.has(action.id)))
       : context.actionSearch;
@@ -676,7 +702,7 @@ export class AgentChatService implements IAgentChatService {
         description: action.description,
         requiredScopes: action.requiredScopes,
         compatibleConnections: context.connections
-          .filter((item) => item.service === action.service)
+          .filter((item) => item.service === action.service && connectorPairAllowed(extension, item.id, action.id))
           .map(connectionReference),
         inputSchema: action.inputSchema,
       };
@@ -950,6 +976,37 @@ function connectionReference(connection: ConnectionSummary): Record<string, unkn
     displayName: connection.profile.displayName,
     grantedScopes: connection.profile.grantedScopes,
   };
+}
+
+function connectorAllowedActionIds(extension: AgentChatExtension | undefined): ReadonlySet<string> | undefined {
+  if (extension?.connectorGrants) {
+    return new Set(extension.connectorGrants.flatMap((grant) => [...grant.actionIds]));
+  }
+  return extension?.connectorActionIds;
+}
+
+function connectorConnectionAllowed(extension: AgentChatExtension | undefined, connectionId: string): boolean {
+  return !extension?.connectorGrants || extension.connectorGrants.some((grant) => grant.connectionId === connectionId);
+}
+
+function connectorPairAllowed(
+  extension: AgentChatExtension | undefined,
+  connectionId: string,
+  actionId: string,
+): boolean {
+  if (extension?.connectorGrants) {
+    return extension.connectorGrants.some(
+      (grant) => grant.connectionId === connectionId && grant.actionIds.has(actionId),
+    );
+  }
+  return !extension?.connectorActionIds || extension.connectorActionIds.has(actionId);
+}
+
+function visibleConnections(
+  connections: ConnectionSummary[],
+  extension: AgentChatExtension | undefined,
+): ConnectionSummary[] {
+  return connections.filter((connection) => connectorConnectionAllowed(extension, connection.id));
 }
 
 function failedActivity(

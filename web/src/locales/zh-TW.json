@@ -43,6 +43,7 @@
     "providers": "服務提供者",
     "actions": "動作",
     "agents": "代理",
+    "teamsGateway": "Teams gateway",
     "chat": "聊天",
     "synapse": "Synapse",
     "kanban": "看板",
@@ -87,6 +88,10 @@
       "agents": {
         "title": "代理",
         "subtitle": "設定代理執行階段及其 API 憑證。"
+      },
+      "teams-gateway": {
+        "title": "Teams gateway",
+        "subtitle": "Run policy-controlled 1:1 agents through Microsoft Teams accounts."
       },
       "chat": {
         "title": "聊天",

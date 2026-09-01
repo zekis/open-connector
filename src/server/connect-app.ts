@@ -31,6 +31,8 @@ import { KanbanGenerator } from "./kanban/kanban-generator.ts";
 import { KanbanService } from "./kanban/kanban-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import { SynapseService } from "./synapse/synapse-service.ts";
+import { TeamsGatewayGraphClient } from "./teams-gateway/teams-gateway-graph.ts";
+import { TeamsGatewayService } from "./teams-gateway/teams-gateway-service.ts";
 
 export interface ConnectAppOptions {
   catalog: CatalogStore;
@@ -53,6 +55,7 @@ export interface ConnectApp {
   app: Hono;
   runtimeAuthConfigured: boolean;
   flowTriggers: FlowTriggerEngine;
+  teamsGateway: TeamsGatewayService;
 }
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
@@ -139,6 +142,16 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     approvals: connectionApprovals,
     getPolicySnapshot,
   });
+  const teamsGateway = new TeamsGatewayService({
+    catalog: options.catalog,
+    connections,
+    agents: agentCredentials,
+    agentChat,
+    approvals: connectionApprovals,
+    graph: new TeamsGatewayGraphClient(connections),
+    store: options.runtimeDatabase.teamsGatewayStore,
+    logger: options.logger,
+  });
   const kanban = new KanbanService({
     catalog: options.catalog,
     connections,
@@ -206,6 +219,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       transitFiles: options.transitFiles,
       runtimeTokens,
       mobileAuth,
+      teamsGateway,
       runtimePolicyStore: options.runtimeDatabase.runtimePolicyStore,
       registerStaticRoutes: options.registerStaticRoutes,
       auth: {
@@ -225,5 +239,6 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       Boolean(options.verifyRuntimeJwt) ||
       (options.computeRuntimeAuthConfigured === false ? false : await hasStoredRuntimeTokens()),
     flowTriggers,
+    teamsGateway,
   };
 }

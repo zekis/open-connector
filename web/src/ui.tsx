@@ -32,6 +32,7 @@ import {
   KeyRound,
   Loader2,
   MessageCircle,
+  MessageSquareMore,
   Monitor,
   Moon,
   Newspaper,
@@ -64,6 +65,7 @@ import { ResourcesPage } from "./resources-page";
 import { RunsPage } from "./runs-page";
 import { InlineError, StatusDot } from "./shared-ui";
 import { SynapsePage } from "./synapse-page";
+import { TeamsGatewayPage } from "./teams-gateway-page";
 import { useThemeMode } from "./theme";
 import { TriggersPage } from "./triggers-page";
 import { Button } from "@/components/ui/button";
@@ -77,6 +79,7 @@ const navItems = [
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
+  { path: "/teams-gateway", labelKey: "nav.teamsGateway", icon: MessageSquareMore },
   { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
   { path: "/synapse", labelKey: "nav.synapse", icon: BrainCircuit },
   { path: "/kanban", labelKey: "nav.kanban", icon: Columns3 },
@@ -505,6 +508,7 @@ function AppShell(props: {
             <Route path="/actions" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/actions/:actionId" element={<ActionsPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/agents" element={<AgentsPage data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/teams-gateway" element={<TeamsGatewayPage data={props.data} />} />
             <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/synapse" element={<SynapsePage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/kanban" element={<KanbanPage data={props.data} onRefresh={props.onRefresh} />} />
@@ -693,6 +697,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "agents") {
     return "agents";
+  }
+  if (section === "teams-gateway") {
+    return "teams-gateway";
   }
   if (section === "chat") {
     return "chat";

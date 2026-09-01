@@ -66,7 +66,7 @@ const transitFiles = new TransitFileService({
 });
 const webSocketServer = new WebSocketServer({ noServer: true });
 await transitFiles.cleanupExpired();
-const { app, runtimeAuthConfigured, flowTriggers } = await createConnectApp({
+const { app, runtimeAuthConfigured, flowTriggers, teamsGateway } = await createConnectApp({
   catalog,
   providerLoader,
   runtimeDatabase,
@@ -84,15 +84,18 @@ const { app, runtimeAuthConfigured, flowTriggers } = await createConnectApp({
   logger,
 });
 flowTriggers.start();
+teamsGateway.start(readPositiveIntegerEnv("OOMOL_CONNECT_TEAMS_GATEWAY_POLL_MS", 30_000));
 
 process.once("SIGINT", () => {
   flowTriggers.stop();
+  teamsGateway.stop();
   webSocketServer.close();
   runtimeDatabase.close();
   process.exit(0);
 });
 process.once("SIGTERM", () => {
   flowTriggers.stop();
+  teamsGateway.stop();
   webSocketServer.close();
   runtimeDatabase.close();
   process.exit(0);

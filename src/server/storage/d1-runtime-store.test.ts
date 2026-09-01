@@ -1,6 +1,11 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
 import type { D1DatabaseBinding, D1PreparedStatementBinding } from "../cloudflare/cloudflare-bindings.ts";
 import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
+import type {
+  TeamsGatewayAgent,
+  TeamsGatewayContact,
+  TeamsGatewayThread,
+} from "../teams-gateway/teams-gateway-types.ts";
 
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -72,6 +77,26 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.kanbanStore.getBoard(board.id)).resolves.toEqual(board);
     await expect(database.kanbanStore.listBoards()).resolves.toEqual([board]);
     await expect(database.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
+  });
+
+  it("persists and cascades encrypted Teams gateway state", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("teams-gateway-key"),
+    });
+    const records = testTeamsGatewayRecords();
+
+    await database.teamsGatewayStore.setAgent(records.agent);
+    await database.teamsGatewayStore.setThread(records.thread);
+    await database.teamsGatewayStore.setContact(records.contact);
+
+    await expect(database.teamsGatewayStore.listAgents()).resolves.toEqual([records.agent]);
+    await expect(database.teamsGatewayStore.getThread(records.agent.id, records.thread.chatId)).resolves.toEqual(
+      records.thread,
+    );
+    await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(database.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
+    await expect(database.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
+    await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
   });
 
   it("persists encrypted Feed conversation threads", async () => {
@@ -611,6 +636,51 @@ function successResponse(data: unknown): RuntimeActionHttpResult {
   };
 }
 
+function testTeamsGatewayRecords(): {
+  agent: TeamsGatewayAgent;
+  thread: TeamsGatewayThread;
+  contact: TeamsGatewayContact;
+} {
+  const agent: TeamsGatewayAgent = {
+    id: "teams-agent-1",
+    name: "Operations agent",
+    enabled: true,
+    teamsConnectionId: "teams-connection-1",
+    agentProvider: "claude_code",
+    allowedDomains: ["company.test"],
+    allowedExternalUsers: [],
+    proactiveDmUsers: [],
+    confirmBeforeTools: true,
+    threadWindowHours: 12,
+    toolGrants: [],
+    watchStartedAt: "2026-09-01T00:00:00.000Z",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+  const thread: TeamsGatewayThread = {
+    id: `${agent.id}:chat-1`,
+    agentId: agent.id,
+    chatId: "chat-1",
+    participantId: "user-1",
+    participantEmail: "person@company.test",
+    participantName: "Person",
+    messages: [{ id: "message-1", role: "user", content: "Hello", createdAt: "2026-09-01T01:00:00.000Z" }],
+    cursorAt: "2026-09-01T01:00:00.000Z",
+    createdAt: "2026-09-01T01:00:00.000Z",
+    updatedAt: "2026-09-01T01:00:00.000Z",
+  };
+  const contact: TeamsGatewayContact = {
+    id: `${agent.id}:person@company.test`,
+    agentId: agent.id,
+    userId: "user-1",
+    email: "person@company.test",
+    chatId: "chat-1",
+    firstInboundAt: "2026-09-01T01:00:00.000Z",
+    lastInboundAt: "2026-09-01T01:00:00.000Z",
+  };
+  return { agent, thread, contact };
+}
+
 class SqliteD1Database implements D1DatabaseBinding {
   private readonly database = new DatabaseSync(":memory:");
 
@@ -644,6 +714,7 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(readFileSync(new URL("../../../migrations/0015_synapse.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0016_mobile_auth.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0017_kanban.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0018_teams_gateway.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

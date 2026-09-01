@@ -26,6 +26,7 @@ import type { RunLogCaller, RunLogListInput } from "./storage/runtime-store.ts";
 import type { RuntimeGrant, RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import type { SynapseService } from "./synapse/synapse-service.ts";
 import type { SynapseChatStreamEvent } from "./synapse/synapse-types.ts";
+import type { TeamsGatewayService } from "./teams-gateway/teams-gateway-service.ts";
 import type { Context } from "hono";
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -85,6 +86,7 @@ import { KanbanError } from "./kanban/kanban-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
 import { SynapseError } from "./synapse/synapse-service.ts";
+import { TeamsGatewayError } from "./teams-gateway/teams-gateway-service.ts";
 
 /**
  * Dependencies required to construct the local connector server.
@@ -103,6 +105,7 @@ export interface IConnectServerOptions {
   oauthFlow: OAuthFlowService;
   runtimeTokens: RuntimeTokenService;
   mobileAuth?: MobileAuthService;
+  teamsGateway?: TeamsGatewayService;
   actions: ActionRunner;
   flows?: FlowService;
   flowRunner?: FlowRunner;
@@ -276,6 +279,24 @@ export class ConnectServer {
         this.getAgentChatApproval(context, context.req.param("id")),
       );
     }
+    if (this.options.teamsGateway) {
+      app.get("/api/teams-gateway/agents", (context) => this.listTeamsGatewayAgents(context));
+      app.post("/api/teams-gateway/agents", (context) => this.createTeamsGatewayAgent(context));
+      app.put("/api/teams-gateway/agents/:id", (context) =>
+        this.updateTeamsGatewayAgent(context, context.req.param("id")),
+      );
+      app.delete("/api/teams-gateway/agents/:id", (context) =>
+        this.deleteTeamsGatewayAgent(context, context.req.param("id")),
+      );
+      app.get("/api/teams-gateway/threads", (context) => this.listTeamsGatewayThreads(context));
+      app.get("/api/teams-gateway/agents/:id/contacts", (context) =>
+        this.listTeamsGatewayContacts(context, context.req.param("id")),
+      );
+      app.post("/api/teams-gateway/poll", (context) => this.pollTeamsGateway(context));
+      app.post("/api/teams-gateway/agents/:id/send", (context) =>
+        this.sendTeamsGatewayMessage(context, context.req.param("id")),
+      );
+    }
     if (this.options.feed) {
       app.get("/api/feed", (context) => this.listFeed(context));
       app.get("/api/feed/:id/previews/:previewId", (context) =>
@@ -396,6 +417,9 @@ export class ConnectServer {
         return jsonError(context, error.status, error.code, error.message);
       }
       if (error instanceof KanbanGenerationError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      if (error instanceof TeamsGatewayError) {
         return jsonError(context, error.status, error.code, error.message);
       }
       this.options.logger?.error(
@@ -1276,6 +1300,46 @@ export class ConnectServer {
     return context.json(await this.options.kanban!.moveCard(id, cardKey, columnId));
   }
 
+  private async listTeamsGatewayAgents(context: Context): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.listAgents());
+  }
+
+  private async createTeamsGatewayAgent(context: Context): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.upsertAgent(undefined, await readJsonBody(context)), 201);
+  }
+
+  private async updateTeamsGatewayAgent(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.upsertAgent(id, await readJsonBody(context)));
+  }
+
+  private async deleteTeamsGatewayAgent(context: Context, id: string): Promise<Response> {
+    const deleted = await this.options.teamsGateway!.deleteAgent(id);
+    return deleted ? context.json({ ok: true }) : notFound(context);
+  }
+
+  private async listTeamsGatewayThreads(context: Context): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.listThreads(optionalString(context.req.query("agentId"))));
+  }
+
+  private async listTeamsGatewayContacts(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.listContacts(id));
+  }
+
+  private async pollTeamsGateway(context: Context): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.pollNow());
+  }
+
+  private async sendTeamsGatewayMessage(context: Context, id: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    const recipientEmail = requiredString(
+      body.recipientEmail,
+      "recipientEmail",
+      (message) => new TeamsGatewayError("invalid_input", message),
+    );
+    const text = requiredString(body.text, "text", (message) => new TeamsGatewayError("invalid_input", message));
+    return context.json(await this.options.teamsGateway!.sendProactiveMessage(id, recipientEmail, text));
+  }
+
   private async listFlows(context: Context): Promise<Response> {
     return this.writeFlowResult(context, this.requiredFlowService().list());
   }
@@ -1314,7 +1378,12 @@ export class ConnectServer {
   private async approveActionRequest(context: Context, id: string): Promise<Response> {
     try {
       const approval = await this.options.connectionApprovals!.approve(id);
-      if (approval.caller === "chat" && approval.chat && this.options.agentChat) {
+      if (
+        approval.caller === "chat" &&
+        approval.chat &&
+        this.options.agentChat &&
+        !(await this.options.teamsGateway?.ownsApproval(id))
+      ) {
         const response = await this.options.agentChat.resume(id);
         await this.recordFeedApprovalResponse(id, response);
         const resumed = await this.options.connectionApprovals!.getActionApproval(id);
@@ -1335,7 +1404,12 @@ export class ConnectServer {
   private async denyActionRequest(context: Context, id: string): Promise<Response> {
     try {
       const denied = await this.options.connectionApprovals!.deny(id);
-      if (denied.caller === "chat" && denied.chat && this.options.agentChat) {
+      if (
+        denied.caller === "chat" &&
+        denied.chat &&
+        this.options.agentChat &&
+        !(await this.options.teamsGateway?.ownsApproval(id))
+      ) {
         const response = await this.options.agentChat.resume(id);
         await this.recordFeedApprovalResponse(id, response);
         const resumed = await this.options.connectionApprovals!.getActionApproval(id);

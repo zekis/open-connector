@@ -9,6 +9,7 @@
 @import "./styles/providers.css";
 @import "./styles/actions.css";
 @import "./styles/agents.css";
+@import "./styles/teams-gateway.css";
 @import "./styles/chat.css";
 @import "./styles/feed.css";
 @import "./styles/synapse.css";

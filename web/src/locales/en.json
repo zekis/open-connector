@@ -43,6 +43,7 @@
     "providers": "Providers",
     "actions": "Actions",
     "agents": "Agents",
+    "teamsGateway": "Teams gateway",
     "chat": "Chat",
     "synapse": "Synapse",
     "kanban": "Kanban",
@@ -87,6 +88,10 @@
       "agents": {
         "title": "Agents",
         "subtitle": "Set up agent runtimes and their API credentials."
+      },
+      "teams-gateway": {
+        "title": "Teams gateway",
+        "subtitle": "Run policy-controlled 1:1 agents through Microsoft Teams accounts."
       },
       "chat": {
         "title": "Chat",

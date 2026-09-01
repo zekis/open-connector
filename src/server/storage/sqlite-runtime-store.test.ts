@@ -1,6 +1,11 @@
 import type { RuntimeActionHttpResult } from "../api/runtime-api.ts";
 import type { FlowApproval, FlowDefinition, FlowRun, FlowStep } from "../flows/flow-types.ts";
 import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
+import type {
+  TeamsGatewayAgent,
+  TeamsGatewayContact,
+  TeamsGatewayThread,
+} from "../teams-gateway/teams-gateway-types.ts";
 
 import { readFileSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -83,6 +88,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0015_synapse.sql",
       "0016_mobile_auth.sql",
       "0017_kanban.sql",
+      "0018_teams_gateway.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -160,6 +166,31 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.kanbanStore.getBoard(board.id)).resolves.toEqual(board);
     await expect(second.kanbanStore.listBoards()).resolves.toEqual([board]);
     await expect(second.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
+    second.close();
+  });
+
+  it("persists and cascades encrypted Teams gateway state", async () => {
+    const databasePath = await createDatabasePath();
+    const records = testTeamsGatewayRecords();
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("teams-gateway-key"),
+    });
+    await first.teamsGatewayStore.setAgent(records.agent);
+    await first.teamsGatewayStore.setThread(records.thread);
+    await first.teamsGatewayStore.setContact(records.contact);
+    first.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("teams-gateway-key"),
+    });
+    await expect(second.teamsGatewayStore.listAgents()).resolves.toEqual([records.agent]);
+    await expect(second.teamsGatewayStore.getThread(records.agent.id, records.thread.chatId)).resolves.toEqual(
+      records.thread,
+    );
+    await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(second.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
+    await expect(second.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
+    await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
     second.close();
   });
 
@@ -1083,6 +1114,10 @@ describe("SqliteRuntimeDatabase", () => {
       requestHash: "rotation-request-hash",
       requestedAt: "2026-08-05T00:00:00.000Z",
     });
+    const teamsGateway = testTeamsGatewayRecords();
+    await database.teamsGatewayStore.setAgent(teamsGateway.agent);
+    await database.teamsGatewayStore.setThread(teamsGateway.thread);
+    await database.teamsGatewayStore.setContact(teamsGateway.contact);
     await database.rotateSecretCodec(new AesGcmSecretCodec("new-key"));
     database.close();
 
@@ -1094,6 +1129,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withOldKey.flowStore.getFlow(flow.id)).rejects.toThrow();
     await expect(withOldKey.feedStore.getThread(feedThread.id)).rejects.toThrow();
     await expect(withOldKey.connectionApprovalStore.getActionApproval("action-approval-rotation")).rejects.toThrow();
+    await expect(withOldKey.teamsGatewayStore.getAgent(teamsGateway.agent.id)).rejects.toThrow();
     withOldKey.close();
 
     const withNewKey = new SqliteRuntimeDatabase(databasePath, {
@@ -1115,6 +1151,13 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(
       withNewKey.connectionApprovalStore.getActionApproval("action-approval-rotation"),
     ).resolves.toMatchObject({ input: { title: "rotated approval secret" } });
+    await expect(withNewKey.teamsGatewayStore.getAgent(teamsGateway.agent.id)).resolves.toEqual(teamsGateway.agent);
+    await expect(
+      withNewKey.teamsGatewayStore.getThread(teamsGateway.agent.id, teamsGateway.thread.chatId),
+    ).resolves.toEqual(teamsGateway.thread);
+    await expect(withNewKey.teamsGatewayStore.listContacts(teamsGateway.agent.id)).resolves.toEqual([
+      teamsGateway.contact,
+    ]);
     await expect(withNewKey.idempotencyStore.claim({ ...claim, claimId: "claim-3" })).resolves.toEqual({
       kind: "completed",
       response: successResponse({ token: "rotated-idempotency-secret" }),
@@ -1194,6 +1237,52 @@ function successResponse(data: unknown): RuntimeActionHttpResult {
       meta: {},
     },
   };
+}
+
+function testTeamsGatewayRecords(): {
+  agent: TeamsGatewayAgent;
+  thread: TeamsGatewayThread;
+  contact: TeamsGatewayContact;
+} {
+  const agent: TeamsGatewayAgent = {
+    id: "teams-agent-1",
+    name: "Operations agent",
+    enabled: true,
+    teamsConnectionId: "teams-connection-1",
+    agentProvider: "claude_code",
+    allowedDomains: ["company.test"],
+    allowedExternalUsers: [],
+    proactiveDmUsers: [],
+    confirmBeforeTools: true,
+    threadWindowHours: 12,
+    toolGrants: [{ connectionId: "outlook-1", actionIds: ["outlook.search_emails"] }],
+    watchStartedAt: "2026-09-01T00:00:00.000Z",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+  const thread: TeamsGatewayThread = {
+    id: `${agent.id}:chat-1`,
+    agentId: agent.id,
+    chatId: "chat-1",
+    participantId: "user-1",
+    participantEmail: "person@company.test",
+    participantName: "Person",
+    messages: [{ id: "message-1", role: "user", content: "Hello", createdAt: "2026-09-01T01:00:00.000Z" }],
+    cursorAt: "2026-09-01T01:00:00.000Z",
+    cursorMessageId: "message-1",
+    createdAt: "2026-09-01T01:00:00.000Z",
+    updatedAt: "2026-09-01T01:00:00.000Z",
+  };
+  const contact: TeamsGatewayContact = {
+    id: `${agent.id}:person@company.test`,
+    agentId: agent.id,
+    userId: "user-1",
+    email: "person@company.test",
+    chatId: "chat-1",
+    firstInboundAt: "2026-09-01T01:00:00.000Z",
+    lastInboundAt: "2026-09-01T01:00:00.000Z",
+  };
+  return { agent, thread, contact };
 }
 
 async function expectDatabaseDirectoryNotToContain(databasePath: string, needle: string): Promise<void> {

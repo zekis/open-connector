@@ -820,6 +820,64 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.prompt).not.toContain('"name":"create_flow"');
   });
 
+  it("keeps connector access scoped to exact connection and action pairs", async () => {
+    const hiddenConnection: ConnectionSummary = {
+      ...connection,
+      id: "connection-2",
+      connectionName: "hidden",
+      default: false,
+      profile: { ...connection.profile, accountId: "hidden-account", displayName: "Hidden account" },
+    };
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "search_connector_actions", arguments: { query: "lookup" } },
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "example.lookup",
+          connectionId: hiddenConnection.id,
+          input: { query: "record-42" },
+        },
+      },
+      { kind: "final", text: "The hidden connection was blocked." },
+    ]);
+    const actions = new FakeActionRunner();
+    const service = createService(claude, actions, true, new FakeChatApprovals(), new FakeFlowService(), undefined, [
+      connection,
+      hiddenConnection,
+    ]);
+
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Discover the record" }] },
+      {
+        systemPrompt: "Use only the explicitly granted account.",
+        tools: [],
+        connectorGrants: [{ connectionId: connection.id, actionIds: new Set(["example.lookup"]) }],
+        connectorApprovalPolicy: "bypass",
+        includeFlowTools: false,
+        async runTool() {
+          return undefined;
+        },
+      },
+    );
+
+    expect(response.toolActivity[0]?.output).toMatchObject({
+      results: [
+        {
+          actionId: "example.lookup",
+          compatibleConnections: [{ connectionId: connection.id }],
+        },
+      ],
+    });
+    expect(response.toolActivity[1]).toMatchObject({
+      ok: false,
+      output: { error: { code: "action_not_available" } },
+    });
+    expect(actions.inputs).toEqual([]);
+    expect(claude.inputs[0]?.prompt).toContain("Example account");
+    expect(claude.inputs[0]?.prompt).not.toContain("Hidden account");
+  });
+
   it("uses Claude to decide whether a live voice interruption cancels the running task", async () => {
     const claude = new FakeClaudeCodeClient([
       { cancelCurrentTask: true, reason: "The user explicitly replaced the request." },
@@ -911,13 +969,14 @@ function createService(
   approvals = new FakeChatApprovals(),
   flows = new FakeFlowService(),
   now?: () => Date,
+  connections: ConnectionSummary[] = [connection],
 ): AgentChatService {
   const catalog = createCatalogStore([provider], { executableActionIds: ["example.lookup"] });
   return new AgentChatService({
     catalog,
     connections: {
       async listConnections() {
-        return [connection];
+        return connections;
       },
     },
     agents: {

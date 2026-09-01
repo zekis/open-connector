@@ -1,21 +1,25 @@
 export const microsoftTeamsProviderScopes = {
   userRead: "User.Read",
+  userReadBasicAll: "User.ReadBasic.All",
   teamReadBasicAll: "Team.ReadBasic.All",
   channelReadBasicAll: "Channel.ReadBasic.All",
   channelMessageReadAll: "ChannelMessage.Read.All",
   channelMessageSend: "ChannelMessage.Send",
   chatRead: "Chat.Read",
+  chatCreate: "Chat.Create",
   chatMessageSend: "ChatMessage.Send",
   offlineAccess: "offline_access",
 } as const;
 
 export const microsoftTeamsOAuthScopes: string[] = [
   microsoftTeamsProviderScopes.userRead,
+  microsoftTeamsProviderScopes.userReadBasicAll,
   microsoftTeamsProviderScopes.teamReadBasicAll,
   microsoftTeamsProviderScopes.channelReadBasicAll,
   microsoftTeamsProviderScopes.channelMessageReadAll,
   microsoftTeamsProviderScopes.channelMessageSend,
   microsoftTeamsProviderScopes.chatRead,
+  microsoftTeamsProviderScopes.chatCreate,
   microsoftTeamsProviderScopes.chatMessageSend,
   microsoftTeamsProviderScopes.offlineAccess,
 ];

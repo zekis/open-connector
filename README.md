@@ -200,6 +200,10 @@ The console supports provider browsing, API key and OAuth client configuration, 
 creation, Action schema inspection, Action debugging, recent run review, and access to the
 generated OpenAPI and MCP metadata.
 
+The **Teams gateway** page can bind licensed Microsoft Teams accounts to Claude or Codex as
+independent 1:1 agents, with exact provider-connection grants, durable threads, plan confirmation,
+action approvals, and host-enforced DM restrictions. See [docs/teams-gateway.md](docs/teams-gateway.md).
+
 ## Cloudflare Deployment
 
 OpenConnector can run on Cloudflare with Workers for the runtime, D1 for state, R2 for transit

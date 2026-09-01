@@ -344,6 +344,40 @@ export interface AgentModelOption {
 
 export type AgentProvider = "claude_code" | "openai_codex";
 
+export interface TeamsGatewayToolGrant {
+  connectionId: string;
+  actionIds: string[];
+}
+
+export interface TeamsGatewayAgent {
+  id: string;
+  name: string;
+  enabled: boolean;
+  teamsConnectionId: string;
+  agentProvider: AgentProvider;
+  instructions?: string;
+  allowedDomains: string[];
+  allowedExternalUsers: string[];
+  proactiveDmUsers: string[];
+  confirmBeforeTools: boolean;
+  threadWindowHours: number;
+  toolGrants: TeamsGatewayToolGrant[];
+  watchStartedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamsGatewayThread {
+  id: string;
+  agentId: string;
+  chatId: string;
+  participantEmail: string;
+  participantName: string;
+  pendingPlan?: { summary: string };
+  pendingApprovalIds?: string[];
+  updatedAt: string;
+}
+
 export interface FlowRun {
   id: string;
   flowId: string;
