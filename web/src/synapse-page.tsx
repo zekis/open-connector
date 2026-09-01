@@ -64,6 +64,7 @@ import { ChatToolActivityList } from "./chat-page";
 import { flowConnectionDisplayName } from "./flow-connection-picker";
 import { SaynaVoiceClient } from "./sayna-voice";
 import { ProviderIcon } from "./shared-ui";
+import { SynapseArtifactView, synapseDisplayLabel } from "./synapse-artifact-view";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -1521,7 +1522,7 @@ export function SynapseArtifactGroupCard(props: {
           {groupProviders.length > 3 ? <small>+{groupProviders.length - 3}</small> : null}
         </span>
         <span className="synapse-node-kind">
-          {provider?.displayName ?? artifactLabel(node.artifactKind)} · {activeIndex + 1} of {props.group.nodes.length}
+          {provider?.displayName ?? synapseArtifactLabel(node)} · {activeIndex + 1} of {props.group.nodes.length}
         </span>
       </header>
       <nav className="synapse-group-tabs artifact-tabs" role="tablist" aria-label="Grouped artifacts">
@@ -1563,7 +1564,7 @@ export function SynapseArtifactGroupCard(props: {
       </strong>
       <SynapseArtifactShortcuts previews={node.previews ?? []} externalUrl={node.externalUrl} />
       <div className="synapse-node-markdown">
-        <ChatMarkdown>{markdown}</ChatMarkdown>
+        <SynapseArtifactView display={node.display} markdown={markdown} />
       </div>
       <span className="synapse-port input" />
       <span className="synapse-port output" />
@@ -1655,7 +1656,10 @@ export function SynapseNodeCard(props: {
         <span className="synapse-node-icon artifact">
           {props.provider ? <ProviderIcon provider={props.provider} /> : <Icon size={18} />}
         </span>
-        <span className="synapse-node-kind">{providerLabel ?? artifactLabel(artifactKind)}</span>
+        <span className="synapse-node-kind">
+          {providerLabel ??
+            (props.node.kind === "artifact" ? synapseArtifactLabel(props.node) : artifactLabel(artifactKind))}
+        </span>
       </header>
       <strong className="synapse-node-title" title={props.node.title}>
         {props.node.title}
@@ -1664,7 +1668,11 @@ export function SynapseNodeCard(props: {
         <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
       ) : null}
       <div className="synapse-node-markdown">
-        <ChatMarkdown>{markdown}</ChatMarkdown>
+        {props.node.kind === "artifact" ? (
+          <SynapseArtifactView display={props.node.display} markdown={markdown} />
+        ) : (
+          <ChatMarkdown>{markdown}</ChatMarkdown>
+        )}
       </div>
       <span className="synapse-port input" />
       <span className="synapse-port output" />
@@ -2144,7 +2152,7 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
     ? "Draft awaiting approval"
     : props.node.kind === "provider"
       ? "Provider source"
-      : artifactLabel(props.node.artifactKind);
+      : synapseArtifactLabel(props.node);
   const markdown =
     props.node.kind === "provider"
       ? (props.node.instructions ?? "Ask this node to retrieve or act through its connection.")
@@ -2300,7 +2308,11 @@ export function SynapseNodeDetail(props: SynapseNodeDetailProps): ReactNode {
             <SynapseArtifactShortcuts previews={previews} externalUrl={props.node.externalUrl} />
           ) : null}
           <div className="synapse-node-detail-markdown">
-            <ChatMarkdown>{markdown}</ChatMarkdown>
+            {props.node.kind === "artifact" ? (
+              <SynapseArtifactView display={props.node.display} markdown={markdown} />
+            ) : (
+              <ChatMarkdown>{markdown}</ChatMarkdown>
+            )}
           </div>
         </article>
         <SynapseConnectedNodeRail
@@ -2349,7 +2361,7 @@ function SynapseConnectedNodeRail(props: SynapseConnectedNodeRailProps): ReactNo
               {provider ? <ProviderIcon provider={provider} /> : <Icon size={15} />}
             </span>
             <span className="synapse-node-detail-handle-copy">
-              <small>{node.kind === "provider" ? "Provider" : artifactLabel(node.artifactKind)}</small>
+              <small>{node.kind === "provider" ? "Provider" : synapseArtifactLabel(node)}</small>
               <strong>{node.title}</strong>
             </span>
             {props.direction === "outgoing" ? <ChevronRight size={15} /> : null}
@@ -2457,7 +2469,7 @@ function SynapseNodePanel(props: {
           {props.provider ? <ProviderIcon provider={props.provider} large /> : <BrainCircuit size={20} />}
         </span>
         <div>
-          <span>{props.node.kind === "provider" ? "Provider context" : artifactLabel(props.node.artifactKind)}</span>
+          <span>{props.node.kind === "provider" ? "Provider context" : synapseArtifactLabel(props.node)}</span>
           <strong>{props.node.title}</strong>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Close node chat" onClick={props.onClose}>
@@ -3352,6 +3364,10 @@ function artifactLabel(kind: SynapseArtifactKind): string {
     default:
       return "Artifact";
   }
+}
+
+function synapseArtifactLabel(node: SynapseArtifactNode): string {
+  return synapseDisplayLabel(node.display) ?? artifactLabel(node.artifactKind);
 }
 
 function artifactIcon(kind: SynapseArtifactKind): typeof FileText {

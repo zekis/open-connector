@@ -147,6 +147,26 @@ describe("Sayna voice helpers", () => {
     client.close();
   });
 
+  it("plays several responses in order and reports when the queue completes", async () => {
+    const runtime = installVoiceRuntime();
+    const completed = vi.fn();
+    const client = createClient({ onPlaybackComplete: completed });
+    const speaking = client.speakSequence(["First feed post.", "Second feed post.", "Third feed post."]);
+    await vi.waitFor(() => expect(runtime.sockets).toHaveLength(1));
+    runtime.sockets[0]!.receive('{"type":"ready"}');
+    await speaking;
+
+    for (let index = 1; index <= 3; index += 1) {
+      expect(sentSpeech(runtime.sockets[0]!)).toHaveLength(index);
+      runtime.sockets[0]!.receive('{"type":"tts_playback_complete"}');
+      if (index < 3) await vi.waitFor(() => expect(sentSpeech(runtime.sockets[0]!)).toHaveLength(index + 1));
+    }
+
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledOnce());
+    expect(sentSpeech(runtime.sockets[0]!)).toEqual(["First feed post.", "Second feed post.", "Third feed post."]);
+    client.close();
+  });
+
   it("ignores playback echo but lets finalized user speech interrupt the response", async () => {
     const runtime = installVoiceRuntime();
     const transcripts: string[] = [];
@@ -308,7 +328,7 @@ class FakeAudioContext {
   }
 }
 
-function createClient(): SaynaVoiceClient {
+function createClient(callbacks: Partial<ConstructorParameters<typeof SaynaVoiceClient>[1]> = {}): SaynaVoiceClient {
   return new SaynaVoiceClient(createConfiguration(), {
     onStateChange: () => {},
     onListeningChange: () => {},
@@ -316,6 +336,7 @@ function createClient(): SaynaVoiceClient {
     onError: (message) => {
       throw new Error(message);
     },
+    ...callbacks,
   });
 }
 

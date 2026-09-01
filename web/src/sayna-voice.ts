@@ -20,6 +20,7 @@ export interface SaynaVoiceCallbacks {
   onListeningChange(listening: boolean): void;
   onTranscript(transcript: SaynaTranscript): void;
   onError(message: string): void;
+  onPlaybackComplete?(): void;
 }
 
 interface SaynaServerMessage {
@@ -123,10 +124,18 @@ export class SaynaVoiceClient {
   }
 
   async speak(markdown: string): Promise<void> {
-    const text = plainTextForSpeech(markdown);
-    if (!text) return;
+    await this.speakSequence([markdown]);
+  }
+
+  /** Speaks several Markdown items in order as one uninterrupted playback queue. */
+  async speakSequence(markdownItems: readonly string[]): Promise<void> {
+    const chunks = markdownItems.flatMap((markdown) => {
+      const text = plainTextForSpeech(markdown);
+      return text ? splitSpeechForPlayback(text) : [];
+    });
+    if (chunks.length === 0) return;
     const generation = ++this.speechGeneration;
-    await this.queueResponseSpeech(splitSpeechForPlayback(text), generation);
+    await this.queueResponseSpeech(chunks, generation);
   }
 
   async speakProgress(text: string): Promise<void> {
@@ -440,6 +449,7 @@ export class SaynaVoiceClient {
       return;
     }
     this.setState(this.microphoneStream ? "listening" : "ready");
+    this.callbacks.onPlaybackComplete?.();
   }
 
   private startNextSpeech(): void {

@@ -2,7 +2,7 @@ import type { FeedItem, ProviderDefinition } from "./model";
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { FeedCard } from "./feed-page";
+import { FeedCard, feedSpeechSequence } from "./feed-page";
 
 const provider: ProviderDefinition = {
   service: "outlook",
@@ -107,5 +107,12 @@ describe("FeedCard", () => {
     expect(html).toContain('class="provider-icon large"');
     expect(html).toContain('class="feed-social-copy"');
     expect(html.indexOf('class="feed-generated-image')).toBeLessThan(html.indexOf('class="feed-social-copy"'));
+  });
+
+  it("builds an ordered speech playlist for Feed playback", () => {
+    expect(feedSpeechSequence([item, { ...item, id: "flow:run-2", title: "Second update" }])).toEqual([
+      expect.stringContaining("Feed post 1. Roy Hill weekly update."),
+      expect.stringContaining("Feed post 2. Second update."),
+    ]);
   });
 });

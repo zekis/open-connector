@@ -490,7 +490,7 @@
   font-size: 14px;
 }
 
-.synapse-node.artifact header {
+.synapse-node.artifact > header {
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 720;
@@ -498,7 +498,7 @@
   text-transform: uppercase;
 }
 
-.synapse-node.artifact header {
+.synapse-node.artifact > header {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
@@ -562,7 +562,7 @@
   white-space: nowrap;
 }
 
-.synapse-node.artifact header a {
+.synapse-node.artifact > header a {
   display: inline-flex;
   flex: 0 0 auto;
   margin-left: auto;
@@ -596,6 +596,214 @@
 .synapse-node.artifact .synapse-node-markdown {
   flex: 1 1 0;
   padding: 0 8px 18px 0;
+}
+
+.synapse-display-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.synapse-display-list li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+}
+
+.synapse-display-list li > span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 12%, transparent);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.synapse-display-list li > div,
+.synapse-display-kanban article {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.synapse-display-list small,
+.synapse-display-kanban small,
+.synapse-display-canvas small {
+  color: var(--muted-foreground);
+  font-style: normal;
+  font-weight: 400;
+}
+
+.synapse-display-list em {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--success);
+  background: color-mix(in oklab, var(--success) 10%, transparent);
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.synapse-display-table-scroll,
+.synapse-display-kanban {
+  max-width: 100%;
+  overflow: auto;
+  touch-action: pan-x pan-y;
+}
+
+.synapse-display-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 10px;
+}
+
+.synapse-display-table th,
+.synapse-display-table td {
+  min-width: 88px;
+  padding: 7px 9px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.synapse-display-table th:first-child,
+.synapse-display-table td:first-child {
+  border-left: 1px solid var(--border);
+}
+
+.synapse-display-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--muted) 72%, var(--card));
+  font-weight: 720;
+}
+
+.synapse-display-table th:first-child {
+  border-top-left-radius: 8px;
+}
+
+.synapse-display-table th:last-child {
+  border-top-right-radius: 8px;
+}
+
+.synapse-display-kanban {
+  display: grid;
+  grid-auto-columns: minmax(150px, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.synapse-display-kanban > section {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 52%, transparent);
+}
+
+.synapse-display-kanban > section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0;
+  color: var(--foreground);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.synapse-display-kanban > section > header span {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.synapse-display-kanban article {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.synapse-display-canvas {
+  position: relative;
+  width: 100%;
+  min-height: 210px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: color-mix(in oklab, var(--background) 88%, var(--muted));
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--foreground) 14%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 16px 16px;
+}
+
+.synapse-display-canvas article {
+  position: absolute;
+  top: var(--synapse-item-y);
+  left: var(--synapse-item-x);
+  display: grid;
+  width: min(132px, 34%);
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid color-mix(in oklab, var(--brand) 32%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.synapse-display-chart {
+  width: 100%;
+  height: 100%;
+  min-height: 190px;
+  font-size: 9px;
+}
+
+.synapse-display-graph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 210px;
+}
+
+.synapse-display-graph .edges line {
+  stroke: color-mix(in oklab, var(--brand) 56%, var(--muted-foreground));
+  stroke-width: 1.5;
+}
+
+.synapse-display-graph .nodes circle {
+  fill: color-mix(in oklab, var(--brand) 13%, var(--card));
+  stroke: color-mix(in oklab, var(--brand) 58%, var(--border));
+  stroke-width: 1.5;
+}
+
+.synapse-display-graph .nodes text {
+  fill: var(--foreground);
+  font-size: 8px;
+  font-weight: 700;
+  pointer-events: none;
 }
 
 .synapse-group-tabs {
@@ -1110,6 +1318,36 @@
 
 .synapse-node-detail-markdown .chat-markdown pre {
   overflow-x: auto;
+}
+
+.synapse-node-detail-markdown .synapse-display-list {
+  gap: 10px;
+  font-size: 13px;
+}
+
+.synapse-node-detail-markdown .synapse-display-list li,
+.synapse-node-detail-markdown .synapse-display-kanban article {
+  padding: 12px;
+}
+
+.synapse-node-detail-markdown .synapse-display-table {
+  font-size: 12px;
+}
+
+.synapse-node-detail-markdown .synapse-display-table th,
+.synapse-node-detail-markdown .synapse-display-table td {
+  padding: 10px 12px;
+}
+
+.synapse-node-detail-markdown .synapse-display-kanban {
+  grid-auto-columns: minmax(210px, 1fr);
+  min-height: 360px;
+}
+
+.synapse-node-detail-markdown .synapse-display-canvas,
+.synapse-node-detail-markdown .synapse-display-graph,
+.synapse-node-detail-markdown .synapse-display-chart {
+  min-height: 420px;
 }
 
 .synapse-node-detail-rail {

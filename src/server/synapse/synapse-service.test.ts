@@ -990,6 +990,87 @@ describe("SynapseService", () => {
     });
   });
 
+  it("lets the agent create structured list, table, kanban, canvas, chart, and graph displays", async () => {
+    let addTool: AgentChatExtension["tools"][number] | undefined;
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        addTool = extension.tools.find((tool) => tool.name === "synapse_add_artifacts");
+        const activity = await extension.runTool("synapse_add_artifacts", {
+          artifacts: [
+            {
+              artifactKind: "note",
+              title: "Priorities",
+              content: "1. Stabilise launch\n2. Prepare follow-up",
+              display: { type: "list", items: [{ title: "Stabilise launch", status: "In progress" }] },
+            },
+            {
+              artifactKind: "note",
+              title: "Comparison",
+              content: "Alpha is ahead of Beta.",
+              display: { type: "table", columns: ["Team", "Score"], rows: [["Alpha", 8]] },
+            },
+            {
+              artifactKind: "task",
+              title: "Delivery board",
+              content: "One task is in progress.",
+              display: {
+                type: "kanban",
+                columns: [{ title: "Doing", items: [{ title: "Release checks", detail: "Owner: Alex" }] }],
+              },
+            },
+            {
+              artifactKind: "note",
+              title: "Idea map",
+              content: "Launch sits beside follow-up.",
+              display: { type: "canvas", items: [{ title: "Launch", x: 25, y: 40 }] },
+            },
+            {
+              artifactKind: "note",
+              title: "Weekly trend",
+              content: "Weekly totals are 4 and 7.",
+              display: {
+                type: "chart",
+                chartType: "line",
+                labels: ["Week 1", "Week 2"],
+                series: [{ name: "Total", values: [4, 7] }],
+              },
+            },
+            {
+              artifactKind: "note",
+              title: "Dependencies",
+              content: "Build leads to release.",
+              display: {
+                type: "graph",
+                nodes: [
+                  { id: "build", label: "Build" },
+                  { id: "release", label: "Release" },
+                ],
+                edges: [{ source: "build", target: "release", label: "unblocks" }],
+              },
+            },
+          ],
+        });
+        return completedResponse(activity ? [activity] : []);
+      }),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ question: "Show the launch plan visually." });
+    const selected = workspace.nodes[0]!;
+
+    const result = await service.chat(workspace.id, selected.id, { content: "Create the useful visual nodes." });
+    const displays = result.nodes.flatMap((node) => (node.kind === "artifact" && node.display ? [node] : []));
+
+    expect(addTool?.inputSchema).toMatchObject({
+      properties: { artifacts: { items: { properties: { display: { oneOf: expect.any(Array) } } } } },
+    });
+    expect(displays.map((node) => node.display?.type)).toEqual(["list", "table", "kanban", "canvas", "chart", "graph"]);
+    expect(displays.find((node) => node.display?.type === "chart")?.display).toMatchObject({
+      chartType: "line",
+      labels: ["Week 1", "Week 2"],
+    });
+    expect(displays.every((node) => node.size!.width >= 380 && node.size!.height >= 260)).toBe(true);
+  });
+
   it("lets the agent update a connected artifact other than the selected node", async () => {
     let targetNodeId = "";
     let updateTool: AgentChatExtension["tools"][number] | undefined;

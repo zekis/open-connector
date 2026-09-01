@@ -542,6 +542,51 @@ export type SynapseArtifactKind =
   | "task"
   | "generic";
 
+export type SynapseArtifactDisplay =
+  | SynapseListDisplay
+  | SynapseTableDisplay
+  | SynapseKanbanDisplay
+  | SynapseCanvasDisplay
+  | SynapseChartDisplay
+  | SynapseGraphDisplay;
+
+export interface SynapseListDisplay {
+  type: "list";
+  items: Array<{ title: string; detail?: string; status?: string }>;
+}
+
+export interface SynapseTableDisplay {
+  type: "table";
+  columns: string[];
+  rows: Array<Array<string | number | boolean | null>>;
+}
+
+export interface SynapseKanbanDisplay {
+  type: "kanban";
+  columns: Array<{
+    title: string;
+    items: Array<{ title: string; detail?: string }>;
+  }>;
+}
+
+export interface SynapseCanvasDisplay {
+  type: "canvas";
+  items: Array<{ title: string; content?: string; x: number; y: number }>;
+}
+
+export interface SynapseChartDisplay {
+  type: "chart";
+  chartType: "bar" | "line" | "pie";
+  labels: string[];
+  series: Array<{ name: string; values: number[] }>;
+}
+
+export interface SynapseGraphDisplay {
+  type: "graph";
+  nodes: Array<{ id: string; label: string; group?: string }>;
+  edges: Array<{ source: string; target: string; label?: string }>;
+}
+
 export interface SynapsePosition {
   x: number;
   y: number;
@@ -574,6 +619,7 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   artifactKind: SynapseArtifactKind;
   summary?: string;
   content?: string;
+  display?: SynapseArtifactDisplay;
   externalUrl?: string;
   sourceActionId?: string;
   sourceConnectionId?: string;

@@ -1,4 +1,13 @@
-import type { AppData, FeedApprovalSummary, FeedItem, FeedPage, FeedPreview, ProviderDefinition } from "./model";
+import type {
+  AppData,
+  FeedApprovalSummary,
+  FeedItem,
+  FeedPage,
+  FeedPreview,
+  ProviderDefinition,
+  SaynaVoiceConfiguration,
+} from "./model";
+import type { SaynaVoiceState } from "./sayna-voice";
 import type { FormEvent, ReactNode } from "react";
 
 import {
@@ -24,16 +33,19 @@ import {
   Radio,
   Send,
   Sparkles,
+  Square,
   ThumbsDown,
   ThumbsUp,
   TriangleAlert,
   Users,
+  Volume2,
   Workflow,
   Wrench,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "./api";
 import { ChatMarkdown } from "./chat-markdown";
+import { SaynaVoiceClient } from "./sayna-voice";
 import { EmptyState, ProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -45,9 +57,14 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
   const [page, setPage] = useState<FeedPage>({ items: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceConfiguration, setVoiceConfiguration] = useState<SaynaVoiceConfiguration>();
+  const [voiceState, setVoiceState] = useState<SaynaVoiceState>("offline");
+  const [feedPlaying, setFeedPlaying] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState<string | undefined>(undefined);
   const [replyBusy, setReplyBusy] = useState<string | undefined>(undefined);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const voiceClientRef = useRef<SaynaVoiceClient | undefined>(undefined);
   const providersByService = useMemo(
     () => new Map(props.data.providers.map((provider) => [provider.service, provider])),
     [props.data.providers],
@@ -71,6 +88,60 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
     const timer = window.setInterval(() => void refresh(true), feedRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiGet<SaynaVoiceConfiguration>("/api/agent-chat/voice/config")
+      .then((configuration) => {
+        if (!cancelled) setVoiceConfiguration(configuration);
+      })
+      .catch(() => {
+        // Feed speech is optional when the Sayna bridge is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!voiceConfiguration?.enabled || !voiceConfiguration.websocketPath) return;
+    const client = new SaynaVoiceClient(voiceConfiguration, {
+      onStateChange: (nextState) => {
+        setVoiceState(nextState);
+        if (nextState === "error" || nextState === "offline") setFeedPlaying(false);
+      },
+      onListeningChange: () => {},
+      onTranscript: () => {},
+      onError: (message) => {
+        setVoiceError(message);
+        setFeedPlaying(false);
+      },
+      onPlaybackComplete: () => setFeedPlaying(false),
+    });
+    voiceClientRef.current = client;
+    return () => {
+      client.close();
+      if (voiceClientRef.current === client) voiceClientRef.current = undefined;
+    };
+  }, [voiceConfiguration]);
+
+  function toggleFeedPlayback(): void {
+    const client = voiceClientRef.current;
+    if (!client || !voiceConfiguration?.enabled) {
+      setVoiceError("Configure Sayna voice in Chat before playing the Feed aloud.");
+      return;
+    }
+    if (feedPlaying) {
+      client.stopSpeaking();
+      setFeedPlaying(false);
+      return;
+    }
+    const speech = feedSpeechSequence(page.items);
+    if (speech.length === 0) return;
+    setVoiceError(null);
+    setFeedPlaying(true);
+    void client.speakSequence(speech);
+  }
 
   async function decide(approval: FeedApprovalSummary, decision: "approve" | "deny"): Promise<void> {
     if (approvalBusy) return;
@@ -118,15 +189,43 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
           <h2>Your connected world, caught up.</h2>
           <p>Review triggered activity, Claude's work, and decisions that need you.</p>
         </div>
-        <Button variant="outline" size="icon-sm" onClick={() => void refresh()} aria-label="Refresh Feed">
-          {loading ? <Loader2 className="spin" size={16} /> : <Radio size={16} />}
-        </Button>
+        <div className="feed-intro-actions">
+          {voiceConfiguration?.available ? (
+            <Button
+              variant={feedPlaying ? "default" : "outline"}
+              size="sm"
+              onClick={toggleFeedPlayback}
+              disabled={page.items.length === 0}
+              aria-label={feedPlaying ? "Stop playing Feed posts" : "Play Feed posts in order"}
+              aria-pressed={feedPlaying}
+              title={
+                voiceConfiguration.enabled
+                  ? feedPlaying
+                    ? "Stop playing Feed"
+                    : "Play Feed posts in order"
+                  : "Configure Sayna voice in Chat to play the Feed aloud"
+              }
+            >
+              {voiceState === "connecting" && feedPlaying ? (
+                <Loader2 className="spin" size={15} />
+              ) : feedPlaying ? (
+                <Square size={12} />
+              ) : (
+                <Volume2 size={15} />
+              )}
+              {feedPlaying ? "Stop" : "Play Feed"}
+            </Button>
+          ) : null}
+          <Button variant="outline" size="icon-sm" onClick={() => void refresh()} aria-label="Refresh Feed">
+            {loading ? <Loader2 className="spin" size={16} /> : <Radio size={16} />}
+          </Button>
+        </div>
       </header>
 
-      {error ? (
+      {error || voiceError ? (
         <div className="feed-error" role="alert">
           <CircleAlert size={16} />
-          {error}
+          {error ?? voiceError}
         </div>
       ) : null}
 
@@ -162,6 +261,11 @@ export function FeedPageView(props: { data: AppData; onRefresh(): void }): React
   );
 }
 
+/** Builds the ordered speech playlist used by the Feed's shared Sayna player. */
+export function feedSpeechSequence(items: readonly FeedItem[]): string[] {
+  return items.map((item, index) => `Feed post ${index + 1}. ${item.title}.\n\n${item.post.text}`);
+}
+
 export function FeedCard(props: {
   item: FeedItem;
   provider?: ProviderDefinition;
@@ -179,10 +283,10 @@ export function FeedCard(props: {
   return (
     <article className={pendingApproval ? "feed-card needs-approval" : "feed-card"}>
       <div className="feed-post">
-        <div className="feed-avatar provider">
-          {props.provider ? <ProviderIcon provider={props.provider} large /> : <FileText size={21} />}
-        </div>
-        <div className="feed-post-body">
+        <div className="feed-post-header">
+          <div className="feed-avatar provider">
+            {props.provider ? <ProviderIcon provider={props.provider} large /> : <FileText size={21} />}
+          </div>
           <div className="feed-post-meta">
             <strong>{displayName}</strong>
             <span className="feed-handle">@claude</span>
@@ -192,26 +296,26 @@ export function FeedCard(props: {
               <span className={`feed-status ${props.item.flow.status}`}>{props.item.flow.status}</span>
             ) : null}
           </div>
-          <FeedGeneratedImage post={props.item.post} />
-          <div className="feed-social-copy">
-            <ChatMarkdown>{props.item.post.text}</ChatMarkdown>
-          </div>
-          <div className="feed-origin">
-            <Radio size={13} /> {triggerLabel(props.item)} · {props.item.title}
-            {props.item.author && props.item.author !== displayName ? ` · ${props.item.author}` : ""}
-          </div>
-          {props.item.actions.length > 0 ? (
-            <div className="feed-action-strip">
-              {props.item.actions.slice(0, 5).map((action) => (
-                <span key={action.id} className={`feed-action-chip ${action.status}`} title={action.actionId}>
-                  {action.status === "completed" ? <Check size={12} /> : <Wrench size={12} />}
-                  {humanizeAction(action.actionId)}
-                </span>
-              ))}
-              {props.item.actions.length > 5 ? <span>+{props.item.actions.length - 5} more</span> : null}
-            </div>
-          ) : null}
         </div>
+        <FeedGeneratedImage post={props.item.post} />
+        <div className="feed-social-copy">
+          <ChatMarkdown>{props.item.post.text}</ChatMarkdown>
+        </div>
+        <div className="feed-origin">
+          <Radio size={13} /> {triggerLabel(props.item)} · {props.item.title}
+          {props.item.author && props.item.author !== displayName ? ` · ${props.item.author}` : ""}
+        </div>
+        {props.item.actions.length > 0 ? (
+          <div className="feed-action-strip">
+            {props.item.actions.slice(0, 5).map((action) => (
+              <span key={action.id} className={`feed-action-chip ${action.status}`} title={action.actionId}>
+                {action.status === "completed" ? <Check size={12} /> : <Wrench size={12} />}
+                {humanizeAction(action.actionId)}
+              </span>
+            ))}
+            {props.item.actions.length > 5 ? <span>+{props.item.actions.length - 5} more</span> : null}
+          </div>
+        ) : null}
       </div>
 
       {props.item.previews.length > 0 ? (

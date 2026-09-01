@@ -7,6 +7,7 @@ import type { AgentChatProgressListener, AgentChatResponse, AgentChatToolActivit
 import type { ProviderPreviewContent, ProviderPreviewDescriptor } from "../previews/provider-preview.ts";
 import type {
   ISynapseStore,
+  SynapseArtifactDisplay,
   SynapseArtifactKind,
   SynapseArtifactNode,
   SynapseEdge,
@@ -560,6 +561,7 @@ export class SynapseService {
       if (input.summary !== undefined) node.summary = optionalText(input.summary, "summary", maximumNodeTextCharacters);
       if (input.content !== undefined) node.content = optionalText(input.content, "content", maximumNodeTextCharacters);
       if (input.artifactKind !== undefined) node.artifactKind = readArtifactKind(input.artifactKind);
+      if (input.display !== undefined) node.display = readArtifactDisplay(input.display);
       if (input.sourceActivityId !== undefined) {
         node.sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
       }
@@ -620,6 +622,7 @@ export class SynapseService {
       title: input.title,
       summary: input.summary,
       content: input.content,
+      display: input.display,
       externalUrl: input.externalUrl,
       sourceActionId: input.sourceActionId,
       sourceConnectionId: input.sourceConnectionId,
@@ -882,6 +885,7 @@ interface ArtifactInput {
   title: string;
   summary?: string;
   content?: string;
+  display?: SynapseArtifactDisplay;
   externalUrl?: string;
   sourceActionId?: string;
   sourceConnectionId?: string;
@@ -890,6 +894,152 @@ interface ArtifactInput {
   itemIdentity?: string;
   data?: unknown;
 }
+
+const synapseArtifactDisplaySchema: Record<string, unknown> = {
+  description: "Optional structured visual shown instead of the Markdown body. Keep content as a readable fallback.",
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        type: { const: "list" },
+        items: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: { title: { type: "string" }, detail: { type: "string" }, status: { type: "string" } },
+            required: ["title"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["type", "items"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "table" },
+        columns: { type: "array", maxItems: 12, items: { type: "string" } },
+        rows: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "array",
+            maxItems: 12,
+            items: { type: ["string", "number", "boolean", "null"] },
+          },
+        },
+      },
+      required: ["type", "columns", "rows"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "kanban" },
+        columns: {
+          type: "array",
+          maxItems: 8,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              items: {
+                type: "array",
+                maxItems: 30,
+                items: {
+                  type: "object",
+                  properties: { title: { type: "string" }, detail: { type: "string" } },
+                  required: ["title"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["title", "items"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["type", "columns"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "canvas" },
+        items: {
+          type: "array",
+          maxItems: 30,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              content: { type: "string" },
+              x: { type: "number", minimum: 0, maximum: 100 },
+              y: { type: "number", minimum: 0, maximum: 100 },
+            },
+            required: ["title", "x", "y"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["type", "items"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "chart" },
+        chartType: { type: "string", enum: ["bar", "line", "pie"] },
+        labels: { type: "array", maxItems: 50, items: { type: "string" } },
+        series: {
+          type: "array",
+          maxItems: 8,
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              values: { type: "array", maxItems: 50, items: { type: "number" } },
+            },
+            required: ["name", "values"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["type", "chartType", "labels", "series"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        type: { const: "graph" },
+        nodes: {
+          type: "array",
+          maxItems: 40,
+          items: {
+            type: "object",
+            properties: { id: { type: "string" }, label: { type: "string" }, group: { type: "string" } },
+            required: ["id", "label"],
+            additionalProperties: false,
+          },
+        },
+        edges: {
+          type: "array",
+          maxItems: 80,
+          items: {
+            type: "object",
+            properties: { source: { type: "string" }, target: { type: "string" }, label: { type: "string" } },
+            required: ["source", "target"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["type", "nodes", "edges"],
+      additionalProperties: false,
+    },
+  ],
+};
 
 const synapseTools: AgentChatExtensionTool[] = [
   {
@@ -911,7 +1061,7 @@ const synapseTools: AgentChatExtensionTool[] = [
   {
     name: "synapse_add_artifacts",
     description:
-      "Create one or more durable Markdown artifact cards and fan them out from a parent node. Prefer one focused card per useful email, search result, document, task, or draft.",
+      "Create one or more durable artifact cards and fan them out from a parent node. Cards may use Markdown or a structured list, table, kanban, canvas, chart, or graph display.",
     inputSchema: {
       type: "object",
       properties: {
@@ -935,8 +1085,9 @@ const synapseTools: AgentChatExtensionTool[] = [
               summary: { type: "string" },
               content: {
                 type: "string",
-                description: "The exact Markdown body rendered on the artifact card.",
+                description: "Readable Markdown content used directly or as the fallback for a structured display.",
               },
+              display: synapseArtifactDisplaySchema,
               externalUrl: { type: "string" },
             },
             required: ["artifactKind", "title", "content"],
@@ -980,6 +1131,10 @@ const synapseTools: AgentChatExtensionTool[] = [
         title: { type: "string" },
         summary: { type: "string" },
         content: { type: "string" },
+        display: {
+          description: "Replace the structured display, or pass null to return the artifact to Markdown rendering.",
+          anyOf: [synapseArtifactDisplaySchema, { type: "null" }],
+        },
         sourceActivityId: {
           type: "string",
           description: "Connector tool activity id whose result is being written into this artifact.",
@@ -1011,7 +1166,10 @@ Rules:
 - do not add a provider node for a proposed create, update, send, or delete action; the host puts the provider identity and approval controls directly on its draft card
 - after retrieving useful results, call synapse_add_artifacts and create one concise artifact per useful result; fan-outs are preferred over burying results in chat
 - retrieve attachment metadata for useful emails that report attachments so the canvas can render those files
-- put the exact Markdown that should be visible on every new artifact card in its content field; use headings, lists, links, and emphasis when they make the result easier to scan
+- put readable Markdown in every new artifact's content field so it remains useful as speech and as a fallback
+- add a structured display when it makes the information easier to understand: list for ordered or status items, table for exact comparisons, kanban for workflow stages, canvas for spatial clusters, chart for numeric series, and graph for relationships
+- keep structured displays focused and human-readable; use short labels, preserve meaningful units in content, and never invent numeric values or relationships
+- when revising a structured artifact, update its display with the content; pass display as null if the result should return to Markdown
 - include sourceActivityId from connector tool activity when turning that result into artifacts
 - when connector results update or expand the selected artifact, call synapse_update_artifact with its nodeId and sourceActivityId instead of creating a copy with synapse_add_artifacts
 - never recreate the selected artifact as a second card; update it in place when it represents the same external item or working document
@@ -2084,6 +2242,7 @@ function automaticNodeSize(node: SynapseNode): SynapseSize {
         title: node.title,
         summary: node.summary,
         content: node.content,
+        display: node.display,
       });
 }
 
@@ -2091,8 +2250,16 @@ function automaticProviderSize(title: string | undefined, instructions: string |
   return automaticTextSize([title, instructions].filter(Boolean).join("\n"), "provider");
 }
 
-function automaticArtifactSize(input: Pick<ArtifactInput, "title" | "summary" | "content">): SynapseSize {
-  return automaticTextSize([input.title, input.summary, input.content].filter(Boolean).join("\n"), "artifact");
+function automaticArtifactSize(input: Pick<ArtifactInput, "title" | "summary" | "content" | "display">): SynapseSize {
+  const textSize = automaticTextSize(
+    [input.title, input.summary, input.content].filter(Boolean).join("\n"),
+    "artifact",
+  );
+  if (!input.display) return textSize;
+  if (input.display.type === "list") {
+    return { width: Math.max(textSize.width, 380), height: Math.max(textSize.height, 260) };
+  }
+  return { width: Math.max(textSize.width, 520), height: Math.max(textSize.height, 340) };
 }
 
 function automaticTextSize(text: string, kind: SynapseNode["kind"]): SynapseSize {
@@ -2318,6 +2485,7 @@ function readArtifactInput(body: Record<string, unknown>): ArtifactInput {
     title: readText(body.title, "title", maximumNodeTitleCharacters),
     summary: optionalText(body.summary, "summary", maximumNodeTextCharacters),
     content: optionalText(body.content, "content", maximumNodeTextCharacters),
+    display: readArtifactDisplay(body.display),
     externalUrl: optionalHttpsUrl(body.externalUrl, "externalUrl"),
     sourceActionId: optionalText(body.sourceActionId, "sourceActionId", 200),
     sourceConnectionId: optionalText(body.sourceConnectionId, "sourceConnectionId", 200),
@@ -2342,6 +2510,159 @@ function readArtifactKind(value: unknown): SynapseArtifactKind {
     return value;
   }
   throw new SynapseError("invalid_synapse_artifact", "artifactKind is invalid.");
+}
+
+function readArtifactDisplay(value: unknown): SynapseArtifactDisplay | undefined {
+  if (value === undefined || value === null) return undefined;
+  const display = readObject(value, "display");
+  const type = readText(display.type, "display.type", 40);
+  if (type === "list") {
+    return {
+      type,
+      items: displayArray(display.items, "display.items", 50).map((value, index) => {
+        const item = readObject(value, `display.items[${index}]`);
+        return {
+          title: readText(item.title, `display.items[${index}].title`, 500),
+          detail: optionalText(item.detail, `display.items[${index}].detail`, 2_000),
+          status: optionalText(item.status, `display.items[${index}].status`, 100),
+        };
+      }),
+    };
+  }
+  if (type === "table") {
+    const columns = displayArray(display.columns, "display.columns", 12).map((column, index) =>
+      readText(column, `display.columns[${index}]`, 200),
+    );
+    if (columns.length === 0) throw new SynapseError("invalid_synapse_artifact", "display.columns cannot be empty.");
+    return {
+      type,
+      columns,
+      rows: displayArray(display.rows, "display.rows", 100).map((row, rowIndex) =>
+        displayArray(row, `display.rows[${rowIndex}]`, columns.length).map((cell, columnIndex) =>
+          displayCell(cell, `display.rows[${rowIndex}][${columnIndex}]`),
+        ),
+      ),
+    };
+  }
+  if (type === "kanban") {
+    return {
+      type,
+      columns: displayArray(display.columns, "display.columns", 8).map((value, columnIndex) => {
+        const column = readObject(value, `display.columns[${columnIndex}]`);
+        return {
+          title: readText(column.title, `display.columns[${columnIndex}].title`, 200),
+          items: displayArray(column.items, `display.columns[${columnIndex}].items`, 30).map((value, itemIndex) => {
+            const item = readObject(value, `display.columns[${columnIndex}].items[${itemIndex}]`);
+            return {
+              title: readText(item.title, `display.columns[${columnIndex}].items[${itemIndex}].title`, 500),
+              detail: optionalText(item.detail, `display.columns[${columnIndex}].items[${itemIndex}].detail`, 2_000),
+            };
+          }),
+        };
+      }),
+    };
+  }
+  if (type === "canvas") {
+    return {
+      type,
+      items: displayArray(display.items, "display.items", 30).map((value, index) => {
+        const item = readObject(value, `display.items[${index}]`);
+        return {
+          title: readText(item.title, `display.items[${index}].title`, 500),
+          content: optionalText(item.content, `display.items[${index}].content`, 2_000),
+          x: displayCoordinate(item.x, `display.items[${index}].x`),
+          y: displayCoordinate(item.y, `display.items[${index}].y`),
+        };
+      }),
+    };
+  }
+  if (type === "chart") {
+    const chartType = display.chartType;
+    if (chartType !== "bar" && chartType !== "line" && chartType !== "pie") {
+      throw new SynapseError("invalid_synapse_artifact", "display.chartType must be bar, line, or pie.");
+    }
+    const labels = displayArray(display.labels, "display.labels", 50).map((label, index) =>
+      readText(label, `display.labels[${index}]`, 200),
+    );
+    if (labels.length === 0) throw new SynapseError("invalid_synapse_artifact", "display.labels cannot be empty.");
+    const series = displayArray(display.series, "display.series", 8).map((value, seriesIndex) => {
+      const item = readObject(value, `display.series[${seriesIndex}]`);
+      const values = displayArray(item.values, `display.series[${seriesIndex}].values`, labels.length).map(
+        (value, valueIndex) => displayNumber(value, `display.series[${seriesIndex}].values[${valueIndex}]`),
+      );
+      if (values.length !== labels.length) {
+        throw new SynapseError(
+          "invalid_synapse_artifact",
+          `display.series[${seriesIndex}].values must match display.labels length.`,
+        );
+      }
+      return { name: readText(item.name, `display.series[${seriesIndex}].name`, 200), values };
+    });
+    if (series.length === 0) throw new SynapseError("invalid_synapse_artifact", "display.series cannot be empty.");
+    return { type, chartType, labels, series };
+  }
+  if (type === "graph") {
+    const nodes = displayArray(display.nodes, "display.nodes", 40).map((value, index) => {
+      const node = readObject(value, `display.nodes[${index}]`);
+      return {
+        id: readText(node.id, `display.nodes[${index}].id`, 200),
+        label: readText(node.label, `display.nodes[${index}].label`, 500),
+        group: optionalText(node.group, `display.nodes[${index}].group`, 200),
+      };
+    });
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    if (nodeIds.size !== nodes.length) {
+      throw new SynapseError("invalid_synapse_artifact", "display.nodes ids must be unique.");
+    }
+    const edges = displayArray(display.edges, "display.edges", 80).map((value, index) => {
+      const edge = readObject(value, `display.edges[${index}]`);
+      const source = readText(edge.source, `display.edges[${index}].source`, 200);
+      const target = readText(edge.target, `display.edges[${index}].target`, 200);
+      if (!nodeIds.has(source) || !nodeIds.has(target)) {
+        throw new SynapseError("invalid_synapse_artifact", `display.edges[${index}] must reference existing nodes.`);
+      }
+      return {
+        source,
+        target,
+        label: optionalText(edge.label, `display.edges[${index}].label`, 200),
+      };
+    });
+    return { type, nodes, edges };
+  }
+  throw new SynapseError(
+    "invalid_synapse_artifact",
+    "display.type must be list, table, kanban, canvas, chart, or graph.",
+  );
+}
+
+function displayArray(value: unknown, field: string, maximum: number): unknown[] {
+  if (!Array.isArray(value)) throw new SynapseError("invalid_synapse_artifact", `${field} must be an array.`);
+  if (value.length > maximum) {
+    throw new SynapseError("invalid_synapse_artifact", `${field} cannot contain more than ${maximum} items.`);
+  }
+  return value;
+}
+
+function displayCell(value: unknown, field: string): string | number | boolean | null {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return displayNumber(value, field);
+  if (typeof value === "string" && value.length <= 2_000) return value;
+  throw new SynapseError("invalid_synapse_artifact", `${field} must be a short scalar value.`);
+}
+
+function displayNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new SynapseError("invalid_synapse_artifact", `${field} must be a finite number.`);
+  }
+  return value;
+}
+
+function displayCoordinate(value: unknown, field: string): number {
+  const coordinate = displayNumber(value, field);
+  if (coordinate < 0 || coordinate > 100) {
+    throw new SynapseError("invalid_synapse_artifact", `${field} must be between 0 and 100.`);
+  }
+  return coordinate;
 }
 
 function truncatedText(text: string, maximum: number): string {
