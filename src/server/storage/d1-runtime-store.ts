@@ -28,6 +28,7 @@ import type {
   ITeamsGatewayStore,
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 import type {
@@ -1029,6 +1030,7 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
   async deleteAgent(id: string): Promise<boolean> {
     await this.database.prepare("delete from teams_gateway_contacts where agent_id = ?").bind(id).run();
     await this.database.prepare("delete from teams_gateway_threads where agent_id = ?").bind(id).run();
+    await this.database.prepare("delete from teams_gateway_groups where agent_id = ?").bind(id).run();
     const result = await this.database.prepare("delete from teams_gateway_agents where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
   }
@@ -1111,6 +1113,47 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
       results.map(async (row) =>
         parseJson<TeamsGatewayContact>(await this.secretCodec.decode(readString(row, "value"))),
       ),
+    );
+  }
+
+  async setGroup(group: TeamsGatewayGroup): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into teams_gateway_groups (id, agent_id, kind, external_id, updated_at, value)
+         values (?, ?, ?, ?, ?, ?)
+         on conflict(id) do update set agent_id = excluded.agent_id, kind = excluded.kind,
+           external_id = excluded.external_id, updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(
+        group.id,
+        group.agentId,
+        group.kind,
+        group.externalId,
+        group.updatedAt,
+        await this.secretCodec.encode(JSON.stringify(group)),
+      )
+      .run();
+  }
+
+  async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
+    const statement = agentId
+      ? this.database
+          .prepare("select value from teams_gateway_groups where agent_id = ? order by updated_at desc, id desc")
+          .bind(agentId)
+      : this.database.prepare("select value from teams_gateway_groups order by updated_at desc, id desc");
+    const { results } = await statement.all<RuntimeRow>();
+    return Promise.all(
+      results.map(async (row) => parseJson<TeamsGatewayGroup>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  async deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void> {
+    const retained = new Set(retainedIds);
+    const groups = await this.listGroups(agentId);
+    await Promise.all(
+      groups
+        .filter((group) => !retained.has(group.id))
+        .map((group) => this.database.prepare("delete from teams_gateway_groups where id = ?").bind(group.id).run()),
     );
   }
 }

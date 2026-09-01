@@ -1,13 +1,35 @@
-import type { AgentProvider, AppData, ConnectionRecord, TeamsGatewayAgent, TeamsGatewayThread } from "./model";
+import type {
+  AgentProvider,
+  AppData,
+  ConnectionRecord,
+  TeamsGatewayAgent,
+  TeamsGatewayAgentMetrics,
+  TeamsGatewayGroup,
+} from "./model";
 import type { FormEvent, ReactNode } from "react";
 
-import { Bot, Loader2, MessageSquareMore, Play, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  Hash,
+  Loader2,
+  MessageSquareMore,
+  MessagesSquare,
+  Play,
+  Plus,
+  Save,
+  Settings2,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { apiDelete, apiGet, apiPost, apiPut } from "./api";
 import { Badge, FormStatus } from "./shared-ui";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,8 +55,10 @@ interface AgentDraft {
 
 export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
   const [agents, setAgents] = useState<TeamsGatewayAgent[]>([]);
-  const [threads, setThreads] = useState<TeamsGatewayThread[]>([]);
+  const [groups, setGroups] = useState<TeamsGatewayGroup[]>([]);
+  const [metrics, setMetrics] = useState<TeamsGatewayAgentMetrics[]>([]);
   const [draft, setDraft] = useState<AgentDraft>(() => emptyDraft(props.data));
+  const [setupOpen, setSetupOpen] = useState(false);
   const [busy, setBusy] = useState<"save" | "delete" | "poll" | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const teamsConnections = usableConnections(props.data.connections).filter(
@@ -44,12 +68,14 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
   const configuredAgentProviders = new Set(props.data.agentConnections?.map((connection) => connection.provider));
 
   const load = useCallback(async (): Promise<void> => {
-    const [nextAgents, nextThreads] = await Promise.all([
+    const [nextAgents, nextGroups, nextMetrics] = await Promise.all([
       apiGet<TeamsGatewayAgent[]>("/api/teams-gateway/agents"),
-      apiGet<TeamsGatewayThread[]>("/api/teams-gateway/threads"),
+      apiGet<TeamsGatewayGroup[]>("/api/teams-gateway/groups"),
+      apiGet<TeamsGatewayAgentMetrics[]>("/api/teams-gateway/metrics"),
     ]);
     setAgents(nextAgents);
-    setThreads(nextThreads);
+    setGroups(nextGroups);
+    setMetrics(nextMetrics);
   }, []);
 
   useEffect(() => {
@@ -77,6 +103,13 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
       toolConnectionIds: agent.toolGrants.map((grant) => grant.connectionId),
     });
     setStatus(null);
+    setSetupOpen(true);
+  }
+
+  function createAgent(): void {
+    setDraft(emptyDraft(props.data));
+    setStatus(null);
+    setSetupOpen(true);
   }
 
   async function save(event: FormEvent): Promise<void> {
@@ -106,8 +139,9 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
       if (draft.id) await apiPut(`/api/teams-gateway/agents/${encodeURIComponent(draft.id)}`, body);
       else await apiPost("/api/teams-gateway/agents", body);
       await load();
+      setSetupOpen(false);
       setDraft(emptyDraft(props.data));
-      setStatus("Teams agent saved. New DMs will be picked up by the gateway worker.");
+      setStatus("Teams agent saved and presence refreshed.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not save the Teams agent.");
     } finally {
@@ -121,8 +155,9 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
     try {
       await apiDelete(`/api/teams-gateway/agents/${encodeURIComponent(draft.id)}`);
       await load();
+      setSetupOpen(false);
       setDraft(emptyDraft(props.data));
-      setStatus("Teams agent and its local thread/contact state were removed.");
+      setStatus("Teams agent and its local thread, contact, and group state were removed.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not delete the Teams agent.");
     } finally {
@@ -170,217 +205,360 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
     );
   }
 
+  const onlineAgents = metrics.filter((item) => item.presence === "online").length;
+  const totalConversations = metrics.reduce((total, item) => total + item.activeThreadCount, 0);
+
   return (
     <div className="teams-gateway-page">
       <section className="teams-gateway-intro">
         <div>
           <span className="agents-eyebrow">
-            <MessageSquareMore size={14} /> Teams identities
+            <MessageSquareMore size={14} /> Teams gateway
           </span>
-          <h2>Run 1:1 agents through real Microsoft Teams accounts</h2>
-          <p>
-            Every agent gets an exact set of provider connections. Planning, approvals, domain checks, and DM initiation
-            rules stay host-enforced.
-          </p>
+          <h2>Agents across Teams chats and channels</h2>
+          <p>See where each agent is present, what it has handled, and which Teams groups it can respond in.</p>
         </div>
         <div className="button-row">
           <Button variant="outline" onClick={() => void poll()} disabled={busy !== null}>
             {busy === "poll" ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Poll now
           </Button>
-          <Button variant="outline" onClick={() => setDraft(emptyDraft(props.data))} disabled={busy !== null}>
+          <Button onClick={createAgent} disabled={busy !== null}>
             <Plus size={14} /> New agent
           </Button>
         </div>
       </section>
 
+      <div className="teams-summary-grid">
+        <SummaryStat icon={<Activity size={16} />} value={`${onlineAgents}/${agents.length}`} label="Agents online" />
+        <SummaryStat icon={<Users size={16} />} value={String(groups.length)} label="Detected groups" />
+        <SummaryStat icon={<MessagesSquare size={16} />} value={String(totalConversations)} label="Active threads" />
+      </div>
+
       <Alert>
         <ShieldCheck size={16} />
-        <AlertTitle>Two independent DM gates</AlertTitle>
+        <AlertTitle>Group replies keep the same safety policy</AlertTitle>
         <AlertDescription>
-          An external recipient must be explicitly authorized, and every recipient must have DMed the agent first or be
-          on the proactive-DM whitelist.
+          Agents use channel posts and group chat history as context, while domain authorization, plans, approvals, and
+          proactive-DM rules remain host-enforced.
         </AlertDescription>
       </Alert>
 
-      <div className="teams-gateway-layout">
-        <aside className="teams-agent-list">
-          {agents.length ? (
-            agents.map((agent) => {
-              const agentThreads = threads.filter((thread) => thread.agentId === agent.id);
-              return (
-                <button
-                  key={agent.id}
-                  type="button"
-                  className={draft.id === agent.id ? "teams-agent-row active" : "teams-agent-row"}
-                  onClick={() => edit(agent)}
-                >
-                  <span>
-                    <Bot size={16} />
-                    <strong>{agent.name}</strong>
-                  </span>
-                  <span>
-                    {agentThreads.length} chats{" "}
-                    <Badge tone={agent.enabled ? "success" : undefined}>{agent.enabled ? "Active" : "Paused"}</Badge>
-                  </span>
-                </button>
-              );
-            })
-          ) : (
-            <p className="teams-agent-empty">No Teams agents configured yet.</p>
-          )}
-        </aside>
+      {status ? <FormStatus message={status} /> : null}
 
-        <form className="teams-agent-editor" onSubmit={(event) => void save(event)}>
-          <div className="teams-editor-heading">
-            <div>
-              <span>{draft.id ? "Edit Teams agent" : "New Teams agent"}</span>
-              <h3>{draft.name || "Unnamed agent"}</h3>
-            </div>
-            {draft.enabled ? <Badge tone="success">Enabled</Badge> : <Badge>Paused</Badge>}
-          </div>
-          <div className="teams-form-grid">
-            <Label className="field">
-              <span>Agent name</span>
-              <Input
-                value={draft.name}
-                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                required
-              />
-            </Label>
-            <Label className="field">
-              <span>M365 Teams identity</span>
-              <select
-                className="agent-model-select"
-                value={draft.teamsConnectionId}
-                onChange={(event) => setDraft({ ...draft, teamsConnectionId: event.target.value })}
-                disabled={Boolean(draft.id)}
-                required
-              >
-                {teamsConnections.map((connection) => (
-                  <option key={connection.id} value={connection.id}>
-                    {connectionLabel(connection)}
-                  </option>
-                ))}
-              </select>
-            </Label>
-            <Label className="field">
-              <span>Agent runtime</span>
-              <select
-                className="agent-model-select"
-                value={draft.agentProvider}
-                onChange={(event) => setDraft({ ...draft, agentProvider: event.target.value as AgentProvider })}
-              >
-                <option value="claude_code" disabled={!configuredAgentProviders.has("claude_code")}>
-                  Claude Code{configuredAgentProviders.has("claude_code") ? "" : " — not connected"}
-                </option>
-                <option value="openai_codex" disabled={!configuredAgentProviders.has("openai_codex")}>
-                  OpenAI Codex{configuredAgentProviders.has("openai_codex") ? "" : " — not connected"}
-                </option>
-              </select>
-            </Label>
-            <Label className="field">
-              <span>Thread window (hours)</span>
-              <Input
-                type="number"
-                min="1"
-                max="168"
-                value={draft.threadWindowHours}
-                onChange={(event) => setDraft({ ...draft, threadWindowHours: event.target.value })}
-                required
-              />
-            </Label>
-          </div>
-          <Label className="field">
-            <span>Persona and instructions</span>
-            <Textarea
-              rows={4}
-              value={draft.instructions}
-              onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
-              placeholder="How this agent should work and communicate"
+      <section className="teams-agent-dashboard">
+        {agents.length ? (
+          agents.map((agent) => (
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              groups={groups.filter((group) => group.agentId === agent.id)}
+              metrics={metrics.find((item) => item.agentId === agent.id)}
+              onEdit={() => edit(agent)}
             />
-          </Label>
-          <div className="teams-form-grid">
-            <Label className="field">
-              <span>Internal domains</span>
-              <Input
-                value={draft.allowedDomains}
-                onChange={(event) => setDraft({ ...draft, allowedDomains: event.target.value })}
-                placeholder="company.com, subsidiary.com"
-                required
-              />
-            </Label>
-            <Label className="field">
-              <span>Authorized external users</span>
-              <Input
-                value={draft.allowedExternalUsers}
-                onChange={(event) => setDraft({ ...draft, allowedExternalUsers: event.target.value })}
-                placeholder="partner@example.com"
-              />
-            </Label>
-            <Label className="field teams-form-wide">
-              <span>Proactive-DM whitelist</span>
-              <Input
-                value={draft.proactiveDmUsers}
-                onChange={(event) => setDraft({ ...draft, proactiveDmUsers: event.target.value })}
-                placeholder="person@company.com"
-              />
-            </Label>
-          </div>
-          <fieldset className="teams-tool-picker">
-            <legend>Enabled provider connections</legend>
-            <p>
-              The exact currently available actions are captured when you save. Chat sending is excluded so the DM guard
-              cannot be bypassed.
-            </p>
-            <div>
-              {toolConnections.map((connection) => (
-                <label key={connection.id} className="teams-tool-option">
-                  <input
-                    type="checkbox"
-                    checked={draft.toolConnectionIds.includes(connection.id!)}
-                    onChange={() => toggleToolConnection(connection.id!)}
-                  />
-                  <span>
-                    <strong>{connectionLabel(connection)}</strong>
-                    <small>{connection.service}</small>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <div className="teams-switches">
-            <label>
-              <input
-                type="checkbox"
-                checked={draft.confirmBeforeTools}
-                onChange={(event) => setDraft({ ...draft, confirmBeforeTools: event.target.checked })}
-              />{" "}
-              Confirm a plan before using providers
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
-              />{" "}
-              Agent enabled
-            </label>
-          </div>
-          <div className="button-row">
-            <Button type="submit" disabled={busy !== null || !draft.name.trim() || !draft.teamsConnectionId}>
-              {busy === "save" ? <Loader2 className="spin" size={14} /> : <Save size={14} />} Save agent
+          ))
+        ) : (
+          <div className="teams-agent-empty">
+            <Bot size={22} />
+            <strong>No Teams agents configured</strong>
+            <span>Create an agent to start detecting its chats, Teams, and channels.</span>
+            <Button onClick={createAgent}>
+              <Plus size={14} /> New agent
             </Button>
-            {draft.id ? (
-              <Button variant="ghost" type="button" disabled={busy !== null} onClick={() => void remove()}>
-                {busy === "delete" ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Delete
-              </Button>
-            ) : null}
           </div>
-          {status ? <FormStatus message={status} /> : null}
-        </form>
-      </div>
+        )}
+      </section>
+
+      <Dialog open={setupOpen} onOpenChange={(open) => busy === null && setSetupOpen(open)}>
+        <DialogContent className="teams-agent-panel">
+          <DialogHeader>
+            <DialogTitle>{draft.id ? `Configure ${draft.name}` : "Configure a Teams agent"}</DialogTitle>
+            <DialogDescription>
+              Bind one M365 identity, choose its AI runtime, and control exactly which provider connections it can use.
+            </DialogDescription>
+          </DialogHeader>
+          <AgentSetupForm
+            draft={draft}
+            setDraft={setDraft}
+            teamsConnections={teamsConnections}
+            toolConnections={toolConnections}
+            configuredAgentProviders={configuredAgentProviders}
+            busy={busy}
+            status={status}
+            onSave={save}
+            onRemove={remove}
+            onToggleToolConnection={toggleToolConnection}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+interface AgentCardProps {
+  agent: TeamsGatewayAgent;
+  groups: TeamsGatewayGroup[];
+  metrics?: TeamsGatewayAgentMetrics;
+  onEdit(): void;
+}
+
+function AgentCard({ agent, groups, metrics, onEdit }: AgentCardProps): ReactNode {
+  const presence = metrics?.presence ?? agent.presence?.status ?? (agent.enabled ? "pending" : "offline");
+  const teams = groups.filter((group) => group.kind === "team");
+  const groupChats = groups.filter((group) => group.kind === "group_chat");
+  return (
+    <article className="teams-agent-card">
+      <header>
+        <div className="teams-agent-identity">
+          <span className="teams-agent-avatar">
+            <Bot size={20} />
+            <i className={`teams-presence-dot ${presence}`} />
+          </span>
+          <div>
+            <h3>{agent.name}</h3>
+            <span className={`teams-presence-label ${presence}`}>{presenceLabel(presence)}</span>
+          </div>
+        </div>
+        <Button size="sm" variant="outline" onClick={onEdit}>
+          <Settings2 size={14} /> Setup
+        </Button>
+      </header>
+
+      {agent.presence?.error ? <p className="teams-presence-error">{agent.presence.error}</p> : null}
+
+      <div className="teams-metric-grid">
+        <Metric value={metrics?.handledMessageCount ?? 0} label="Messages" />
+        <Metric value={metrics?.replyCount ?? 0} label="Replies" />
+        <Metric value={metrics?.activeThreadCount ?? 0} label="Threads" />
+        <Metric value={(metrics?.pendingPlanCount ?? 0) + (metrics?.pendingApprovalCount ?? 0)} label="Waiting" />
+      </div>
+
+      <div className="teams-group-area">
+        <div className="teams-group-heading">
+          <span>Detected groups</span>
+          <Badge>{teams.length + groupChats.length}</Badge>
+        </div>
+        {groups.length ? (
+          <div className="teams-group-list">
+            {teams.map((team) => (
+              <div className="teams-group-row" key={team.id}>
+                <span className="teams-group-icon">
+                  <Users size={15} />
+                </span>
+                <div>
+                  <strong>{team.displayName}</strong>
+                  <span>
+                    {team.channels.length ? (
+                      team.channels.map((channel) => (
+                        <span className="teams-channel-chip" key={channel.id}>
+                          <Hash size={11} /> {channel.displayName}
+                        </span>
+                      ))
+                    ) : (
+                      <small>No visible channels</small>
+                    )}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {groupChats.map((group) => (
+              <div className="teams-group-row" key={group.id}>
+                <span className="teams-group-icon">
+                  <MessagesSquare size={15} />
+                </span>
+                <div>
+                  <strong>{group.displayName}</strong>
+                  <small>{group.members.length} participants</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="teams-groups-empty">No groups detected yet. Poll to discover memberships.</p>
+        )}
+      </div>
+    </article>
+  );
+}
+
+interface AgentSetupFormProps {
+  draft: AgentDraft;
+  setDraft(value: AgentDraft): void;
+  teamsConnections: Array<ConnectionRecord & { id: string }>;
+  toolConnections: Array<ConnectionRecord & { id: string }>;
+  configuredAgentProviders: Set<AgentProvider>;
+  busy: "save" | "delete" | "poll" | null;
+  status: string | null;
+  onSave(event: FormEvent): Promise<void>;
+  onRemove(): Promise<void>;
+  onToggleToolConnection(connectionId: string): void;
+}
+
+function AgentSetupForm(props: AgentSetupFormProps): ReactNode {
+  const { draft, setDraft } = props;
+  return (
+    <form className="teams-agent-editor" onSubmit={(event) => void props.onSave(event)}>
+      <div className="teams-form-grid">
+        <Label className="field">
+          <span>Agent name</span>
+          <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required />
+        </Label>
+        <Label className="field">
+          <span>M365 Teams identity</span>
+          <select
+            className="agent-model-select"
+            value={draft.teamsConnectionId}
+            onChange={(event) => setDraft({ ...draft, teamsConnectionId: event.target.value })}
+            disabled={Boolean(draft.id)}
+            required
+          >
+            {props.teamsConnections.map((connection) => (
+              <option key={connection.id} value={connection.id}>
+                {connectionLabel(connection)}
+              </option>
+            ))}
+          </select>
+        </Label>
+        <Label className="field">
+          <span>Agent runtime</span>
+          <select
+            className="agent-model-select"
+            value={draft.agentProvider}
+            onChange={(event) => setDraft({ ...draft, agentProvider: event.target.value as AgentProvider })}
+          >
+            <option value="claude_code" disabled={!props.configuredAgentProviders.has("claude_code")}>
+              Claude Code{props.configuredAgentProviders.has("claude_code") ? "" : " — not connected"}
+            </option>
+            <option value="openai_codex" disabled={!props.configuredAgentProviders.has("openai_codex")}>
+              OpenAI Codex{props.configuredAgentProviders.has("openai_codex") ? "" : " — not connected"}
+            </option>
+          </select>
+        </Label>
+        <Label className="field">
+          <span>Thread window (hours)</span>
+          <Input
+            type="number"
+            min="1"
+            max="168"
+            value={draft.threadWindowHours}
+            onChange={(event) => setDraft({ ...draft, threadWindowHours: event.target.value })}
+            required
+          />
+        </Label>
+      </div>
+      <Label className="field">
+        <span>Persona and instructions</span>
+        <Textarea
+          rows={4}
+          value={draft.instructions}
+          onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
+          placeholder="How this agent should work and communicate"
+        />
+      </Label>
+      <div className="teams-form-grid">
+        <Label className="field">
+          <span>Internal domains</span>
+          <Input
+            value={draft.allowedDomains}
+            onChange={(event) => setDraft({ ...draft, allowedDomains: event.target.value })}
+            placeholder="company.com, subsidiary.com"
+            required
+          />
+        </Label>
+        <Label className="field">
+          <span>Authorized external users</span>
+          <Input
+            value={draft.allowedExternalUsers}
+            onChange={(event) => setDraft({ ...draft, allowedExternalUsers: event.target.value })}
+            placeholder="partner@example.com"
+          />
+        </Label>
+        <Label className="field teams-form-wide">
+          <span>Proactive-DM whitelist</span>
+          <Input
+            value={draft.proactiveDmUsers}
+            onChange={(event) => setDraft({ ...draft, proactiveDmUsers: event.target.value })}
+            placeholder="person@company.com"
+          />
+        </Label>
+      </div>
+      <fieldset className="teams-tool-picker">
+        <legend>Enabled provider connections</legend>
+        <p>
+          The exact available actions are captured when saved. Chat sending is excluded so the DM guard stays intact.
+        </p>
+        <div>
+          {props.toolConnections.map((connection) => (
+            <label key={connection.id} className="teams-tool-option">
+              <input
+                type="checkbox"
+                checked={draft.toolConnectionIds.includes(connection.id)}
+                onChange={() => props.onToggleToolConnection(connection.id)}
+              />
+              <span>
+                <strong>{connectionLabel(connection)}</strong>
+                <small>{connection.service}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div className="teams-switches">
+        <label>
+          <input
+            type="checkbox"
+            checked={draft.confirmBeforeTools}
+            onChange={(event) => setDraft({ ...draft, confirmBeforeTools: event.target.checked })}
+          />{" "}
+          Confirm a plan before using providers
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+          />{" "}
+          Agent enabled
+        </label>
+      </div>
+      <div className="button-row">
+        <Button type="submit" disabled={props.busy !== null || !draft.name.trim() || !draft.teamsConnectionId}>
+          {props.busy === "save" ? <Loader2 className="spin" size={14} /> : <Save size={14} />} Save agent
+        </Button>
+        {draft.id ? (
+          <Button variant="ghost" type="button" disabled={props.busy !== null} onClick={() => void props.onRemove()}>
+            {props.busy === "delete" ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Delete
+          </Button>
+        ) : null}
+      </div>
+      {props.status ? <FormStatus message={props.status} /> : null}
+    </form>
+  );
+}
+
+function SummaryStat({ icon, value, label }: { icon: ReactNode; value: string; label: string }): ReactNode {
+  return (
+    <div className="teams-summary-stat">
+      <span>{icon}</span>
+      <strong>{value}</strong>
+      <small>{label}</small>
+    </div>
+  );
+}
+
+function Metric({ value, label }: { value: number; label: string }): ReactNode {
+  return (
+    <span>
+      <strong>{value}</strong>
+      <small>{label}</small>
+    </span>
+  );
+}
+
+function presenceLabel(value: TeamsGatewayAgentMetrics["presence"]): string {
+  if (value === "online") return "Online in Teams";
+  if (value === "error") return "Presence error";
+  if (value === "pending") return "Connecting";
+  return "Offline";
 }
 
 function emptyDraft(data: AppData): AgentDraft {

@@ -4,11 +4,20 @@ import type { AgentCredentialService, AgentProvider } from "../agents/agent-cred
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { AgentChatExtension, AgentChatService, AgentChatToolActivity } from "../chat/agent-chat-service.ts";
 import type { Logger } from "../logger.ts";
-import type { ITeamsGatewayGraphClient, TeamsGatewayGraphContext } from "./teams-gateway-graph.ts";
 import type {
+  ITeamsGatewayGraphClient,
+  TeamsGatewayGraphChat,
+  TeamsGatewayGraphContext,
+  TeamsGatewayGraphMember,
+  TeamsGatewayGraphMessage,
+} from "./teams-gateway-graph.ts";
+import type {
+  TeamsGatewayAgentMetrics,
   ITeamsGatewayStore,
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
+  TeamsGatewayGroupMember,
   TeamsGatewayMessage,
   TeamsGatewayPlan,
   TeamsGatewayThread,
@@ -49,6 +58,19 @@ interface ApprovalCommand {
   ids: string[];
 }
 
+interface ThreadDescriptor {
+  chatId: string;
+  conversationKind: "direct" | "group_chat" | "channel";
+  conversationName?: string;
+  teamId?: string;
+  teamName?: string;
+  channelId?: string;
+  channelName?: string;
+  rootMessageId?: string;
+  members?: TeamsGatewayGroupMember[];
+  tenantId?: string;
+}
+
 const teamsService = "microsoft_teams";
 const sendChatActionId = "microsoft_teams.send_chat_message";
 const requiredTeamsGatewayScopes = [
@@ -56,12 +78,18 @@ const requiredTeamsGatewayScopes = [
   microsoftTeamsProviderScopes.chatRead,
   microsoftTeamsProviderScopes.chatCreate,
   microsoftTeamsProviderScopes.chatMessageSend,
+  microsoftTeamsProviderScopes.teamReadBasicAll,
+  microsoftTeamsProviderScopes.channelReadBasicAll,
+  microsoftTeamsProviderScopes.channelMessageReadAll,
+  microsoftTeamsProviderScopes.channelMessageSend,
+  microsoftTeamsProviderScopes.presenceReadWrite,
 ];
 const maxThreadMessages = 40;
 const maxConcurrentChats = 4;
 const defaultPollIntervalMs = 30_000;
+const presenceRefreshIntervalMs = 4 * 60_000;
 
-/** Owns Teams 1:1 account bindings, contact policy, durable conversations, and agent turns. */
+/** Owns Teams identity bindings, group discovery, contact policy, durable conversations, and agent turns. */
 export class TeamsGatewayService {
   private readonly options: TeamsGatewayServiceOptions;
   private readonly threadLocks = new Map<string, Promise<void>>();
@@ -78,6 +106,44 @@ export class TeamsGatewayService {
 
   listThreads(agentId?: string): Promise<TeamsGatewayThread[]> {
     return this.options.store.listThreads(agentId, 100);
+  }
+
+  listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
+    return this.options.store.listGroups(agentId);
+  }
+
+  async getMetrics(): Promise<TeamsGatewayAgentMetrics[]> {
+    const [agents, groups, threads] = await Promise.all([
+      this.options.store.listAgents(),
+      this.options.store.listGroups(),
+      this.options.store.listThreads(undefined, 500),
+    ]);
+    return agents.map((agent) => {
+      const agentGroups = groups.filter((group) => group.agentId === agent.id);
+      const agentThreads = threads.filter((thread) => thread.agentId === agent.id);
+      return {
+        agentId: agent.id,
+        presence: agent.presence?.status ?? (agent.enabled ? "pending" : "offline"),
+        teamCount: agentGroups.filter((group) => group.kind === "team").length,
+        channelCount: agentGroups.reduce((total, group) => total + group.channels.length, 0),
+        groupChatCount: agentGroups.filter((group) => group.kind === "group_chat").length,
+        directChatCount: agentThreads.filter((thread) => (thread.conversationKind ?? "direct") === "direct").length,
+        activeThreadCount: agentThreads.length,
+        handledMessageCount: agentThreads.reduce(
+          (total, thread) => total + thread.messages.filter((message) => message.role === "user").length,
+          0,
+        ),
+        replyCount: agentThreads.reduce(
+          (total, thread) => total + thread.messages.filter((message) => message.role === "assistant").length,
+          0,
+        ),
+        pendingPlanCount: agentThreads.filter((thread) => thread.pendingPlan).length,
+        pendingApprovalCount: agentThreads.reduce(
+          (total, thread) => total + (thread.pendingApprovalIds?.length ?? 0),
+          0,
+        ),
+      };
+    });
   }
 
   listContacts(agentId: string): Promise<TeamsGatewayContact[]> {
@@ -159,15 +225,20 @@ export class TeamsGatewayService {
       confirmBeforeTools: readBoolean(value.confirmBeforeTools, existing?.confirmBeforeTools ?? true),
       threadWindowHours: readInteger(value.threadWindowHours, "threadWindowHours", 1, 168, 12),
       toolGrants,
+      presence: enabled ? (existing?.presence ?? { status: "pending" }) : { status: "offline" },
       watchStartedAt: existing?.watchStartedAt ?? now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
     await this.options.store.setAgent(agent);
+    if (enabled) return this.refreshPresence(agent, undefined, true);
+    if (existing?.enabled) await this.clearPresence(agent);
     return agent;
   }
 
   async deleteAgent(id: string): Promise<boolean> {
+    const agent = await this.options.store.getAgent(id);
+    if (agent?.enabled) await this.clearPresence(agent);
     const threads = await this.options.store.listThreads(id, 500);
     const approvalIds = uniqueStrings(threads.flatMap((thread) => thread.pendingApprovalIds ?? []));
     for (const approvalId of approvalIds) {
@@ -246,28 +317,59 @@ export class TeamsGatewayService {
   ): Promise<Pick<TeamsGatewayPollResult, "chats" | "messages" | "errors">> {
     const result = { chats: 0, messages: 0, errors: 0 };
     const graphContext = await this.options.graph.context(agent.teamsConnectionId);
+    agent = await this.refreshPresence(agent, graphContext);
     await this.resumeResolvedApprovals(agent, graphContext);
-    const chats = (await this.options.graph.listChats(graphContext)).filter((chat) => chat.chatType === "oneOnOne");
-    result.chats = chats.length;
+    const chats = (await this.options.graph.listChats(graphContext)).filter(
+      (chat) => chat.chatType === "oneOnOne" || chat.chatType === "group",
+    );
+    const groups = await this.discoverGroups(agent, graphContext, chats);
+    const teamChannels = groups
+      .filter((group) => group.kind === "team")
+      .flatMap((group) => group.channels.map((channel) => ({ group, channel })));
+    result.chats = chats.length + teamChannels.length;
     await runWithConcurrency(chats, maxConcurrentChats, async (chat) => {
       try {
-        let participant = chat.members.find((member) => member.userId !== graphContext.selfId);
-        if (!participant) return;
-        if (!participant.email)
-          participant = { ...participant, ...(await this.options.graph.resolveUser(graphContext, participant.userId)) };
-        if (!participant.email) return;
+        const directParticipant = chat.members.find((member) => member.userId !== graphContext.selfId);
+        if (chat.chatType === "oneOnOne" && !directParticipant) return;
+        const descriptor = chatDescriptor(chat, graphContext.selfId);
         const existing = await this.options.store.getThread(agent.id, chat.id);
         const floor = existing?.cursorAt ?? agent.watchStartedAt;
         if (chat.lastMessageAt && Date.parse(chat.lastMessageAt) < Date.parse(floor)) return;
         const messages = await this.options.graph.listMessages(graphContext, chat.id, floor);
         for (const message of messages) {
           if (message.senderId === graphContext.selfId) {
-            await this.advanceCursor(agent, chat.id, participant, message.createdAt, message.id);
+            await this.advanceCursor(
+              agent,
+              descriptor,
+              directParticipant ?? selfParticipant(graphContext),
+              message.createdAt,
+              message.id,
+            );
             continue;
           }
+          let participant =
+            chat.chatType === "oneOnOne"
+              ? directParticipant
+              : chat.members.find((member) => member.userId === message.senderId);
+          if (!participant && message.senderId) {
+            participant = await this.options.graph.resolveUser(graphContext, message.senderId);
+          } else if (participant && !participant.email) {
+            participant = {
+              ...participant,
+              ...(await this.options.graph.resolveUser(graphContext, participant.userId)),
+            };
+          }
+          if (!participant?.email) continue;
           const key = threadId(agent.id, chat.id);
           await this.withThreadLock(key, async () => {
-            const handled = await this.handleInboundMessage(agent, graphContext, chat.id, participant!, message);
+            const handled = await this.handleInboundMessage(
+              agent,
+              graphContext,
+              descriptor,
+              participant,
+              message,
+              chat.chatType === "oneOnOne",
+            );
             if (handled) result.messages += 1;
           });
         }
@@ -276,19 +378,186 @@ export class TeamsGatewayService {
         this.logError(error, "Teams gateway chat poll failed", { agentId: agent.id, chatId: chat.id });
       }
     });
+    await runWithConcurrency(teamChannels, maxConcurrentChats, async ({ group, channel }) => {
+      try {
+        const channelResult = await this.pollChannel(agent, graphContext, group, channel);
+        result.messages += channelResult;
+      } catch (error) {
+        result.errors += 1;
+        this.logError(error, "Teams gateway channel poll failed", {
+          agentId: agent.id,
+          teamId: group.externalId,
+          channelId: channel.id,
+        });
+      }
+    });
     return result;
+  }
+
+  private async discoverGroups(
+    agent: TeamsGatewayAgent,
+    graphContext: TeamsGatewayGraphContext,
+    chats: TeamsGatewayGraphChat[],
+  ): Promise<TeamsGatewayGroup[]> {
+    const [teams, existingGroups] = await Promise.all([
+      this.options.graph.listJoinedTeams(graphContext),
+      this.options.store.listGroups(agent.id),
+    ]);
+    const existingById = new Map(existingGroups.map((group) => [group.id, group]));
+    const now = this.now().toISOString();
+    const groups: TeamsGatewayGroup[] = [];
+    for (const team of teams) {
+      const id = groupId(agent.id, "team", team.id);
+      const existing = existingById.get(id);
+      const previousChannels = new Map(existing?.channels.map((channel) => [channel.id, channel]) ?? []);
+      const channels = (await this.options.graph.listChannels(graphContext, team.id)).map((channel) => ({
+        ...channel,
+        watchStartedAt: previousChannels.get(channel.id)?.watchStartedAt ?? agent.watchStartedAt,
+      }));
+      groups.push({
+        id,
+        agentId: agent.id,
+        kind: "team",
+        externalId: team.id,
+        displayName: team.displayName,
+        description: team.description,
+        tenantId: team.tenantId,
+        webUrl: team.webUrl,
+        members: [],
+        channels,
+        discoveredAt: existing?.discoveredAt ?? now,
+        updatedAt: now,
+      });
+    }
+    for (const chat of chats.filter((item) => item.chatType === "group")) {
+      const id = groupId(agent.id, "group_chat", chat.id);
+      const existing = existingById.get(id);
+      groups.push({
+        id,
+        agentId: agent.id,
+        kind: "group_chat",
+        externalId: chat.id,
+        displayName: chatName(chat, graphContext.selfId),
+        tenantId: chat.tenantId,
+        webUrl: chat.webUrl,
+        members: chat.members.map(toStoredMember),
+        channels: [],
+        discoveredAt: existing?.discoveredAt ?? now,
+        updatedAt: now,
+      });
+    }
+    for (const group of groups) await this.options.store.setGroup(group);
+    await this.options.store.deleteMissingGroups(
+      agent.id,
+      groups.map((group) => group.id),
+    );
+    return groups;
+  }
+
+  private async pollChannel(
+    agent: TeamsGatewayAgent,
+    graphContext: TeamsGatewayGraphContext,
+    group: TeamsGatewayGroup,
+    channel: TeamsGatewayGroup["channels"][number],
+  ): Promise<number> {
+    const pollStartedAt = this.now().toISOString();
+    const channelThreads = await this.options.graph.listChannelThreads(
+      graphContext,
+      group.externalId,
+      channel.id,
+      channel.watchStartedAt,
+    );
+    const knownThreads = (await this.options.store.listThreads(agent.id, 500)).filter(
+      (thread) =>
+        thread.conversationKind === "channel" &&
+        thread.teamId === group.externalId &&
+        thread.channelId === channel.id &&
+        thread.rootMessageId,
+    );
+    const discoveredRootIds = new Set(channelThreads.map((thread) => thread.root.id));
+    let handledMessages = 0;
+    for (const channelThread of channelThreads) {
+      const descriptor: ThreadDescriptor = {
+        chatId: `channel:${group.externalId}:${channel.id}:${channelThread.root.id}`,
+        conversationKind: "channel",
+        conversationName: `${group.displayName} / ${channel.displayName}`,
+        teamId: group.externalId,
+        teamName: group.displayName,
+        channelId: channel.id,
+        channelName: channel.displayName,
+        rootMessageId: channelThread.root.id,
+        tenantId: group.tenantId,
+      };
+      const replies = await this.options.graph.listChannelReplies(
+        graphContext,
+        group.externalId,
+        channel.id,
+        channelThread.root.id,
+        channel.watchStartedAt,
+      );
+      handledMessages += await this.processChannelMessages(agent, graphContext, descriptor, [
+        channelThread.root,
+        ...replies,
+      ]);
+    }
+    for (const thread of knownThreads.filter((item) => !discoveredRootIds.has(item.rootMessageId!))) {
+      const replies = await this.options.graph.listChannelReplies(
+        graphContext,
+        group.externalId,
+        channel.id,
+        thread.rootMessageId!,
+        thread.cursorAt,
+      );
+      handledMessages += await this.processChannelMessages(agent, graphContext, descriptorFromThread(thread), replies);
+    }
+    channel.watchStartedAt = pollStartedAt;
+    group.updatedAt = pollStartedAt;
+    await this.options.store.setGroup(group);
+    return handledMessages;
+  }
+
+  private async processChannelMessages(
+    agent: TeamsGatewayAgent,
+    graphContext: TeamsGatewayGraphContext,
+    descriptor: ThreadDescriptor,
+    messages: TeamsGatewayGraphMessage[],
+  ): Promise<number> {
+    let handledMessages = 0;
+    await this.withThreadLock(threadId(agent.id, descriptor.chatId), async () => {
+      for (const message of messages.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))) {
+        if (message.senderId === graphContext.selfId) {
+          await this.advanceCursor(agent, descriptor, selfParticipant(graphContext), message.createdAt, message.id);
+          continue;
+        }
+        const participant = await this.resolveMessageSender(graphContext, message);
+        if (!participant?.email) continue;
+        if (await this.handleInboundMessage(agent, graphContext, descriptor, participant, message, false)) {
+          handledMessages += 1;
+        }
+      }
+    });
+    return handledMessages;
+  }
+
+  private async resolveMessageSender(
+    graphContext: TeamsGatewayGraphContext,
+    message: TeamsGatewayGraphMessage,
+  ): Promise<TeamsGatewayGraphMember | undefined> {
+    if (!message.senderId) return undefined;
+    return this.options.graph.resolveUser(graphContext, message.senderId);
   }
 
   private async handleInboundMessage(
     agent: TeamsGatewayAgent,
     graphContext: TeamsGatewayGraphContext,
-    chatId: string,
-    participant: { userId: string; tenantId?: string; email?: string; displayName: string },
-    message: { id: string; createdAt: string; senderId?: string; senderName: string; text: string },
+    descriptor: ThreadDescriptor,
+    participant: TeamsGatewayGraphMember,
+    message: TeamsGatewayGraphMessage,
+    recordDirectContact: boolean,
   ): Promise<boolean> {
     const email = participant.email!;
-    let thread = await this.options.store.getThread(agent.id, chatId);
-    thread = this.freshThread(agent, chatId, participant, thread);
+    let thread = await this.options.store.getThread(agent.id, descriptor.chatId);
+    thread = this.freshThread(agent, descriptor, participant, thread);
     if (thread.messages.some((item) => item.id === message.id)) {
       return false;
     }
@@ -298,12 +567,12 @@ export class TeamsGatewayService {
     if (!isTeamsRecipientAuthorized(agent, email)) {
       await this.options.store.setThread(thread);
       this.options.logger?.warn(
-        { agentId: agent.id, chatId, participantEmail: email },
+        { agentId: agent.id, chatId: descriptor.chatId, participantEmail: email },
         "Teams gateway blocked an unauthorized external sender",
       );
       return false;
     }
-    await this.recordContact(agent, thread, participant, message.createdAt);
+    if (recordDirectContact) await this.recordContact(agent, thread, participant, message.createdAt);
     thread.messages = appendMessage(thread.messages, {
       id: message.id,
       role: "user",
@@ -350,7 +619,7 @@ export class TeamsGatewayService {
     requirePlan: boolean,
   ): Promise<void> {
     let proposedPlan: PlanCapture | undefined;
-    const extension = this.createExtension(agent, graphContext, requirePlan, (plan) => {
+    const extension = this.createExtension(agent, thread, requirePlan, (plan) => {
       proposedPlan = plan;
     });
     const response = await this.options.agentChat.respondWithExtension(
@@ -380,13 +649,17 @@ export class TeamsGatewayService {
 
   private createExtension(
     agent: TeamsGatewayAgent,
-    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
     requirePlan: boolean,
     capturePlan: (plan: PlanCapture) => void,
   ): AgentChatExtension {
     return {
-      systemPrompt: createTeamsSystemPrompt(agent, requirePlan),
-      context: { channel: "Microsoft Teams 1:1 DM", agentName: agent.name },
+      systemPrompt: createTeamsSystemPrompt(agent, thread, requirePlan),
+      context: {
+        channel: teamsConversationLabel(thread),
+        agentName: agent.name,
+        conversationName: thread.conversationName,
+      },
       connectorGrants: agent.toolGrants.map((grant) => ({
         connectionId: grant.connectionId,
         actionIds: new Set(grant.actionIds),
@@ -479,7 +752,7 @@ export class TeamsGatewayService {
     }
     const response = await this.options.agentChat.resumeWithExtension(
       ids[0]!,
-      this.createExtension(agent, graphContext, false, () => {}),
+      this.createExtension(agent, thread, false, () => {}),
     );
     await this.applyAgentResponse(graphContext, thread, response);
   }
@@ -509,7 +782,7 @@ export class TeamsGatewayService {
       try {
         const response = await this.options.agentChat.resumeWithExtension(
           thread.pendingApprovalIds![0]!,
-          this.createExtension(agent, graphContext, false, () => {}),
+          this.createExtension(agent, thread, false, () => {}),
         );
         await this.applyAgentResponse(graphContext, thread, response);
       } catch (error) {
@@ -536,9 +809,9 @@ export class TeamsGatewayService {
     const approvalSuffix = thread.pendingApprovalIds?.length
       ? `\n\n${await this.describeApprovals(thread.pendingApprovalIds)}`
       : "";
-    const sent = await this.options.graph.sendMessage(
+    const sent = await this.sendThreadMessage(
       graphContext,
-      thread.chatId,
+      thread,
       `${response.message.content}${approvalSuffix}`.trim(),
     );
     thread.pendingApprovalMessageId = thread.pendingApprovalIds?.length ? sent.id : undefined;
@@ -556,7 +829,7 @@ export class TeamsGatewayService {
   }
 
   private async reply(graphContext: TeamsGatewayGraphContext, thread: TeamsGatewayThread, text: string): Promise<void> {
-    const sent = await this.options.graph.sendMessage(graphContext, thread.chatId, text);
+    const sent = await this.sendThreadMessage(graphContext, thread, text);
     thread.messages = appendMessage(thread.messages, {
       id: sent.id ?? crypto.randomUUID(),
       role: "assistant",
@@ -567,10 +840,34 @@ export class TeamsGatewayService {
     await this.options.store.setThread(thread);
   }
 
+  private sendThreadMessage(
+    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
+    text: string,
+  ): Promise<{ id?: string }> {
+    if (thread.conversationKind === "channel") {
+      if (!thread.teamId || !thread.channelId || !thread.rootMessageId) {
+        throw new TeamsGatewayError(
+          "invalid_channel_thread",
+          "The Teams channel thread is missing routing details.",
+          409,
+        );
+      }
+      return this.options.graph.sendChannelReply(
+        graphContext,
+        thread.teamId,
+        thread.channelId,
+        thread.rootMessageId,
+        text,
+      );
+    }
+    return this.options.graph.sendMessage(graphContext, thread.chatId, text);
+  }
+
   private freshThread(
     agent: TeamsGatewayAgent,
-    chatId: string,
-    participant: { userId: string; tenantId?: string; email?: string; displayName: string },
+    descriptor: ThreadDescriptor,
+    participant: TeamsGatewayGraphMember,
     existing?: TeamsGatewayThread,
   ): TeamsGatewayThread {
     const now = this.now();
@@ -583,14 +880,30 @@ export class TeamsGatewayService {
         participantEmail: participant.email!,
         participantName: participant.displayName,
         tenantId: participant.tenantId,
+        conversationKind: descriptor.conversationKind,
+        conversationName: descriptor.conversationName,
+        teamId: descriptor.teamId,
+        teamName: descriptor.teamName,
+        channelId: descriptor.channelId,
+        channelName: descriptor.channelName,
+        rootMessageId: descriptor.rootMessageId,
+        members: descriptor.members,
       };
     }
     const timestamp = now.toISOString();
     return {
-      id: threadId(agent.id, chatId),
+      id: threadId(agent.id, descriptor.chatId),
       agentId: agent.id,
-      chatId,
-      tenantId: participant.tenantId,
+      chatId: descriptor.chatId,
+      conversationKind: descriptor.conversationKind,
+      conversationName: descriptor.conversationName,
+      teamId: descriptor.teamId,
+      teamName: descriptor.teamName,
+      channelId: descriptor.channelId,
+      channelName: descriptor.channelName,
+      rootMessageId: descriptor.rootMessageId,
+      members: descriptor.members,
+      tenantId: descriptor.tenantId ?? participant.tenantId,
       participantId: participant.userId,
       participantEmail: participant.email!,
       participantName: participant.displayName,
@@ -604,12 +917,17 @@ export class TeamsGatewayService {
 
   private async advanceCursor(
     agent: TeamsGatewayAgent,
-    chatId: string,
-    participant: { userId: string; tenantId?: string; email?: string; displayName: string },
+    descriptor: ThreadDescriptor,
+    participant: TeamsGatewayGraphMember,
     cursorAt: string,
     cursorMessageId: string,
   ): Promise<void> {
-    const thread = this.freshThread(agent, chatId, participant, await this.options.store.getThread(agent.id, chatId));
+    const thread = this.freshThread(
+      agent,
+      descriptor,
+      participant,
+      await this.options.store.getThread(agent.id, descriptor.chatId),
+    );
     thread.cursorAt = cursorAt;
     thread.cursorMessageId = cursorMessageId;
     thread.updatedAt = this.now().toISOString();
@@ -632,6 +950,61 @@ export class TeamsGatewayService {
       chatId: thread.chatId,
       firstInboundAt: previous?.firstInboundAt ?? inboundAt,
       lastInboundAt: inboundAt,
+    });
+  }
+
+  private async refreshPresence(
+    agent: TeamsGatewayAgent,
+    graphContext?: TeamsGatewayGraphContext,
+    force = false,
+  ): Promise<TeamsGatewayAgent> {
+    const attemptedAt = this.now().toISOString();
+    if (
+      !force &&
+      agent.presence?.lastAttemptAt &&
+      Date.parse(attemptedAt) - Date.parse(agent.presence.lastAttemptAt) < presenceRefreshIntervalMs
+    ) {
+      return agent;
+    }
+    try {
+      const context = graphContext ?? (await this.options.graph.context(agent.teamsConnectionId));
+      await this.options.graph.setPresence(context);
+      const updated: TeamsGatewayAgent = {
+        ...agent,
+        presence: { status: "online", lastAttemptAt: attemptedAt, lastSetAt: attemptedAt },
+      };
+      await this.options.store.setAgent(updated);
+      return updated;
+    } catch (error) {
+      const updated: TeamsGatewayAgent = {
+        ...agent,
+        presence: {
+          status: "error",
+          lastAttemptAt: attemptedAt,
+          lastSetAt: agent.presence?.lastSetAt,
+          error: error instanceof Error ? error.message : "Unable to set Teams presence.",
+        },
+      };
+      await this.options.store.setAgent(updated);
+      this.logError(error, "Teams gateway presence refresh failed", { agentId: agent.id });
+      return updated;
+    }
+  }
+
+  private async clearPresence(agent: TeamsGatewayAgent): Promise<void> {
+    try {
+      const graphContext = await this.options.graph.context(agent.teamsConnectionId);
+      await this.options.graph.clearPresence(graphContext);
+    } catch (error) {
+      this.logError(error, "Teams gateway presence clear failed", { agentId: agent.id });
+    }
+    await this.options.store.setAgent({
+      ...agent,
+      presence: {
+        status: "offline",
+        lastAttemptAt: this.now().toISOString(),
+        lastSetAt: agent.presence?.lastSetAt,
+      },
     });
   }
 
@@ -711,8 +1084,18 @@ export class TeamsGatewayError extends Error {
   }
 }
 
-function createTeamsSystemPrompt(agent: TeamsGatewayAgent, requirePlan: boolean): string {
-  return `You are ${agent.name}, speaking directly to one person in a Microsoft Teams 1:1 chat.
+function createTeamsSystemPrompt(agent: TeamsGatewayAgent, thread: TeamsGatewayThread, requirePlan: boolean): string {
+  const members = thread.members
+    ?.map((member) => member.displayName)
+    .filter(Boolean)
+    .join(", ");
+  const conversationContext =
+    thread.conversationKind === "channel"
+      ? `You are replying in the Microsoft Teams channel ${thread.teamName} / ${thread.channelName}. Your reply stays in the current post thread and is visible to the channel audience.`
+      : thread.conversationKind === "group_chat"
+        ? `You are replying in the Microsoft Teams group chat ${thread.conversationName ?? "Group chat"}.${members ? ` Participants: ${members}.` : ""} Your reply is visible to the group.`
+        : "You are speaking directly to one person in a Microsoft Teams 1:1 chat.";
+  return `You are ${agent.name}. ${conversationContext}
 
 ${agent.instructions?.trim() || "Be concise, practical, and transparent about completed work and blockers."}
 
@@ -727,6 +1110,60 @@ ${
     ? "- before any connected application access or proactive DM, call propose_teams_plan with a concise summary and steps; do not call connector actions until the person confirms the plan\n- answer directly without a plan only when no connected application or external side effect is needed"
     : "- the person has confirmed the current plan; carry it out without asking for the same confirmation again"
 }`;
+}
+
+function teamsConversationLabel(thread: TeamsGatewayThread): string {
+  if (thread.conversationKind === "channel") return "Microsoft Teams channel thread";
+  if (thread.conversationKind === "group_chat") return "Microsoft Teams group chat";
+  return "Microsoft Teams 1:1 DM";
+}
+
+function chatDescriptor(chat: TeamsGatewayGraphChat, selfId: string): ThreadDescriptor {
+  return {
+    chatId: chat.id,
+    conversationKind: chat.chatType === "group" ? "group_chat" : "direct",
+    conversationName: chat.chatType === "group" ? chatName(chat, selfId) : undefined,
+    members: chat.chatType === "group" ? chat.members.map(toStoredMember) : undefined,
+    tenantId: chat.tenantId,
+  };
+}
+
+function descriptorFromThread(thread: TeamsGatewayThread): ThreadDescriptor {
+  return {
+    chatId: thread.chatId,
+    conversationKind: thread.conversationKind ?? "direct",
+    conversationName: thread.conversationName,
+    teamId: thread.teamId,
+    teamName: thread.teamName,
+    channelId: thread.channelId,
+    channelName: thread.channelName,
+    rootMessageId: thread.rootMessageId,
+    members: thread.members,
+    tenantId: thread.tenantId,
+  };
+}
+
+function chatName(chat: TeamsGatewayGraphChat, selfId: string): string {
+  return (
+    chat.topic?.trim() ||
+    chat.members
+      .filter((member) => member.userId !== selfId)
+      .map((member) => member.displayName)
+      .join(", ") ||
+    "Group chat"
+  );
+}
+
+function toStoredMember(member: TeamsGatewayGraphMember): TeamsGatewayGroupMember {
+  return { userId: member.userId, email: member.email, displayName: member.displayName };
+}
+
+function selfParticipant(context: TeamsGatewayGraphContext): TeamsGatewayGraphMember {
+  return { userId: context.selfId, email: context.selfEmail, displayName: context.selfEmail };
+}
+
+function groupId(agentId: string, kind: TeamsGatewayGroup["kind"], externalId: string): string {
+  return `${agentId}:${kind}:${externalId}`;
 }
 
 function formatPlan(plan: TeamsGatewayPlan): string {

@@ -362,6 +362,12 @@ export interface TeamsGatewayAgent {
   confirmBeforeTools: boolean;
   threadWindowHours: number;
   toolGrants: TeamsGatewayToolGrant[];
+  presence?: {
+    status: "online" | "offline" | "error" | "pending";
+    lastSetAt?: string;
+    lastAttemptAt?: string;
+    error?: string;
+  };
   watchStartedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -376,6 +382,44 @@ export interface TeamsGatewayThread {
   pendingPlan?: { summary: string };
   pendingApprovalIds?: string[];
   updatedAt: string;
+}
+
+export interface TeamsGatewayGroupMember {
+  userId: string;
+  email?: string;
+  displayName: string;
+}
+
+export interface TeamsGatewayGroup {
+  id: string;
+  agentId: string;
+  kind: "team" | "group_chat";
+  externalId: string;
+  displayName: string;
+  description?: string;
+  webUrl?: string;
+  members: TeamsGatewayGroupMember[];
+  channels: Array<{
+    id: string;
+    displayName: string;
+    description?: string;
+    webUrl?: string;
+  }>;
+  updatedAt: string;
+}
+
+export interface TeamsGatewayAgentMetrics {
+  agentId: string;
+  presence: "online" | "offline" | "error" | "pending";
+  teamCount: number;
+  channelCount: number;
+  groupChatCount: number;
+  directChatCount: number;
+  activeThreadCount: number;
+  handledMessageCount: number;
+  replyCount: number;
+  pendingPlanCount: number;
+  pendingApprovalCount: number;
 }
 
 export interface FlowRun {

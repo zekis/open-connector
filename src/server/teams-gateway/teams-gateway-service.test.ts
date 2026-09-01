@@ -3,11 +3,18 @@ import type { ConnectionSummary } from "../../connection-service.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
 import type { AgentChatResponse } from "../chat/agent-chat-types.ts";
-import type { ITeamsGatewayGraphClient, TeamsGatewayGraphContext } from "./teams-gateway-graph.ts";
+import type {
+  ITeamsGatewayGraphClient,
+  TeamsGatewayGraphChannelThread,
+  TeamsGatewayGraphChat,
+  TeamsGatewayGraphContext,
+  TeamsGatewayGraphTeam,
+} from "./teams-gateway-graph.ts";
 import type {
   ITeamsGatewayStore,
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
   TeamsGatewayThread,
 } from "./teams-gateway-types.ts";
 
@@ -27,7 +34,17 @@ const teamsConnection: ConnectionSummary = {
   profile: {
     accountId: "agent-user-id",
     displayName: "agent@company.test",
-    grantedScopes: ["Chat.Read", "ChatMessage.Send", "Chat.Create", "User.ReadBasic.All"],
+    grantedScopes: [
+      "Chat.Read",
+      "ChatMessage.Send",
+      "Chat.Create",
+      "User.ReadBasic.All",
+      "Team.ReadBasic.All",
+      "Channel.ReadBasic.All",
+      "ChannelMessage.Read.All",
+      "ChannelMessage.Send",
+      "Presence.ReadWrite",
+    ],
   },
 };
 
@@ -53,6 +70,7 @@ describe("TeamsGatewayService", () => {
       name: "Operations agent",
       teamsConnectionId: teamsConnection.id,
       agentProvider: "claude_code",
+      presence: { status: "online" },
     });
     await expect(
       service.upsertAgent(created.id, { ...input, teamsConnectionId: "another-teams-connection" }),
@@ -174,6 +192,93 @@ describe("TeamsGatewayService", () => {
     expect(approvals.status(secondApproval.id)).toBe("approved");
     expect(graph.sent.at(-1)?.text).toBe("Both approved updates are complete.");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingApprovalIds).toBeUndefined();
+  });
+
+  it("detects group chats, keeps their roster as context, and replies to the group", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("group-message-1", "2026-09-01T01:00:00.000Z", "Can everyone see this?"),
+    ]);
+    graph.chats = [
+      {
+        id: "group-chat-1",
+        chatType: "group",
+        topic: "Operations room",
+        members: [
+          { userId: "agent-user-id", email: "agent@company.test", displayName: "Agent" },
+          { userId: "person-user-id", email: "person@company.test", displayName: "Person" },
+          { userId: "colleague-user-id", email: "colleague@company.test", displayName: "Colleague" },
+        ],
+        lastMessageAt: "2026-09-01T01:00:00.000Z",
+      },
+    ];
+    const chat = new FakeAgentChat([completedResponse("Yes — replying to the whole group.")]);
+    const service = createService(store, graph, chat);
+
+    expect(await service.pollNow()).toMatchObject({ chats: 1, messages: 1, errors: 0 });
+    expect(graph.sent).toEqual([{ chatId: "group-chat-1", text: "Yes — replying to the whole group." }]);
+    expect(await store.listGroups("agent-1")).toMatchObject([
+      { kind: "group_chat", displayName: "Operations room", members: [{}, {}, {}] },
+    ]);
+    expect(await store.getThread("agent-1", "group-chat-1")).toMatchObject({
+      conversationKind: "group_chat",
+      conversationName: "Operations room",
+    });
+    expect(chat.respondExtensions[0]?.systemPrompt).toContain("visible to the group");
+    expect(await store.listContacts("agent-1")).toEqual([]);
+  });
+
+  it("detects joined Team channels and replies in the original post thread", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([]);
+    graph.chats = [];
+    graph.teams = [{ id: "team-1", displayName: "Operations" }];
+    graph.channels = [{ id: "channel-1", displayName: "General" }];
+    graph.channelThreads = [
+      {
+        root: inboundMessage("root-1", "2026-09-01T01:00:00.000Z", "Agent, give us a status update."),
+        replies: [],
+      },
+    ];
+    const chat = new FakeAgentChat([
+      completedResponse("Everything is operating normally."),
+      completedResponse("The follow-up is noted."),
+    ]);
+    const service = createService(store, graph, chat);
+
+    expect(await service.pollNow()).toMatchObject({ chats: 1, messages: 1, errors: 0 });
+    expect(graph.channelReplies).toEqual([
+      {
+        teamId: "team-1",
+        channelId: "channel-1",
+        rootMessageId: "root-1",
+        text: "Everything is operating normally.",
+      },
+    ]);
+    expect(await store.listGroups("agent-1")).toMatchObject([
+      { kind: "team", displayName: "Operations", channels: [{ displayName: "General" }] },
+    ]);
+    const [thread] = await store.listThreads("agent-1");
+    expect(thread).toMatchObject({
+      conversationKind: "channel",
+      teamName: "Operations",
+      channelName: "General",
+      rootMessageId: "root-1",
+    });
+    expect(chat.respondExtensions[0]?.systemPrompt).toContain("current post thread");
+
+    graph.channelThreads = [];
+    graph.listedChannelReplies.push(
+      inboundMessage("reply-1", "2026-09-01T02:05:00.000Z", "Please add that to the thread."),
+    );
+    expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
+    expect(graph.channelReplies.at(-1)).toMatchObject({
+      rootMessageId: "root-1",
+      text: "The follow-up is noted.",
+    });
+    expect(await service.getMetrics()).toMatchObject([
+      { presence: "online", teamCount: 1, channelCount: 1, handledMessageCount: 2, replyCount: 2 },
+    ]);
   });
 
   it("enforces both DM gates before creating a proactive chat", async () => {
@@ -363,21 +468,17 @@ class FakeApprovals {
 class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   readonly messages: ReturnType<typeof inboundMessage>[];
   readonly sent: Array<{ chatId: string; text: string }> = [];
+  readonly channelReplies: Array<{ teamId: string; channelId: string; rootMessageId: string; text: string }> = [];
+  chats: TeamsGatewayGraphChat[];
+  teams: TeamsGatewayGraphTeam[] = [];
+  channels: Array<{ id: string; displayName: string }> = [];
+  channelThreads: TeamsGatewayGraphChannelThread[] = [];
+  listedChannelReplies: ReturnType<typeof inboundMessage>[] = [];
+  presenceSets = 0;
 
   constructor(messages: ReturnType<typeof inboundMessage>[]) {
     this.messages = messages;
-  }
-
-  async context(): Promise<TeamsGatewayGraphContext> {
-    return {
-      selfId: "agent-user-id",
-      selfEmail: "agent@company.test",
-      deps: { accessToken: "token", fetcher: providerFetch },
-    };
-  }
-
-  async listChats() {
-    return [
+    this.chats = [
       {
         id: "chat-1",
         chatType: "oneOnOne",
@@ -388,6 +489,41 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
         lastMessageAt: this.messages.at(-1)?.createdAt,
       },
     ];
+  }
+
+  async context(): Promise<TeamsGatewayGraphContext> {
+    return {
+      selfId: "agent-user-id",
+      selfEmail: "agent@company.test",
+      presenceSessionId: "teams-app-id",
+      deps: { accessToken: "token", fetcher: providerFetch },
+    };
+  }
+
+  async listChats(): Promise<TeamsGatewayGraphChat[]> {
+    return this.chats.map((chat) => ({ ...chat, lastMessageAt: this.messages.at(-1)?.createdAt }));
+  }
+
+  async listJoinedTeams(): Promise<TeamsGatewayGraphTeam[]> {
+    return this.teams;
+  }
+
+  async listChannels() {
+    return this.channels;
+  }
+
+  async listChannelThreads() {
+    return this.channelThreads;
+  }
+
+  async listChannelReplies(
+    _context: TeamsGatewayGraphContext,
+    _teamId: string,
+    _channelId: string,
+    _rootMessageId: string,
+    since: string,
+  ) {
+    return this.listedChannelReplies.filter((message) => Date.parse(message.createdAt) > Date.parse(since));
   }
 
   async listMessages(_context: TeamsGatewayGraphContext, _chatId: string, since: string) {
@@ -403,15 +539,33 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
     return { id: `sent-${this.sent.length}` };
   }
 
+  async sendChannelReply(
+    _context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    text: string,
+  ) {
+    this.channelReplies.push({ teamId, channelId, rootMessageId, text });
+    return { id: `channel-sent-${this.channelReplies.length}` };
+  }
+
   async createOneOnOneChat() {
     return { id: "created-chat" };
   }
+
+  async setPresence(): Promise<void> {
+    this.presenceSets += 1;
+  }
+
+  async clearPresence(): Promise<void> {}
 }
 
 class MemoryTeamsGatewayStore implements ITeamsGatewayStore {
   private readonly agents = new Map<string, TeamsGatewayAgent>();
   private readonly threads = new Map<string, TeamsGatewayThread>();
   private readonly contacts = new Map<string, TeamsGatewayContact>();
+  private readonly groups = new Map<string, TeamsGatewayGroup>();
 
   constructor(agents: TeamsGatewayAgent[] = []) {
     for (const agent of agents) this.agents.set(agent.id, structuredClone(agent));
@@ -460,6 +614,23 @@ class MemoryTeamsGatewayStore implements ITeamsGatewayStore {
     return [...this.contacts.values()]
       .filter((contact) => contact.agentId === agentId)
       .map((contact) => structuredClone(contact));
+  }
+
+  async setGroup(group: TeamsGatewayGroup): Promise<void> {
+    this.groups.set(group.id, structuredClone(group));
+  }
+
+  async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
+    return [...this.groups.values()]
+      .filter((group) => !agentId || group.agentId === agentId)
+      .map((group) => structuredClone(group));
+  }
+
+  async deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void> {
+    const retained = new Set(retainedIds);
+    for (const [id, group] of this.groups) {
+      if (group.agentId === agentId && !retained.has(id)) this.groups.delete(id);
+    }
   }
 }
 

@@ -27,6 +27,7 @@ import type {
   ITeamsGatewayStore,
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 import type {
@@ -102,7 +103,8 @@ type IdSecretTable =
   | "kanban_boards"
   | "teams_gateway_agents"
   | "teams_gateway_threads"
-  | "teams_gateway_contacts";
+  | "teams_gateway_contacts"
+  | "teams_gateway_groups";
 
 /**
  * Shared SQLite connection for local runtime state.
@@ -175,6 +177,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "teams_gateway_agents",
           "teams_gateway_threads",
           "teams_gateway_contacts",
+          "teams_gateway_groups",
         ] as IdSecretTable[]
       ).map((table) => readRotatedIdSecrets(this.database, this.secretCodec, nextSecretCodec, table)),
     );
@@ -197,6 +200,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "teams_gateway_agents",
           "teams_gateway_threads",
           "teams_gateway_contacts",
+          "teams_gateway_groups",
         ] as IdSecretTable[]
       ).entries()) {
         writeRotatedIdSecrets(this.database, table, flowRecords[index]!);
@@ -222,6 +226,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from kanban_boards;
       delete from teams_gateway_contacts;
       delete from teams_gateway_threads;
+      delete from teams_gateway_groups;
       delete from teams_gateway_agents;
       delete from flow_trigger_states;
       delete from flow_approvals;
@@ -1098,6 +1103,7 @@ export class SqliteTeamsGatewayStore implements ITeamsGatewayStore {
     return runInTransaction(this.database, () => {
       this.database.prepare("delete from teams_gateway_contacts where agent_id = ?").run(id);
       this.database.prepare("delete from teams_gateway_threads where agent_id = ?").run(id);
+      this.database.prepare("delete from teams_gateway_groups where agent_id = ?").run(id);
       return this.database.prepare("delete from teams_gateway_agents where id = ?").run(id).changes > 0;
     });
   }
@@ -1163,6 +1169,40 @@ export class SqliteTeamsGatewayStore implements ITeamsGatewayStore {
     return Promise.all(
       rows.map(async (row) => parseJson<TeamsGatewayContact>(await this.secretCodec.decode(readString(row, "value")))),
     );
+  }
+
+  async setGroup(group: TeamsGatewayGroup): Promise<void> {
+    const value = await this.secretCodec.encode(JSON.stringify(group));
+    this.database
+      .prepare(
+        `insert into teams_gateway_groups (id, agent_id, kind, external_id, updated_at, value)
+         values (?, ?, ?, ?, ?, ?)
+         on conflict(id) do update set agent_id = excluded.agent_id, kind = excluded.kind,
+           external_id = excluded.external_id, updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .run(group.id, group.agentId, group.kind, group.externalId, group.updatedAt, value);
+  }
+
+  async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
+    const rows = agentId
+      ? this.database
+          .prepare("select value from teams_gateway_groups where agent_id = ? order by updated_at desc, id desc")
+          .all(agentId)
+      : this.database.prepare("select value from teams_gateway_groups order by updated_at desc, id desc").all();
+    return Promise.all(
+      rows.map(async (row) => parseJson<TeamsGatewayGroup>(await this.secretCodec.decode(readString(row, "value")))),
+    );
+  }
+
+  async deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void> {
+    const retained = new Set(retainedIds);
+    const rows = this.database.prepare("select id from teams_gateway_groups where agent_id = ?").all(agentId);
+    runInTransaction(this.database, () => {
+      for (const row of rows) {
+        const id = readString(row, "id");
+        if (!retained.has(id)) this.database.prepare("delete from teams_gateway_groups where id = ?").run(id);
+      }
+    });
   }
 
   private async setRecord(table: "teams_gateway_agents", id: string, updatedAt: string, value: unknown): Promise<void> {

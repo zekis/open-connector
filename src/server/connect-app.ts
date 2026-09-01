@@ -148,7 +148,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     agents: agentCredentials,
     agentChat,
     approvals: connectionApprovals,
-    graph: new TeamsGatewayGraphClient(connections),
+    graph: new TeamsGatewayGraphClient(connections, oauthClientConfigs),
     store: options.runtimeDatabase.teamsGatewayStore,
     logger: options.logger,
   });

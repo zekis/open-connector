@@ -4,6 +4,7 @@ import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type {
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 
@@ -88,15 +89,18 @@ describe("D1RuntimeDatabase", () => {
     await database.teamsGatewayStore.setAgent(records.agent);
     await database.teamsGatewayStore.setThread(records.thread);
     await database.teamsGatewayStore.setContact(records.contact);
+    await database.teamsGatewayStore.setGroup(records.group);
 
     await expect(database.teamsGatewayStore.listAgents()).resolves.toEqual([records.agent]);
     await expect(database.teamsGatewayStore.getThread(records.agent.id, records.thread.chatId)).resolves.toEqual(
       records.thread,
     );
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
     await expect(database.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
     await expect(database.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
+    await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([]);
   });
 
   it("persists encrypted Feed conversation threads", async () => {
@@ -640,6 +644,7 @@ function testTeamsGatewayRecords(): {
   agent: TeamsGatewayAgent;
   thread: TeamsGatewayThread;
   contact: TeamsGatewayContact;
+  group: TeamsGatewayGroup;
 } {
   const agent: TeamsGatewayAgent = {
     id: "teams-agent-1",
@@ -678,7 +683,18 @@ function testTeamsGatewayRecords(): {
     firstInboundAt: "2026-09-01T01:00:00.000Z",
     lastInboundAt: "2026-09-01T01:00:00.000Z",
   };
-  return { agent, thread, contact };
+  const group: TeamsGatewayGroup = {
+    id: `${agent.id}:team:team-1`,
+    agentId: agent.id,
+    kind: "team",
+    externalId: "team-1",
+    displayName: "Operations",
+    members: [],
+    channels: [{ id: "channel-1", displayName: "General", watchStartedAt: agent.watchStartedAt }],
+    discoveredAt: agent.watchStartedAt,
+    updatedAt: agent.updatedAt,
+  };
+  return { agent, thread, contact, group };
 }
 
 class SqliteD1Database implements D1DatabaseBinding {
@@ -715,6 +731,9 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(readFileSync(new URL("../../../migrations/0016_mobile_auth.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0017_kanban.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0018_teams_gateway.sql", import.meta.url), "utf8"));
+    this.database.exec(
+      readFileSync(new URL("../../../migrations/0019_teams_gateway_groups.sql", import.meta.url), "utf8"),
+    );
   }
 
   prepare(query: string): D1PreparedStatementBinding {

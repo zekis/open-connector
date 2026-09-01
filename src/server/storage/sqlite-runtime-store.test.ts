@@ -4,6 +4,7 @@ import type { KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type {
   TeamsGatewayAgent,
   TeamsGatewayContact,
+  TeamsGatewayGroup,
   TeamsGatewayThread,
 } from "../teams-gateway/teams-gateway-types.ts";
 
@@ -89,6 +90,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0016_mobile_auth.sql",
       "0017_kanban.sql",
       "0018_teams_gateway.sql",
+      "0019_teams_gateway_groups.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -178,6 +180,7 @@ describe("SqliteRuntimeDatabase", () => {
     await first.teamsGatewayStore.setAgent(records.agent);
     await first.teamsGatewayStore.setThread(records.thread);
     await first.teamsGatewayStore.setContact(records.contact);
+    await first.teamsGatewayStore.setGroup(records.group);
     first.close();
 
     const second = new SqliteRuntimeDatabase(databasePath, {
@@ -188,9 +191,11 @@ describe("SqliteRuntimeDatabase", () => {
       records.thread,
     );
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
     await expect(second.teamsGatewayStore.deleteAgent(records.agent.id)).resolves.toBe(true);
     await expect(second.teamsGatewayStore.listThreads(records.agent.id)).resolves.toEqual([]);
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([]);
+    await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([]);
     second.close();
   });
 
@@ -1118,6 +1123,7 @@ describe("SqliteRuntimeDatabase", () => {
     await database.teamsGatewayStore.setAgent(teamsGateway.agent);
     await database.teamsGatewayStore.setThread(teamsGateway.thread);
     await database.teamsGatewayStore.setContact(teamsGateway.contact);
+    await database.teamsGatewayStore.setGroup(teamsGateway.group);
     await database.rotateSecretCodec(new AesGcmSecretCodec("new-key"));
     database.close();
 
@@ -1158,6 +1164,7 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(withNewKey.teamsGatewayStore.listContacts(teamsGateway.agent.id)).resolves.toEqual([
       teamsGateway.contact,
     ]);
+    await expect(withNewKey.teamsGatewayStore.listGroups(teamsGateway.agent.id)).resolves.toEqual([teamsGateway.group]);
     await expect(withNewKey.idempotencyStore.claim({ ...claim, claimId: "claim-3" })).resolves.toEqual({
       kind: "completed",
       response: successResponse({ token: "rotated-idempotency-secret" }),
@@ -1243,6 +1250,7 @@ function testTeamsGatewayRecords(): {
   agent: TeamsGatewayAgent;
   thread: TeamsGatewayThread;
   contact: TeamsGatewayContact;
+  group: TeamsGatewayGroup;
 } {
   const agent: TeamsGatewayAgent = {
     id: "teams-agent-1",
@@ -1282,7 +1290,18 @@ function testTeamsGatewayRecords(): {
     firstInboundAt: "2026-09-01T01:00:00.000Z",
     lastInboundAt: "2026-09-01T01:00:00.000Z",
   };
-  return { agent, thread, contact };
+  const group: TeamsGatewayGroup = {
+    id: `${agent.id}:team:team-1`,
+    agentId: agent.id,
+    kind: "team",
+    externalId: "team-1",
+    displayName: "Operations",
+    members: [],
+    channels: [{ id: "channel-1", displayName: "General", watchStartedAt: agent.watchStartedAt }],
+    discoveredAt: agent.watchStartedAt,
+    updatedAt: agent.updatedAt,
+  };
+  return { agent, thread, contact, group };
 }
 
 async function expectDatabaseDirectoryNotToContain(databasePath: string, needle: string): Promise<void> {

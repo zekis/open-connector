@@ -6,6 +6,15 @@ export interface TeamsGatewayToolGrant {
   actionIds: string[];
 }
 
+export type TeamsGatewayPresenceStatus = "online" | "offline" | "error" | "pending";
+
+export interface TeamsGatewayPresence {
+  status: TeamsGatewayPresenceStatus;
+  lastSetAt?: string;
+  lastAttemptAt?: string;
+  error?: string;
+}
+
 export interface TeamsGatewayAgent {
   id: string;
   name: string;
@@ -19,8 +28,39 @@ export interface TeamsGatewayAgent {
   confirmBeforeTools: boolean;
   threadWindowHours: number;
   toolGrants: TeamsGatewayToolGrant[];
+  presence?: TeamsGatewayPresence;
   watchStartedAt: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamsGatewayGroupMember {
+  userId: string;
+  email?: string;
+  displayName: string;
+}
+
+export interface TeamsGatewayChannel {
+  id: string;
+  displayName: string;
+  description?: string;
+  membershipType?: string;
+  webUrl?: string;
+  watchStartedAt: string;
+}
+
+export interface TeamsGatewayGroup {
+  id: string;
+  agentId: string;
+  kind: "team" | "group_chat";
+  externalId: string;
+  displayName: string;
+  description?: string;
+  tenantId?: string;
+  webUrl?: string;
+  members: TeamsGatewayGroupMember[];
+  channels: TeamsGatewayChannel[];
+  discoveredAt: string;
   updatedAt: string;
 }
 
@@ -41,6 +81,14 @@ export interface TeamsGatewayThread {
   id: string;
   agentId: string;
   chatId: string;
+  conversationKind?: "direct" | "group_chat" | "channel";
+  conversationName?: string;
+  teamId?: string;
+  teamName?: string;
+  channelId?: string;
+  channelName?: string;
+  rootMessageId?: string;
+  members?: TeamsGatewayGroupMember[];
   tenantId?: string;
   participantId: string;
   participantEmail: string;
@@ -53,6 +101,20 @@ export interface TeamsGatewayThread {
   pendingApprovalMessageId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TeamsGatewayAgentMetrics {
+  agentId: string;
+  presence: TeamsGatewayPresenceStatus;
+  teamCount: number;
+  channelCount: number;
+  groupChatCount: number;
+  directChatCount: number;
+  activeThreadCount: number;
+  handledMessageCount: number;
+  replyCount: number;
+  pendingPlanCount: number;
+  pendingApprovalCount: number;
 }
 
 export interface TeamsGatewayContact {
@@ -77,4 +139,7 @@ export interface ITeamsGatewayStore {
   setContact(contact: TeamsGatewayContact): Promise<void>;
   getContact(agentId: string, email: string): Promise<TeamsGatewayContact | undefined>;
   listContacts(agentId: string): Promise<TeamsGatewayContact[]>;
+  setGroup(group: TeamsGatewayGroup): Promise<void>;
+  listGroups(agentId?: string): Promise<TeamsGatewayGroup[]>;
+  deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void>;
 }
