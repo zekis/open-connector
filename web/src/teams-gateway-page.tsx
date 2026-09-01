@@ -269,7 +269,7 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
       </section>
 
       <Dialog open={setupOpen} onOpenChange={(open) => busy === null && setSetupOpen(open)}>
-        <DialogContent className="teams-agent-panel">
+        <DialogContent className="teams-agent-panel" placement="right">
           <DialogHeader>
             <DialogTitle>{draft.id ? `Configure ${draft.name}` : "Configure a Teams agent"}</DialogTitle>
             <DialogDescription>

@@ -236,17 +236,10 @@
   font-size: 14px;
 }
 .teams-agent-panel {
-  inset: 0 0 0 auto !important;
   display: flex !important;
-  width: min(720px, 100vw) !important;
-  max-width: none !important;
-  height: 100svh;
-  translate: none !important;
-  transform: none !important;
   flex-direction: column;
   gap: 18px !important;
   overflow-y: auto;
-  border-radius: 0 !important;
   padding: 22px !important;
 }
 .teams-agent-editor {

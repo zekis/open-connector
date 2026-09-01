@@ -9,7 +9,7 @@ import {
   microsoftTeamsJsonRequest,
   microsoftTeamsRequest,
 } from "../../providers/microsoft_teams/graph-client.ts";
-import { providerFetch } from "../../providers/provider-runtime.ts";
+import { ProviderRequestError, providerFetch } from "../../providers/provider-runtime.ts";
 
 export interface TeamsGatewayGraphMember {
   userId: string;
@@ -384,19 +384,29 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
   }
 
   async setPresence(context: TeamsGatewayGraphContext): Promise<void> {
-    await microsoftTeamsRequest("me/presence/setPresence", context.deps, {
-      method: "POST",
-      body: {
-        sessionId: context.presenceSessionId,
-        availability: "Available",
-        activity: "Available",
-        expirationDuration: "PT4H",
-      },
-    });
+    try {
+      await microsoftTeamsRequest(`users/${encodePathSegment(context.selfId)}/presence/setPresence`, context.deps, {
+        method: "POST",
+        body: {
+          sessionId: context.presenceSessionId,
+          availability: "Available",
+          activity: "Available",
+          expirationDuration: "PT4H",
+        },
+      });
+    } catch (error) {
+      if (error instanceof ProviderRequestError && error.status === 403) {
+        throw new Error(
+          "Microsoft Teams denied presence publishing. Reconnect this account with Presence.ReadWrite and confirm the user has a Teams license.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   async clearPresence(context: TeamsGatewayGraphContext): Promise<void> {
-    await microsoftTeamsRequest("me/presence/clearPresence", context.deps, {
+    await microsoftTeamsRequest(`users/${encodePathSegment(context.selfId)}/presence/clearPresence`, context.deps, {
       method: "POST",
       body: { sessionId: context.presenceSessionId },
     });
