@@ -72,6 +72,15 @@ responses are posted as replies to the root post rather than as new channel post
 thread window controls when idle conversation context expires. Re-enabling a group starts from that
 moment, so messages sent while it was disabled are not handled retroactively.
 
+Agent Markdown is converted to Teams-safe HTML before sending. Paragraphs, headings, bold and
+italic text, links, code, quotes, lists, task lists, and tables retain their structure in chats and
+channel replies; raw HTML and unsafe links are not passed through.
+
+The proactive-DM list in agent setup also acts as the named escalation-recipient list. The agent can
+combine it with people who have previously DMed that identity to resolve an exact recipient email,
+then calls the host-owned `send_teams_dm` tool. Gateway host tools are constrained to the exact names
+available for the current turn and remain separate from connector action discovery.
+
 Agents can inspect reference attachments and inline images received from Teams. Files returned to a
 channel are uploaded into that channel's SharePoint-backed **Files** folder and attached to the
 current post thread. Files returned to a 1:1 or group chat are uploaded into the agent identity's

@@ -126,6 +126,7 @@ export interface TeamsGatewayContact {
   tenantId?: string;
   userId: string;
   email: string;
+  displayName?: string;
   chatId: string;
   firstInboundAt: string;
   lastInboundAt: string;

@@ -26,8 +26,8 @@ import type {
 import { buildActionSearchIndex, searchActions } from "../../core/action-search.ts";
 import { AgentCredentialError } from "../agents/agent-credential-service.ts";
 import {
-  claudeAgentDecisionSchema,
   ClaudeAgentDecisionError,
+  createClaudeAgentDecisionSchema,
   readClaudeAgentDecision,
 } from "../agents/claude-agent-decision.ts";
 import { ClaudeCodeError } from "../agents/claude-code-client.ts";
@@ -466,6 +466,7 @@ export class AgentChatService implements IAgentChatService {
     const toolActivity = [...initialToolActivity];
     const queuedApprovalIds: string[] = [];
     const attachments = await this.resolveTurnAttachments(messages);
+    const availableTools = availableChatTools(options.extension?.tools, options.extension?.includeFlowTools);
     try {
       for (let step = 0; step <= maxToolSteps; step++) {
         assertChatNotCancelled(options.signal);
@@ -479,11 +480,10 @@ export class AgentChatService implements IAgentChatService {
             toolActivity,
             this.options.now?.() ?? new Date(),
             options.timeZone,
-            options.extension?.tools,
+            availableTools,
             options.extension?.context,
-            options.extension?.includeFlowTools,
           ),
-          outputSchema: claudeAgentDecisionSchema,
+          outputSchema: createClaudeAgentDecisionSchema(availableTools.map((tool) => tool.name)),
           attachments,
           signal: options.signal,
         });
@@ -661,6 +661,11 @@ export class AgentChatService implements IAgentChatService {
     }
     if (toolName === runToolName) {
       const actionId = readRequiredText(input.actionId, "actionId", 200);
+      const extensionTool = extension?.tools.find((tool) => tool.name === actionId);
+      if (extensionTool) {
+        const extensionActivity = await extension?.runTool(actionId, readRequiredObject(input.input, "input"));
+        if (extensionActivity) return extensionActivity;
+      }
       const connectionId = readRequiredText(input.connectionId, "connectionId", 200);
       if (!connectorPairAllowed(extension, connectionId, actionId)) {
         return failedActivity("action", actionId, input, {
@@ -970,13 +975,9 @@ function createChatPrompt(
   toolActivity: AgentChatToolActivity[],
   now: Date,
   timeZone: string,
-  extensionTools: AgentChatExtensionTool[] = [],
+  availableTools: AgentChatExtensionTool[],
   extensionContext?: unknown,
-  includeFlowTools = true,
 ): string {
-  const availableTools = includeFlowTools
-    ? [...chatTools, ...agentChatFlowTools, ...extensionTools]
-    : [...chatTools, ...extensionTools];
   return `Continue this conversation and choose the next single step.
 
 Return kind "tool_call" with one supplied toolName and an arguments object when connector access is needed.
@@ -999,6 +1000,15 @@ ${JSON.stringify(messages)}
 
 Tool activity completed during this response:
 ${JSON.stringify(toolActivity)}`;
+}
+
+function availableChatTools(
+  extensionTools: AgentChatExtensionTool[] = [],
+  includeFlowTools = true,
+): AgentChatExtensionTool[] {
+  return includeFlowTools
+    ? [...chatTools, ...agentChatFlowTools, ...extensionTools]
+    : [...chatTools, ...extensionTools];
 }
 
 function createDateTimeContext(now: Date, timeZone: string): AgentChatDateTimeContext {

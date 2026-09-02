@@ -242,11 +242,11 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
               />
             </Label>
             <Label className="field teams-form-wide">
-              <span>Proactive-DM whitelist</span>
+              <span>Proactive DM and escalation recipients</span>
               <Input
                 value={draft.proactiveDmUsers}
                 onChange={(event) => setDraft({ ...draft, proactiveDmUsers: event.target.value })}
-                placeholder="person@company.com"
+                placeholder="zeke@company.com"
               />
             </Label>
           </div>

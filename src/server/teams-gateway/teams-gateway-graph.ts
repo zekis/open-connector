@@ -11,6 +11,7 @@ import {
   microsoftTeamsRequest,
 } from "../../providers/microsoft_teams/graph-client.ts";
 import { ProviderRequestError, providerFetch } from "../../providers/provider-runtime.ts";
+import { renderTeamsMessageHtml } from "./teams-message-html.ts";
 
 export interface TeamsGatewayGraphMember {
   userId: string;
@@ -467,7 +468,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
     const value = requiredRecord(
       await microsoftTeamsJsonRequest<unknown>(`chats/${encodePathSegment(chatId)}/messages`, context.deps, {
         method: "POST",
-        body: { body: { contentType: "text", content: text } },
+        body: { body: { contentType: "html", content: renderTeamsMessageHtml(text) } },
       }),
       "Microsoft Teams sent message",
     );
@@ -485,7 +486,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
       await microsoftTeamsJsonRequest<unknown>(
         `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}/messages/${encodePathSegment(rootMessageId)}/replies`,
         context.deps,
-        { method: "POST", body: { body: { contentType: "text", content: text } } },
+        { method: "POST", body: { body: { contentType: "html", content: renderTeamsMessageHtml(text) } } },
       ),
       "Microsoft Teams channel reply",
     );
@@ -516,7 +517,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
         body: {
           body: {
             contentType: "html",
-            content: `${caption ? `${escapeHtml(caption)}<br>` : ""}📎 <a href="${escapeHtml(webUrl)}">${escapeHtml(file.name)}</a>`,
+            content: `${caption ? renderTeamsMessageHtml(caption) : ""}<p>📎 <a href="${escapeHtml(webUrl)}">${escapeHtml(file.name)}</a></p>`,
           },
         },
       }),
@@ -556,7 +557,7 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
           body: {
             body: {
               contentType: "html",
-              content: `${caption ? escapeHtml(caption) : ""}<attachment id="${escapeHtml(attachmentId)}"></attachment>`,
+              content: `${caption ? renderTeamsMessageHtml(caption) : ""}<attachment id="${escapeHtml(attachmentId)}"></attachment>`,
             },
             attachments: [{ id: attachmentId, contentType: "reference", contentUrl: webUrl, name }],
           },

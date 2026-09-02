@@ -776,6 +776,64 @@ describe("AgentChatService", () => {
     expect(claude.inputs[0]?.systemPrompt).toContain("Prefer durable artifact cards");
     expect(claude.inputs[0]?.prompt).toContain("synapse_add_artifact");
     expect(claude.inputs[0]?.prompt).toContain('"selectedNodeId":"node-1"');
+    expect(claude.inputs[0]?.outputSchema).toMatchObject({
+      properties: {
+        toolName: {
+          enum: expect.arrayContaining(["search_connector_actions", "run_connector_action", "synapse_add_artifact"]),
+        },
+      },
+    });
+  });
+
+  it("recovers when an agent routes a declared host tool through the connector runner", async () => {
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: {
+          actionId: "send_teams_dm",
+          connectionId: "not-a-connector",
+          input: { recipientEmail: "zeke@example.test", text: "Blocked" },
+        },
+      },
+      { kind: "final", text: "The escalation was sent." },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Escalate this to Zeke" }] },
+      {
+        systemPrompt: "Use send_teams_dm for escalations.",
+        tools: [
+          {
+            name: "send_teams_dm",
+            description: "Send a guarded Teams DM.",
+            inputSchema: { type: "object" },
+          },
+        ],
+        async runTool(toolName, input) {
+          calls.push({ toolName, input });
+          return {
+            id: "teams-dm-1",
+            type: "action",
+            label: "Send Teams DM",
+            ok: true,
+            actionId: toolName,
+            input,
+            output: { messageId: "message-1" },
+          };
+        },
+      },
+    );
+
+    expect(response.message.content).toBe("The escalation was sent.");
+    expect(calls).toEqual([
+      {
+        toolName: "send_teams_dm",
+        input: { recipientEmail: "zeke@example.test", text: "Blocked" },
+      },
+    ]);
   });
 
   it("lets an extension restrict connector discovery and safely bypass approval for allowed reads", async () => {

@@ -1,26 +1,30 @@
 import type { JsonSchema } from "../../core/types.ts";
 
-export const claudeAgentDecisionSchema: JsonSchema = {
-  type: "object",
-  properties: {
-    kind: {
-      type: "string",
-      enum: ["tool_call", "final"],
+/** Constrain structured agent decisions to host tools that exist in the current turn. */
+export function createClaudeAgentDecisionSchema(toolNames: readonly string[]): JsonSchema {
+  return {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        enum: ["tool_call", "final"],
+      },
+      toolName: {
+        type: "string",
+        enum: [...new Set(toolNames)],
+      },
+      arguments: {
+        type: "object",
+        additionalProperties: true,
+      },
+      text: {
+        type: "string",
+      },
     },
-    toolName: {
-      type: "string",
-    },
-    arguments: {
-      type: "object",
-      additionalProperties: true,
-    },
-    text: {
-      type: "string",
-    },
-  },
-  required: ["kind"],
-  additionalProperties: false,
-};
+    required: ["kind"],
+    additionalProperties: false,
+  };
+}
 
 export interface ClaudeAgentDecision {
   kind: "tool_call" | "final";

@@ -133,6 +133,37 @@ describe("TeamsGatewayGraphClient reactions", () => {
   });
 });
 
+describe("TeamsGatewayGraphClient messages", () => {
+  it("sends agent Markdown as structured Teams HTML in chats and channel threads", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const client = createClient();
+    const context = createContext(async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(init?.body as string) });
+      return Response.json({ id: `sent-${requests.length}` });
+    });
+    const message = "**Blocked**\n\n1. Retry shortly\n2. Escalate to Zeke";
+
+    await client.sendMessage(context, "chat-1", message);
+    await client.sendChannelReply(context, "team-1", "channel-1", "root-1", message);
+
+    expect(requests).toMatchObject([
+      {
+        url: "https://graph.microsoft.com/v1.0/chats/chat-1/messages",
+        body: {
+          body: {
+            contentType: "html",
+            content: "<p><strong>Blocked</strong></p><ol><li>Retry shortly</li><li>Escalate to Zeke</li></ol>",
+          },
+        },
+      },
+      {
+        url: "https://graph.microsoft.com/v1.0/teams/team-1/channels/channel-1/messages/root-1/replies",
+        body: { body: { contentType: "html" } },
+      },
+    ]);
+  });
+});
+
 describe("TeamsGatewayGraphClient attachments", () => {
   it("discovers SharePoint references and inline hosted images", async () => {
     const client = createClient();

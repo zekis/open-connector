@@ -635,6 +635,47 @@ describe("TeamsGatewayService", () => {
     await expect(graph.sentAttachments[0]?.file.text()).resolves.toBe("Prepared brief");
   });
 
+  it("lets an agent discover an escalation recipient and call the Teams DM host tool directly", async () => {
+    const store = new MemoryTeamsGatewayStore([
+      createAgent({ confirmBeforeTools: false, proactiveDmUsers: ["zeke@company.test"] }),
+    ]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Please escalate this blocker to Zeke."),
+    ]);
+    let extensionTools: string[] = [];
+    let extensionPrompt = "";
+    let recipients: Awaited<ReturnType<AgentChatExtension["runTool"]>>;
+    let dmActivity: Awaited<ReturnType<AgentChatExtension["runTool"]>>;
+    const chat = new FakeAgentChat([
+      async (extension) => {
+        extensionTools = extension.tools.map((tool) => tool.name);
+        extensionPrompt = extension.systemPrompt;
+        recipients = await extension.runTool("list_teams_dm_recipients", {});
+        dmActivity = await extension.runTool("send_teams_dm", {
+          recipientEmail: "zeke@company.test",
+          text: "Clark needs approval for the account configuration.",
+        });
+        return completedResponse("I escalated the blocker to Zeke.", [recipients!, dmActivity!]);
+      },
+    ]);
+    const service = createService(store, graph, chat);
+
+    const result = await service.pollNow();
+    expect(extensionTools).toEqual(expect.arrayContaining(["list_teams_dm_recipients", "send_teams_dm"]));
+    expect(extensionPrompt).toContain("call propose_teams_plan, list_teams_dm_recipients, send_teams_dm");
+    expect(recipients?.ok).toBe(true);
+    const recipientOutput = recipients?.output as { recipients?: unknown[] } | undefined;
+    expect(recipientOutput?.recipients).toEqual(
+      expect.arrayContaining([expect.objectContaining({ email: "zeke@company.test", source: "whitelist" })]),
+    );
+    expect(dmActivity).toMatchObject({ ok: true, label: "Send Teams DM" });
+    expect(graph.sent).toEqual([
+      { chatId: "created-chat", text: "Clark needs approval for the account configuration." },
+      { chatId: "chat-1", text: "I escalated the blocker to Zeke." },
+    ]);
+    expect(result).toMatchObject({ messages: 1, errors: 0 });
+  });
+
   it("enforces both DM gates before creating a proactive chat", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ proactiveDmUsers: ["allowed@company.test"] })]);
     const graph = new FakeTeamsGraph([]);
