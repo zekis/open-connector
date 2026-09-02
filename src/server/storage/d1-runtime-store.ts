@@ -1162,7 +1162,7 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
     const groups = await this.listGroups(agentId);
     await Promise.all(
       groups
-        .filter((group) => !retained.has(group.id))
+        .filter((group) => !retained.has(group.id) && group.enabled !== false)
         .map((group) => this.database.prepare("delete from teams_gateway_groups where id = ?").bind(group.id).run()),
     );
   }

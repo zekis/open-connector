@@ -482,6 +482,34 @@ describe("TeamsGatewayService", () => {
     expect(graph.sent).toEqual([{ chatId: "group-chat-1", text: "This is a new reply." }]);
   });
 
+  it("keeps a group disabled when Graph temporarily omits and rediscovers it", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([]);
+    const groupChat: TeamsGatewayGraphChat = {
+      id: "group-chat-1",
+      chatType: "group",
+      topic: "Stay silent",
+      members: [
+        { userId: "agent-user-id", email: "agent@company.test", displayName: "Agent" },
+        { userId: "person-user-id", email: "person@company.test", displayName: "Person" },
+      ],
+    };
+    graph.chats = [groupChat];
+    const service = createService(store, graph, new FakeAgentChat([]));
+
+    await service.pollNow();
+    const [detected] = await store.listGroups("agent-1");
+    await service.setGroupEnabled(detected!.id, { enabled: false });
+
+    graph.chats = [];
+    await service.pollNow();
+    expect(await store.getGroup(detected!.id)).toMatchObject({ enabled: false });
+
+    graph.chats = [groupChat];
+    await service.pollNow();
+    expect(await store.getGroup(detected!.id)).toMatchObject({ enabled: false });
+  });
+
   it("detects joined Team channels and replies in the original post thread", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
     const graph = new FakeTeamsGraph([]);
@@ -563,6 +591,36 @@ describe("TeamsGatewayService", () => {
     expect(await service.pollNow()).toMatchObject({ chats: 0, messages: 0, errors: 0 });
     expect(graph.channelReplies).toEqual([]);
     expect(await store.listSubscriptions("agent-1")).toMatchObject([{ kind: "chat_messages" }]);
+  });
+
+  it("does not overwrite a group toggle made during discovery", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([]);
+    graph.chats = [];
+    graph.teams = [{ id: "team-1", displayName: "Operations" }];
+    graph.channels = [{ id: "channel-1", displayName: "General" }];
+    const service = createService(store, graph, new FakeAgentChat([]));
+
+    await service.pollNow();
+    const [detected] = await store.listGroups("agent-1");
+    let releaseChannels!: () => void;
+    let markChannelsRequested!: () => void;
+    const channelsRequested = new Promise<void>((resolve) => {
+      markChannelsRequested = resolve;
+    });
+    graph.beforeListChannels = () =>
+      new Promise<void>((resolve) => {
+        releaseChannels = resolve;
+        markChannelsRequested();
+      });
+
+    const polling = service.pollNow();
+    await channelsRequested;
+    await service.setGroupEnabled(detected!.id, { enabled: false });
+    releaseChannels();
+    await polling;
+
+    expect(await store.getGroup(detected!.id)).toMatchObject({ enabled: false });
   });
 
   it("downloads incoming Teams attachments into the agent turn", async () => {
@@ -888,6 +946,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   }> = [];
   presenceSets = 0;
   presenceError?: Error;
+  beforeListChannels?: () => Promise<void>;
   subscriptionSequence = 0;
   selfId = "agent-user-id";
   selfEmail = "agent@company.test";
@@ -926,6 +985,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   }
 
   async listChannels() {
+    await this.beforeListChannels?.();
     return this.channels;
   }
 
@@ -1138,7 +1198,7 @@ class MemoryTeamsGatewayStore implements ITeamsGatewayStore {
   async deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void> {
     const retained = new Set(retainedIds);
     for (const [id, group] of this.groups) {
-      if (group.agentId === agentId && !retained.has(id)) this.groups.delete(id);
+      if (group.agentId === agentId && group.enabled !== false && !retained.has(id)) this.groups.delete(id);
     }
   }
 

@@ -196,6 +196,10 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
     await expect(second.teamsGatewayStore.getGroup(records.group.id)).resolves.toEqual(records.group);
     await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
+    await second.teamsGatewayStore.setGroup({ ...records.group, enabled: false });
+    await second.teamsGatewayStore.deleteMissingGroups(records.agent.id, []);
+    await expect(second.teamsGatewayStore.getGroup(records.group.id)).resolves.toMatchObject({ enabled: false });
+    await second.teamsGatewayStore.setGroup(records.group);
     await expect(second.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
       records.subscription,
     );

@@ -117,7 +117,7 @@ const subscriptionRenewalWindowMs = 20 * 60_000;
 /** Owns Teams identity bindings, group discovery, contact policy, durable conversations, and agent turns. */
 export class TeamsGatewayService {
   private readonly options: TeamsGatewayServiceOptions;
-  private readonly threadLocks = new Map<string, Promise<void>>();
+  private readonly operationLocks = new Map<string, Promise<void>>();
   private readonly selfPostedMessageIds = new Map<string, number>();
   private gatewayUserIds = new Set<string>();
   private gatewayEmails = new Set<string>();
@@ -146,23 +146,25 @@ export class TeamsGatewayService {
     if (typeof value.enabled !== "boolean") {
       throw new TeamsGatewayError("invalid_input", "enabled must be a boolean.");
     }
-    const group = await this.options.store.getGroup(id);
-    if (!group) throw new TeamsGatewayError("group_not_found", `Teams gateway group not found: ${id}.`, 404);
-    const wasEnabled = group.enabled !== false;
-    const now = this.now().toISOString();
     const enabled = value.enabled;
-    const updated: TeamsGatewayGroup = {
-      ...group,
-      enabled,
-      watchStartedAt: enabled && !wasEnabled ? now : (group.watchStartedAt ?? group.discoveredAt),
-      channels:
-        enabled && !wasEnabled
-          ? group.channels.map((channel) => ({ ...channel, watchStartedAt: now }))
-          : group.channels,
-      updatedAt: now,
-    };
-    await this.options.store.setGroup(updated);
-    return updated;
+    return this.withOperationLock(groupLockKey(id), async () => {
+      const group = await this.options.store.getGroup(id);
+      if (!group) throw new TeamsGatewayError("group_not_found", `Teams gateway group not found: ${id}.`, 404);
+      const wasEnabled = group.enabled !== false;
+      const now = this.now().toISOString();
+      const updated: TeamsGatewayGroup = {
+        ...group,
+        enabled,
+        watchStartedAt: enabled && !wasEnabled ? now : (group.watchStartedAt ?? group.discoveredAt),
+        channels:
+          enabled && !wasEnabled
+            ? group.channels.map((channel) => ({ ...channel, watchStartedAt: now }))
+            : group.channels,
+        updatedAt: now,
+      };
+      await this.options.store.setGroup(updated);
+      return updated;
+    });
   }
 
   async getMetrics(): Promise<TeamsGatewayAgentMetrics[]> {
@@ -479,7 +481,7 @@ export class TeamsGatewayService {
           const participant = chat.chatType === "oneOnOne" ? directParticipant : sender;
           if (!participant?.email) continue;
           const key = threadId(agent.id, chat.id);
-          await this.withThreadLock(key, async () => {
+          await this.withOperationLock(key, async () => {
             const handled = await this.handleInboundMessage(
               agent,
               graphContext,
@@ -664,63 +666,75 @@ export class TeamsGatewayService {
     graphContext: TeamsGatewayGraphContext,
     chats: TeamsGatewayGraphChat[],
   ): Promise<TeamsGatewayGroup[]> {
-    const [teams, existingGroups] = await Promise.all([
-      this.options.graph.listJoinedTeams(graphContext),
-      this.options.store.listGroups(agent.id),
-    ]);
-    const existingById = new Map(existingGroups.map((group) => [group.id, group]));
+    const teams = await this.options.graph.listJoinedTeams(graphContext);
     const now = this.now().toISOString();
     const groups: TeamsGatewayGroup[] = [];
     for (const team of teams) {
       const id = groupId(agent.id, "team", team.id);
-      const existing = existingById.get(id);
-      const previousChannels = new Map(existing?.channels.map((channel) => [channel.id, channel]) ?? []);
-      const channels = (await this.options.graph.listChannels(graphContext, team.id)).map((channel) => ({
-        ...channel,
-        watchStartedAt: previousChannels.get(channel.id)?.watchStartedAt ?? agent.watchStartedAt,
-      }));
-      groups.push({
-        id,
-        agentId: agent.id,
-        kind: "team",
-        enabled: existing?.enabled !== false,
-        externalId: team.id,
-        displayName: team.displayName,
-        description: team.description,
-        tenantId: team.tenantId,
-        webUrl: team.webUrl,
-        members: [],
-        channels,
-        watchStartedAt: existing?.watchStartedAt ?? agent.watchStartedAt,
-        discoveredAt: existing?.discoveredAt ?? now,
-        updatedAt: now,
-      });
+      const channels = await this.options.graph.listChannels(graphContext, team.id);
+      groups.push(
+        await this.persistDiscoveredGroup({
+          id,
+          agentId: agent.id,
+          kind: "team",
+          enabled: true,
+          externalId: team.id,
+          displayName: team.displayName,
+          description: team.description,
+          tenantId: team.tenantId,
+          webUrl: team.webUrl,
+          members: [],
+          channels: channels.map((channel) => ({ ...channel, watchStartedAt: agent.watchStartedAt })),
+          watchStartedAt: agent.watchStartedAt,
+          discoveredAt: now,
+          updatedAt: now,
+        }),
+      );
     }
     for (const chat of chats.filter((item) => item.chatType === "group")) {
       const id = groupId(agent.id, "group_chat", chat.id);
-      const existing = existingById.get(id);
-      groups.push({
-        id,
-        agentId: agent.id,
-        kind: "group_chat",
-        enabled: existing?.enabled !== false,
-        externalId: chat.id,
-        displayName: chatName(chat, graphContext.selfId),
-        tenantId: chat.tenantId,
-        webUrl: chat.webUrl,
-        members: chat.members.map(toStoredMember),
-        channels: [],
-        watchStartedAt: existing?.watchStartedAt ?? agent.watchStartedAt,
-        discoveredAt: existing?.discoveredAt ?? now,
-        updatedAt: now,
-      });
+      groups.push(
+        await this.persistDiscoveredGroup({
+          id,
+          agentId: agent.id,
+          kind: "group_chat",
+          enabled: true,
+          externalId: chat.id,
+          displayName: chatName(chat, graphContext.selfId),
+          tenantId: chat.tenantId,
+          webUrl: chat.webUrl,
+          members: chat.members.map(toStoredMember),
+          channels: [],
+          watchStartedAt: agent.watchStartedAt,
+          discoveredAt: now,
+          updatedAt: now,
+        }),
+      );
     }
-    for (const group of groups) await this.options.store.setGroup(group);
     await this.options.store.deleteMissingGroups(
       agent.id,
       groups.map((group) => group.id),
     );
     return groups;
+  }
+
+  private persistDiscoveredGroup(discovered: TeamsGatewayGroup): Promise<TeamsGatewayGroup> {
+    return this.withOperationLock(groupLockKey(discovered.id), async () => {
+      const existing = await this.options.store.getGroup(discovered.id);
+      const previousChannels = new Map(existing?.channels.map((channel) => [channel.id, channel]) ?? []);
+      const group: TeamsGatewayGroup = {
+        ...discovered,
+        enabled: existing?.enabled !== false,
+        channels: discovered.channels.map((channel) => ({
+          ...channel,
+          watchStartedAt: previousChannels.get(channel.id)?.watchStartedAt ?? channel.watchStartedAt,
+        })),
+        watchStartedAt: existing?.watchStartedAt ?? discovered.watchStartedAt,
+        discoveredAt: existing?.discoveredAt ?? discovered.discoveredAt,
+      };
+      await this.options.store.setGroup(group);
+      return group;
+    });
   }
 
   private async pollChannel(
@@ -792,7 +806,7 @@ export class TeamsGatewayService {
     messages: TeamsGatewayGraphMessage[],
   ): Promise<number> {
     let handledMessages = 0;
-    await this.withThreadLock(threadId(agent.id, descriptor.chatId), async () => {
+    await this.withOperationLock(threadId(agent.id, descriptor.chatId), async () => {
       for (const message of messages.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))) {
         if (this.isKnownGatewayMessage(message)) {
           await this.advanceCursor(agent, descriptor, selfParticipant(graphContext), message.createdAt, message.id);
@@ -1219,7 +1233,7 @@ export class TeamsGatewayService {
     let confirmedPlans = 0;
     for (const candidate of threads) {
       try {
-        await this.withThreadLock(candidate.id, async () => {
+        await this.withOperationLock(candidate.id, async () => {
           const thread = await this.options.store.getThread(agent.id, candidate.chatId);
           if (!thread?.pendingPlan) return;
           const messageId =
@@ -1539,17 +1553,17 @@ export class TeamsGatewayService {
     });
   }
 
-  private withThreadLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.threadLocks.get(key) ?? Promise.resolve();
+  private withOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationLocks.get(key) ?? Promise.resolve();
     let release = (): void => {};
     const current = new Promise<void>((resolve) => {
       release = resolve;
     });
     const tail = previous.then(() => current);
-    this.threadLocks.set(key, tail);
+    this.operationLocks.set(key, tail);
     return previous.then(operation).finally(() => {
       release();
-      if (this.threadLocks.get(key) === tail) this.threadLocks.delete(key);
+      if (this.operationLocks.get(key) === tail) this.operationLocks.delete(key);
     });
   }
 
@@ -1683,6 +1697,10 @@ function selfParticipant(context: TeamsGatewayGraphContext): TeamsGatewayGraphMe
 
 function groupId(agentId: string, kind: TeamsGatewayGroup["kind"], externalId: string): string {
   return `${agentId}:${kind}:${externalId}`;
+}
+
+function groupLockKey(id: string): string {
+  return `group:${id}`;
 }
 
 function isThreadConversationEnabled(thread: TeamsGatewayThread, groups: TeamsGatewayGroup[]): boolean {

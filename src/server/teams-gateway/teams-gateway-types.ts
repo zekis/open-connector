@@ -160,6 +160,7 @@ export interface ITeamsGatewayStore {
   setGroup(group: TeamsGatewayGroup): Promise<void>;
   getGroup(id: string): Promise<TeamsGatewayGroup | undefined>;
   listGroups(agentId?: string): Promise<TeamsGatewayGroup[]>;
+  /** Removes stale discovered groups while retaining disabled records as durable communication policy. */
   deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void>;
   setSubscription(subscription: TeamsGatewaySubscription): Promise<void>;
   getSubscriptionById(subscriptionId: string): Promise<TeamsGatewaySubscription | undefined>;

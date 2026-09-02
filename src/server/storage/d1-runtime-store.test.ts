@@ -100,6 +100,10 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
     await expect(database.teamsGatewayStore.getGroup(records.group.id)).resolves.toEqual(records.group);
     await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
+    await database.teamsGatewayStore.setGroup({ ...records.group, enabled: false });
+    await database.teamsGatewayStore.deleteMissingGroups(records.agent.id, []);
+    await expect(database.teamsGatewayStore.getGroup(records.group.id)).resolves.toMatchObject({ enabled: false });
+    await database.teamsGatewayStore.setGroup(records.group);
     await expect(database.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
       records.subscription,
     );

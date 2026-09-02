@@ -1207,11 +1207,12 @@ export class SqliteTeamsGatewayStore implements ITeamsGatewayStore {
 
   async deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void> {
     const retained = new Set(retainedIds);
-    const rows = this.database.prepare("select id from teams_gateway_groups where agent_id = ?").all(agentId);
+    const groups = await this.listGroups(agentId);
     runInTransaction(this.database, () => {
-      for (const row of rows) {
-        const id = readString(row, "id");
-        if (!retained.has(id)) this.database.prepare("delete from teams_gateway_groups where id = ?").run(id);
+      for (const group of groups) {
+        if (!retained.has(group.id) && group.enabled !== false) {
+          this.database.prepare("delete from teams_gateway_groups where id = ?").run(group.id);
+        }
       }
     });
   }
