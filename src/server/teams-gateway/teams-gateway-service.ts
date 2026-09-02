@@ -882,14 +882,6 @@ export class TeamsGatewayService {
         await this.reply(graphContext, thread, "No problem — I’ve cancelled that plan.");
         return true;
       }
-      const revisedRequest = `${thread.pendingPlan.originalRequest}\n\nCorrection from the user: ${message.text}`;
-      thread.pendingPlan = undefined;
-      thread.messages = appendMessage(thread.messages, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: revisedRequest,
-        createdAt: this.now().toISOString(),
-      });
       await this.runAgentTurn(agent, graphContext, thread, agent.confirmBeforeTools);
       return true;
     }
@@ -951,6 +943,7 @@ export class TeamsGatewayService {
     thread: TeamsGatewayThread,
     requirePlan: boolean,
   ): Promise<void> {
+    const pendingPlan = thread.pendingPlan;
     let proposedPlan: PlanCapture | undefined;
     const extension = this.createExtension(agent, graphContext, thread, requirePlan, (plan) => {
       proposedPlan = plan;
@@ -970,7 +963,9 @@ export class TeamsGatewayService {
         steps: proposedPlan?.steps.length
           ? proposedPlan.steps
           : ["Use the enabled provider connections to complete the request."],
-        originalRequest: thread.messages.filter((item) => item.role === "user").at(-1)?.content ?? "",
+        originalRequest: pendingPlan
+          ? `${pendingPlan.originalRequest}\n\nFollow-up from the user: ${thread.messages.filter((item) => item.role === "user").at(-1)?.content ?? ""}`
+          : (thread.messages.filter((item) => item.role === "user").at(-1)?.content ?? ""),
         createdAt: this.now().toISOString(),
       };
       thread.pendingPlan = plan;
@@ -1638,6 +1633,11 @@ Teams gateway rules:
 - use send_teams_dm for every proactive Teams DM; never try to bypass its recipient policy
 - do not create or manage Open Connector Flows from Teams
 - approval pauses are enforced by the host; clearly tell the person what is waiting
+${
+  thread.pendingPlan
+    ? "- the existing plan remains pending while answering follow-up questions; only call propose_teams_plan again when the person requests a change\n- written replies do not approve a pending plan; only an authorized 👍 reaction to the plan message confirms it"
+    : ""
+}
 ${
   requirePlan
     ? "- before any connected application access, file send, or proactive DM, call propose_teams_plan with a concise summary and steps; do not call connector actions until the person confirms the plan\n- answer directly without a plan only when no connected application or external side effect is needed"

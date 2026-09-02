@@ -342,6 +342,42 @@ describe("TeamsGatewayService", () => {
     expect(chat.respondExtensions[1]?.systemPrompt).toContain("confirmed the current plan");
   });
 
+  it("keeps the plan pending when a follow-up question arrives before the thumbs-up", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent()]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Escalate this blocker to Zeke."),
+    ]);
+    const chat = new FakeAgentChat([
+      async (extension) => {
+        const activity = await extension.runTool("propose_teams_plan", {
+          summary: "Escalate the blocker",
+          steps: ["Confirm Zeke's address", "Send the escalation"],
+        });
+        return completedResponse("Waiting for confirmation.", activity ? [activity] : []);
+      },
+      completedResponse("Not yet — the plan is still waiting for your thumbs-up."),
+      completedResponse("The escalation was sent."),
+    ]);
+    const service = createService(store, graph, chat);
+
+    await service.pollNow();
+    graph.messages.push(inboundMessage("message-2", "2026-09-01T01:01:00.000Z", "Were you successful?"));
+    await service.pollNow();
+
+    expect(graph.sent.at(-1)?.text).toBe("Not yet — the plan is still waiting for your thumbs-up.");
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toMatchObject({
+      summary: "Escalate the blocker",
+      messageId: "sent-1",
+    });
+    expect(chat.respondExtensions[1]?.systemPrompt).toContain("existing plan remains pending");
+
+    graph.reactions.set("sent-1", [{ reactionType: "like", userId: "person-user-id" }]);
+    await service.pollNow();
+
+    expect(graph.sent.at(-1)?.text).toBe("The escalation was sent.");
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toBeUndefined();
+  });
+
   it("uses a written reply to replace the proposed plan", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent()]);
     const graph = new FakeTeamsGraph([
