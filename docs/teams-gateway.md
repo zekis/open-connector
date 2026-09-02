@@ -72,6 +72,10 @@ responses are posted as replies to the root post rather than as new channel post
 thread window controls when idle conversation context expires. Re-enabling a group starts from that
 moment, so messages sent while it was disabled are not handled retroactively.
 
+Because delegated Teams identities cannot publish a native typing indicator, the gateway immediately
+sends a short acknowledgement when it accepts a message and when a thumbs-up releases a pending plan.
+These transient notices are not added to the agent's conversation context.
+
 Agent Markdown is converted to Teams-safe HTML before sending. Paragraphs, headings, bold and
 italic text, links, code, quotes, lists, task lists, and tables retain their structure in chats and
 channel replies; raw HTML and unsafe links are not passed through.

@@ -113,6 +113,8 @@ const presenceRefreshIntervalMs = 4 * 60_000;
 const selfPostedRetentionMs = 6 * 60 * 60_000;
 const subscriptionLifetimeMs = 55 * 60_000;
 const subscriptionRenewalWindowMs = 20 * 60_000;
+const messageProcessingAcknowledgement = "Let me think about that.";
+const planApprovedAcknowledgement = "I’m on it.";
 
 /** Owns Teams identity bindings, group discovery, contact policy, durable conversations, and agent turns. */
 export class TeamsGatewayService {
@@ -870,6 +872,7 @@ export class TeamsGatewayService {
       createdAt: message.createdAt,
     });
     await this.options.store.setThread(thread);
+    await this.sendProcessingAcknowledgement(graphContext, thread, messageProcessingAcknowledgement);
 
     if (thread.pendingApprovalIds?.length) {
       await this.handleApprovalReply(agent, graphContext, thread, message.text);
@@ -1235,6 +1238,7 @@ export class TeamsGatewayService {
             thread.pendingPlan.messageId ??
             thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
           if (!messageId || !(await this.hasAuthorizedPlanLike(agent, graphContext, thread, messageId))) return;
+          await this.sendProcessingAcknowledgement(graphContext, thread, planApprovedAcknowledgement);
           thread.pendingPlan = undefined;
           await this.options.store.setThread(thread);
           await this.runAgentTurn(agent, graphContext, thread, false);
@@ -1355,6 +1359,15 @@ export class TeamsGatewayService {
       );
     }
     return this.options.graph.sendMessage(graphContext, thread.chatId, text);
+  }
+
+  private async sendProcessingAcknowledgement(
+    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
+    text: string,
+  ): Promise<void> {
+    const sent = await this.sendThreadMessage(graphContext, thread, text);
+    this.markSelfPosted(sent.id);
   }
 
   private freshThread(
