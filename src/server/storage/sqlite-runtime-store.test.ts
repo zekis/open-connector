@@ -194,6 +194,7 @@ describe("SqliteRuntimeDatabase", () => {
       records.thread,
     );
     await expect(second.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(second.teamsGatewayStore.getGroup(records.group.id)).resolves.toEqual(records.group);
     await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
     await expect(second.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
       records.subscription,
@@ -1309,10 +1310,12 @@ function testTeamsGatewayRecords(): {
     id: `${agent.id}:team:team-1`,
     agentId: agent.id,
     kind: "team",
+    enabled: true,
     externalId: "team-1",
     displayName: "Operations",
     members: [],
     channels: [{ id: "channel-1", displayName: "General", watchStartedAt: agent.watchStartedAt }],
+    watchStartedAt: agent.watchStartedAt,
     discoveredAt: agent.watchStartedAt,
     updatedAt: agent.updatedAt,
   };

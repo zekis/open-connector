@@ -135,6 +135,30 @@ export class TeamsGatewayService {
     return this.options.store.listGroups(agentId);
   }
 
+  async setGroupEnabled(id: string, input: unknown): Promise<TeamsGatewayGroup> {
+    const value = requireRecord(input, "Teams gateway group settings");
+    if (typeof value.enabled !== "boolean") {
+      throw new TeamsGatewayError("invalid_input", "enabled must be a boolean.");
+    }
+    const group = await this.options.store.getGroup(id);
+    if (!group) throw new TeamsGatewayError("group_not_found", `Teams gateway group not found: ${id}.`, 404);
+    const wasEnabled = group.enabled !== false;
+    const now = this.now().toISOString();
+    const enabled = value.enabled;
+    const updated: TeamsGatewayGroup = {
+      ...group,
+      enabled,
+      watchStartedAt: enabled && !wasEnabled ? now : (group.watchStartedAt ?? group.discoveredAt),
+      channels:
+        enabled && !wasEnabled
+          ? group.channels.map((channel) => ({ ...channel, watchStartedAt: now }))
+          : group.channels,
+      updatedAt: now,
+    };
+    await this.options.store.setGroup(updated);
+    return updated;
+  }
+
   async getMetrics(): Promise<TeamsGatewayAgentMetrics[]> {
     const [agents, groups, threads] = await Promise.all([
       this.options.store.listAgents(),
@@ -390,23 +414,29 @@ export class TeamsGatewayService {
   ): Promise<Pick<TeamsGatewayPollResult, "chats" | "messages" | "errors">> {
     const result = { chats: 0, messages: 0, errors: 0 };
     agent = await this.refreshPresence(agent, graphContext);
-    await this.resumeResolvedApprovals(agent, graphContext);
     const chats = (await this.options.graph.listChats(graphContext)).filter(
       (chat) => chat.chatType === "oneOnOne" || chat.chatType === "group",
     );
     const groups = await this.discoverGroups(agent, graphContext, chats);
-    result.errors += await this.reconcileSubscriptions(agent, graphContext, groups);
-    const teamChannels = groups
+    const enabledGroups = groups.filter((group) => group.enabled !== false);
+    const enabledGroupChats = new Map(
+      enabledGroups.filter((group) => group.kind === "group_chat").map((group) => [group.externalId, group]),
+    );
+    const pollableChats = chats.filter((chat) => chat.chatType === "oneOnOne" || enabledGroupChats.has(chat.id));
+    await this.resumeResolvedApprovals(agent, graphContext, groups);
+    result.errors += await this.reconcileSubscriptions(agent, graphContext, enabledGroups);
+    const teamChannels = enabledGroups
       .filter((group) => group.kind === "team")
       .flatMap((group) => group.channels.map((channel) => ({ group, channel })));
-    result.chats = chats.length + teamChannels.length;
-    await runWithConcurrency(chats, maxConcurrentChats, async (chat) => {
+    result.chats = pollableChats.length + teamChannels.length;
+    await runWithConcurrency(pollableChats, maxConcurrentChats, async (chat) => {
       try {
         const directParticipant = chat.members.find((member) => !this.isGatewayMember(member));
         if (chat.chatType === "oneOnOne" && !directParticipant) return;
         const descriptor = chatDescriptor(chat, graphContext.selfId);
         const existing = await this.options.store.getThread(agent.id, chat.id);
-        const floor = existing?.cursorAt ?? agent.watchStartedAt;
+        const groupFloor = enabledGroupChats.get(chat.id)?.watchStartedAt;
+        const floor = laterTimestamp(existing?.cursorAt ?? agent.watchStartedAt, groupFloor);
         if (chat.lastMessageAt && Date.parse(chat.lastMessageAt) < Date.parse(floor)) return;
         const messages = await this.options.graph.listMessages(graphContext, chat.id, floor);
         for (const message of messages) {
@@ -473,7 +503,7 @@ export class TeamsGatewayService {
         });
       }
     });
-    result.messages += await this.resumeConfirmedPlans(agent, graphContext);
+    result.messages += await this.resumeConfirmedPlans(agent, graphContext, groups);
     return result;
   }
 
@@ -647,6 +677,7 @@ export class TeamsGatewayService {
         id,
         agentId: agent.id,
         kind: "team",
+        enabled: existing?.enabled !== false,
         externalId: team.id,
         displayName: team.displayName,
         description: team.description,
@@ -654,6 +685,7 @@ export class TeamsGatewayService {
         webUrl: team.webUrl,
         members: [],
         channels,
+        watchStartedAt: existing?.watchStartedAt ?? agent.watchStartedAt,
         discoveredAt: existing?.discoveredAt ?? now,
         updatedAt: now,
       });
@@ -665,12 +697,14 @@ export class TeamsGatewayService {
         id,
         agentId: agent.id,
         kind: "group_chat",
+        enabled: existing?.enabled !== false,
         externalId: chat.id,
         displayName: chatName(chat, graphContext.selfId),
         tenantId: chat.tenantId,
         webUrl: chat.webUrl,
         members: chat.members.map(toStoredMember),
         channels: [],
+        watchStartedAt: existing?.watchStartedAt ?? agent.watchStartedAt,
         discoveredAt: existing?.discoveredAt ?? now,
         updatedAt: now,
       });
@@ -735,7 +769,7 @@ export class TeamsGatewayService {
         group.externalId,
         channel.id,
         thread.rootMessageId!,
-        thread.cursorAt,
+        laterTimestamp(thread.cursorAt, channel.watchStartedAt),
       );
       handledMessages += await this.processChannelMessages(agent, graphContext, descriptorFromThread(thread), replies);
     }
@@ -788,6 +822,7 @@ export class TeamsGatewayService {
     message: TeamsGatewayGraphMessage,
     recordDirectContact: boolean,
   ): Promise<boolean> {
+    if (!(await this.isConversationEnabled(agent.id, descriptor))) return false;
     const email = participant.email!;
     let thread = await this.options.store.getThread(agent.id, descriptor.chatId);
     thread = this.freshThread(agent, descriptor, participant, thread);
@@ -840,6 +875,15 @@ export class TeamsGatewayService {
     }
     await this.runAgentTurn(agent, graphContext, thread, agent.confirmBeforeTools);
     return true;
+  }
+
+  private async isConversationEnabled(agentId: string, descriptor: ThreadDescriptor): Promise<boolean> {
+    if (descriptor.conversationKind === "direct") return true;
+    const kind = descriptor.conversationKind === "channel" ? "team" : "group_chat";
+    const externalId = descriptor.conversationKind === "channel" ? descriptor.teamId : descriptor.chatId;
+    if (!externalId) return false;
+    const group = await this.options.store.getGroup(groupId(agentId, kind, externalId));
+    return Boolean(group && group.enabled !== false);
   }
 
   private async captureAttachments(
@@ -1096,9 +1140,10 @@ export class TeamsGatewayService {
   private async resumeResolvedApprovals(
     agent: TeamsGatewayAgent,
     graphContext: TeamsGatewayGraphContext,
+    groups: TeamsGatewayGroup[],
   ): Promise<void> {
     const threads = (await this.options.store.listThreads(agent.id, 100)).filter(
-      (thread) => thread.pendingApprovalIds?.length,
+      (thread) => thread.pendingApprovalIds?.length && isThreadConversationEnabled(thread, groups),
     );
     for (const thread of threads) {
       const approvals = await Promise.all(
@@ -1130,8 +1175,11 @@ export class TeamsGatewayService {
   private async resumeConfirmedPlans(
     agent: TeamsGatewayAgent,
     graphContext: TeamsGatewayGraphContext,
+    groups: TeamsGatewayGroup[],
   ): Promise<number> {
-    const threads = (await this.options.store.listThreads(agent.id, 100)).filter((thread) => thread.pendingPlan);
+    const threads = (await this.options.store.listThreads(agent.id, 100)).filter(
+      (thread) => thread.pendingPlan && isThreadConversationEnabled(thread, groups),
+    );
     let confirmedPlans = 0;
     for (const candidate of threads) {
       try {
@@ -1596,6 +1644,18 @@ function selfParticipant(context: TeamsGatewayGraphContext): TeamsGatewayGraphMe
 
 function groupId(agentId: string, kind: TeamsGatewayGroup["kind"], externalId: string): string {
   return `${agentId}:${kind}:${externalId}`;
+}
+
+function isThreadConversationEnabled(thread: TeamsGatewayThread, groups: TeamsGatewayGroup[]): boolean {
+  if ((thread.conversationKind ?? "direct") === "direct") return true;
+  const externalId = thread.conversationKind === "channel" ? thread.teamId : thread.chatId;
+  const kind = thread.conversationKind === "channel" ? "team" : "group_chat";
+  const group = groups.find((item) => item.kind === kind && item.externalId === externalId);
+  return Boolean(group && group.enabled !== false);
+}
+
+function laterTimestamp(first: string, second?: string): string {
+  return second && Date.parse(second) > Date.parse(first) ? second : first;
 }
 
 function formatPlan(plan: TeamsGatewayPlan): string {

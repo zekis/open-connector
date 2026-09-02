@@ -291,6 +291,9 @@ export class ConnectServer {
       );
       app.get("/api/teams-gateway/threads", (context) => this.listTeamsGatewayThreads(context));
       app.get("/api/teams-gateway/groups", (context) => this.listTeamsGatewayGroups(context));
+      app.put("/api/teams-gateway/groups/:id", (context) =>
+        this.updateTeamsGatewayGroup(context, context.req.param("id")),
+      );
       app.get("/api/teams-gateway/metrics", (context) => this.getTeamsGatewayMetrics(context));
       app.get("/api/teams-gateway/agents/:id/contacts", (context) =>
         this.listTeamsGatewayContacts(context, context.req.param("id")),
@@ -1341,6 +1344,10 @@ export class ConnectServer {
 
   private async listTeamsGatewayGroups(context: Context): Promise<Response> {
     return context.json(await this.options.teamsGateway!.listGroups(optionalString(context.req.query("agentId"))));
+  }
+
+  private async updateTeamsGatewayGroup(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.teamsGateway!.setGroupEnabled(id, await readJsonBody(context)));
   }
 
   private async getTeamsGatewayMetrics(context: Context): Promise<Response> {

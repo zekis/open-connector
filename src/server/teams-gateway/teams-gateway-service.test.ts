@@ -445,6 +445,43 @@ describe("TeamsGatewayService", () => {
     expect(await store.listContacts("agent-1")).toEqual([]);
   });
 
+  it("keeps disabled group chats visible without reading or replying to them", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([]);
+    graph.chats = [
+      {
+        id: "group-chat-1",
+        chatType: "group",
+        topic: "Do not monitor",
+        members: [
+          { userId: "agent-user-id", email: "agent@company.test", displayName: "Agent" },
+          { userId: "person-user-id", email: "person@company.test", displayName: "Person" },
+        ],
+      },
+    ];
+    let now = new Date("2026-09-01T02:00:00.000Z");
+    const chat = new FakeAgentChat([completedResponse("This is a new reply.")]);
+    const service = createService(store, graph, chat, undefined, undefined, { now: () => now });
+
+    await service.pollNow();
+    const [detected] = await store.listGroups("agent-1");
+    expect(detected).toMatchObject({ displayName: "Do not monitor", enabled: true });
+
+    await service.setGroupEnabled(detected!.id, { enabled: false });
+    graph.messages.push(inboundMessage("disabled-message", "2026-09-01T02:05:00.000Z", "Can you answer?"));
+    expect(await service.pollNow()).toMatchObject({ chats: 0, messages: 0, errors: 0 });
+    expect(chat.inputs).toEqual([]);
+    expect(await store.getGroup(detected!.id)).toMatchObject({ enabled: false });
+
+    now = new Date("2026-09-01T03:00:00.000Z");
+    await service.setGroupEnabled(detected!.id, { enabled: true });
+    expect(await service.pollNow()).toMatchObject({ messages: 0, errors: 0 });
+
+    graph.messages.push(inboundMessage("new-message", "2026-09-01T03:01:00.000Z", "Can you answer now?"));
+    expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
+    expect(graph.sent).toEqual([{ chatId: "group-chat-1", text: "This is a new reply." }]);
+  });
+
   it("detects joined Team channels and replies in the original post thread", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
     const graph = new FakeTeamsGraph([]);
@@ -496,6 +533,36 @@ describe("TeamsGatewayService", () => {
     expect(await service.getMetrics()).toMatchObject([
       { presence: "online", teamCount: 1, channelCount: 1, handledMessageCount: 2, replyCount: 2 },
     ]);
+  });
+
+  it("stops polling and subscribing to channels in a disabled Team", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([]);
+    graph.chats = [];
+    graph.teams = [{ id: "team-1", displayName: "Unrelated team" }];
+    graph.channels = [{ id: "channel-1", displayName: "General" }];
+    const service = createService(store, graph, new FakeAgentChat([]), undefined, undefined, {
+      publicOrigin: "https://connect.example.test",
+    });
+
+    await service.pollNow();
+    const [detected] = await store.listGroups("agent-1");
+    expect((await store.listSubscriptions("agent-1")).map((item) => item.kind).sort()).toEqual([
+      "channel_messages",
+      "chat_messages",
+      "team_channels",
+    ]);
+
+    await service.setGroupEnabled(detected!.id, { enabled: false });
+    graph.channelThreads = [
+      {
+        root: inboundMessage("root-1", "2026-09-01T02:05:00.000Z", "Agent, reply here."),
+        replies: [],
+      },
+    ];
+    expect(await service.pollNow()).toMatchObject({ chats: 0, messages: 0, errors: 0 });
+    expect(graph.channelReplies).toEqual([]);
+    expect(await store.listSubscriptions("agent-1")).toMatchObject([{ kind: "chat_messages" }]);
   });
 
   it("downloads incoming Teams attachments into the agent turn", async () => {
@@ -593,7 +660,7 @@ function createService(
   agentChat: FakeAgentChat,
   approvals = new FakeApprovals(),
   files = new MemoryTransitFiles(),
-  options: { publicOrigin?: string } = {},
+  options: { publicOrigin?: string; now?: () => Date } = {},
 ): TeamsGatewayService {
   return new TeamsGatewayService({
     catalog: createCatalogStore([], { executableActionIds: [] }) as CatalogStore,
@@ -623,7 +690,7 @@ function createService(
     graph,
     files,
     store,
-    now: () => new Date("2026-09-01T02:00:00.000Z"),
+    now: options.now ?? (() => new Date("2026-09-01T02:00:00.000Z")),
     timeZone: "Australia/Perth",
     publicOrigin: options.publicOrigin,
   });
@@ -1015,6 +1082,10 @@ class MemoryTeamsGatewayStore implements ITeamsGatewayStore {
 
   async setGroup(group: TeamsGatewayGroup): Promise<void> {
     this.groups.set(group.id, structuredClone(group));
+  }
+
+  async getGroup(id: string): Promise<TeamsGatewayGroup | undefined> {
+    return clone(this.groups.get(id));
   }
 
   async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {

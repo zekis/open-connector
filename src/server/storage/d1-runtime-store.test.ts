@@ -98,6 +98,7 @@ describe("D1RuntimeDatabase", () => {
       records.thread,
     );
     await expect(database.teamsGatewayStore.listContacts(records.agent.id)).resolves.toEqual([records.contact]);
+    await expect(database.teamsGatewayStore.getGroup(records.group.id)).resolves.toEqual(records.group);
     await expect(database.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([records.group]);
     await expect(database.teamsGatewayStore.getSubscriptionById(records.subscription.subscriptionId)).resolves.toEqual(
       records.subscription,
@@ -694,10 +695,12 @@ function testTeamsGatewayRecords(): {
     id: `${agent.id}:team:team-1`,
     agentId: agent.id,
     kind: "team",
+    enabled: true,
     externalId: "team-1",
     displayName: "Operations",
     members: [],
     channels: [{ id: "channel-1", displayName: "General", watchStartedAt: agent.watchStartedAt }],
+    watchStartedAt: agent.watchStartedAt,
     discoveredAt: agent.watchStartedAt,
     updatedAt: agent.updatedAt,
   };

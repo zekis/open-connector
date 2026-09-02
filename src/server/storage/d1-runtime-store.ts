@@ -1137,6 +1137,14 @@ export class D1TeamsGatewayStore implements ITeamsGatewayStore {
       .run();
   }
 
+  async getGroup(id: string): Promise<TeamsGatewayGroup | undefined> {
+    const row = await this.database
+      .prepare("select value from teams_gateway_groups where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row ? parseJson<TeamsGatewayGroup>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
   async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
     const statement = agentId
       ? this.database

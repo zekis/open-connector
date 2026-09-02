@@ -1189,6 +1189,11 @@ export class SqliteTeamsGatewayStore implements ITeamsGatewayStore {
       .run(group.id, group.agentId, group.kind, group.externalId, group.updatedAt, value);
   }
 
+  async getGroup(id: string): Promise<TeamsGatewayGroup | undefined> {
+    const row = this.database.prepare("select value from teams_gateway_groups where id = ?").get(id);
+    return row ? parseJson<TeamsGatewayGroup>(await this.secretCodec.decode(readString(row, "value"))) : undefined;
+  }
+
   async listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
     const rows = agentId
       ? this.database

@@ -159,12 +159,25 @@
 }
 .teams-group-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 9px;
   padding: 9px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: color-mix(in oklab, var(--muted) 38%, transparent);
+}
+.teams-group-row.disabled {
+  border-style: dashed;
+}
+.teams-group-row.disabled > .teams-group-icon,
+.teams-group-row.disabled > div {
+  opacity: 0.58;
+}
+.teams-group-toggle {
+  align-self: center;
+  height: 27px;
+  padding-inline: 8px;
+  font-size: 10px;
 }
 .teams-group-icon {
   display: grid;

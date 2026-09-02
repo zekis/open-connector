@@ -394,6 +394,7 @@ export interface TeamsGatewayGroup {
   id: string;
   agentId: string;
   kind: "team" | "group_chat";
+  enabled: boolean;
   externalId: string;
   displayName: string;
   description?: string;

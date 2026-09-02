@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { apiGet, apiPost } from "./api";
+import { apiGet, apiPost, apiPut } from "./api";
 import { Badge, FormStatus } from "./shared-ui";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
   const [groups, setGroups] = useState<TeamsGatewayGroup[]>([]);
   const [metrics, setMetrics] = useState<TeamsGatewayAgentMetrics[]>([]);
   const [polling, setPolling] = useState(false);
+  const [updatingGroupId, setUpdatingGroupId] = useState<string>();
   const [status, setStatus] = useState<string | null>(null);
   const teamsConnections = usableConnections(props.data.connections).filter(
     (connection) => connection.service === "microsoft_teams",
@@ -66,6 +67,25 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
       setStatus(error instanceof Error ? error.message : "Could not poll Microsoft Teams.");
     } finally {
       setPolling(false);
+    }
+  }
+
+  async function setGroupEnabled(group: TeamsGatewayGroup, enabled: boolean): Promise<void> {
+    setUpdatingGroupId(group.id);
+    try {
+      const updated = await apiPut<TeamsGatewayGroup>(`/api/teams-gateway/groups/${encodeURIComponent(group.id)}`, {
+        enabled,
+      });
+      setGroups((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setStatus(
+        enabled
+          ? `${updated.displayName} is enabled. New messages will be handled from now on.`
+          : `${updated.displayName} is disabled. The agent will not read or reply there.`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update the Teams group.");
+    } finally {
+      setUpdatingGroupId(undefined);
     }
   }
 
@@ -123,7 +143,7 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
         <AlertTitle>Group replies keep the same safety policy</AlertTitle>
         <AlertDescription>
           Agents use channel posts and group chat history as context, while domain authorization, plans, approvals, and
-          proactive-DM rules remain host-enforced.
+          proactive-DM rules remain host-enforced. Disable any detected group where the agent should stay silent.
         </AlertDescription>
       </Alert>
 
@@ -137,6 +157,8 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
               agent={agent}
               groups={groups.filter((group) => group.agentId === agent.id)}
               metrics={metrics.find((item) => item.agentId === agent.id)}
+              updatingGroupId={updatingGroupId}
+              onSetGroupEnabled={setGroupEnabled}
             />
           ))
         ) : (
@@ -160,9 +182,11 @@ interface AgentCardProps {
   agent: TeamsGatewayAgent;
   groups: TeamsGatewayGroup[];
   metrics?: TeamsGatewayAgentMetrics;
+  updatingGroupId?: string;
+  onSetGroupEnabled(group: TeamsGatewayGroup, enabled: boolean): Promise<void>;
 }
 
-function AgentCard({ agent, groups, metrics }: AgentCardProps): ReactNode {
+function AgentCard({ agent, groups, metrics, updatingGroupId, onSetGroupEnabled }: AgentCardProps): ReactNode {
   const presence = metrics?.presence ?? (agent.enabled ? "online" : "offline");
   const teams = groups.filter((group) => group.kind === "team");
   const groupChats = groups.filter((group) => group.kind === "group_chat");
@@ -196,12 +220,14 @@ function AgentCard({ agent, groups, metrics }: AgentCardProps): ReactNode {
       <div className="teams-group-area">
         <div className="teams-group-heading">
           <span>Detected groups</span>
-          <Badge>{teams.length + groupChats.length}</Badge>
+          <Badge>
+            {groups.filter((group) => group.enabled !== false).length}/{groups.length} enabled
+          </Badge>
         </div>
         {groups.length ? (
           <div className="teams-group-list">
             {teams.map((team) => (
-              <div className="teams-group-row" key={team.id}>
+              <div className={`teams-group-row${team.enabled === false ? " disabled" : ""}`} key={team.id}>
                 <span className="teams-group-icon">
                   <Users size={15} />
                 </span>
@@ -218,18 +244,32 @@ function AgentCard({ agent, groups, metrics }: AgentCardProps): ReactNode {
                       <small>No visible channels</small>
                     )}
                   </span>
+                  {team.enabled === false ? <small>Agent communication disabled</small> : null}
                 </div>
+                <GroupToggle
+                  group={team}
+                  updating={updatingGroupId === team.id}
+                  onSetGroupEnabled={onSetGroupEnabled}
+                />
               </div>
             ))}
             {groupChats.map((group) => (
-              <div className="teams-group-row" key={group.id}>
+              <div className={`teams-group-row${group.enabled === false ? " disabled" : ""}`} key={group.id}>
                 <span className="teams-group-icon">
                   <MessagesSquare size={15} />
                 </span>
                 <div>
                   <strong>{group.displayName}</strong>
-                  <small>{group.members.length} participants</small>
+                  <small>
+                    {group.members.length} participants
+                    {group.enabled === false ? " · Agent communication disabled" : ""}
+                  </small>
                 </div>
+                <GroupToggle
+                  group={group}
+                  updating={updatingGroupId === group.id}
+                  onSetGroupEnabled={onSetGroupEnabled}
+                />
               </div>
             ))}
           </div>
@@ -238,6 +278,28 @@ function AgentCard({ agent, groups, metrics }: AgentCardProps): ReactNode {
         )}
       </div>
     </article>
+  );
+}
+
+interface GroupToggleProps {
+  group: TeamsGatewayGroup;
+  updating: boolean;
+  onSetGroupEnabled(group: TeamsGatewayGroup, enabled: boolean): Promise<void>;
+}
+
+function GroupToggle({ group, updating, onSetGroupEnabled }: GroupToggleProps): ReactNode {
+  const enabled = group.enabled !== false;
+  return (
+    <Button
+      className="teams-group-toggle"
+      size="sm"
+      variant="outline"
+      disabled={updating}
+      onClick={() => void onSetGroupEnabled(group, !enabled)}
+      aria-label={`${enabled ? "Disable" : "Enable"} ${group.displayName}`}
+    >
+      {updating ? <Loader2 className="spin" size={12} /> : enabled ? "Disable" : "Enable"}
+    </Button>
   );
 }
 

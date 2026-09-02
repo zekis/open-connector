@@ -53,6 +53,7 @@ export interface TeamsGatewayGroup {
   id: string;
   agentId: string;
   kind: "team" | "group_chat";
+  enabled: boolean;
   externalId: string;
   displayName: string;
   description?: string;
@@ -60,6 +61,7 @@ export interface TeamsGatewayGroup {
   webUrl?: string;
   members: TeamsGatewayGroupMember[];
   channels: TeamsGatewayChannel[];
+  watchStartedAt: string;
   discoveredAt: string;
   updatedAt: string;
 }
@@ -155,6 +157,7 @@ export interface ITeamsGatewayStore {
   getContact(agentId: string, email: string): Promise<TeamsGatewayContact | undefined>;
   listContacts(agentId: string): Promise<TeamsGatewayContact[]>;
   setGroup(group: TeamsGatewayGroup): Promise<void>;
+  getGroup(id: string): Promise<TeamsGatewayGroup | undefined>;
   listGroups(agentId?: string): Promise<TeamsGatewayGroup[]>;
   deleteMissingGroups(agentId: string, retainedIds: string[]): Promise<void>;
   setSubscription(subscription: TeamsGatewaySubscription): Promise<void>;

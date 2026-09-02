@@ -22,10 +22,13 @@ and a second credential store are not required.
    agent may use.
 5. Save the agent. OpenConnector marks the gateway agent online, attempts to publish its Teams
    availability, and discovers its group chats, joined Teams, and visible channels.
+6. Review **Detected groups** on the gateway page and disable any group chat or Team where the agent
+   should not communicate. Disabled groups remain visible so they can be enabled later.
 
 When `OOMOL_CONNECT_ORIGIN` is a public HTTPS origin, OpenConnector creates Microsoft Graph change
 notification subscriptions for the agent's chats, joined-team channel lists, and visible channel
-messages. The public `/api/teams-gateway/webhook` endpoint validates each subscription's durable,
+messages. Team and channel subscriptions are removed while that Team is disabled. The public
+`/api/teams-gateway/webhook` endpoint validates each subscription's durable,
 random `clientState` and wakes the normal cursor-based reader immediately. Subscriptions use a
 55-minute lifetime and renew before expiry, staying below the duration that requires a separate
 lifecycle notification URL.
@@ -51,6 +54,8 @@ after upgrading to attachment support so the new file scopes are granted.
 - Only authorized inbound 1:1 DMs establish prior contact. Group chats do not unlock DMs.
 - Group chat and channel senders still have to match an internal domain or the exact external-user
   allowlist.
+- Disabled group chats and Teams are excluded from message reads, replies, pending-plan resumes, and
+  pending-approval resumes. Direct 1:1 chats are unaffected.
 - Messages sent by any enabled gateway identity are suppressed before agent dispatch. The runtime
   also tracks its own recently emitted message IDs so Graph sender inconsistencies cannot create an
   echo loop.
@@ -64,7 +69,8 @@ after upgrading to attachment support so the new file scopes are granted.
 Threads are durable, isolated per Teams agent and conversation, and processed with bounded
 concurrency. Group rosters and channel/post names are supplied as conversation context. Channel
 responses are posted as replies to the root post rather than as new channel posts. The configured
-thread window controls when idle conversation context expires.
+thread window controls when idle conversation context expires. Re-enabling a group starts from that
+moment, so messages sent while it was disabled are not handled retroactively.
 
 Agents can inspect reference attachments and inline images received from Teams. Files returned to a
 channel are uploaded into that channel's SharePoint-backed **Files** folder and attached to the
