@@ -107,6 +107,7 @@ const requiredTeamsGatewayScopes = [
 ];
 const maxThreadMessages = 40;
 const maxAttachmentsPerMessage = 10;
+const maxConcurrentAgents = 4;
 const maxConcurrentChats = 4;
 const defaultPollIntervalMs = 30_000;
 const presenceRefreshIntervalMs = 4 * 60_000;
@@ -120,6 +121,8 @@ const planApprovedAcknowledgement = "I’m on it.";
 export class TeamsGatewayService {
   private readonly options: TeamsGatewayServiceOptions;
   private readonly operationLocks = new Map<string, Promise<void>>();
+  private readonly notificationPolls = new Map<string, Promise<void>>();
+  private readonly notificationRepolls = new Set<string>();
   private readonly selfPostedMessageIds = new Map<string, number>();
   private gatewayUserIds = new Set<string>();
   private gatewayEmails = new Set<string>();
@@ -335,7 +338,7 @@ export class TeamsGatewayService {
       const agents = (await this.options.store.listAgents()).filter((agent) => agent.enabled);
       result.agents = agents.length;
       const pollable: Array<{ agent: TeamsGatewayAgent; graphContext: TeamsGatewayGraphContext }> = [];
-      for (const agent of agents) {
+      await runWithConcurrency(agents, maxConcurrentAgents, async (agent) => {
         try {
           pollable.push({
             agent,
@@ -345,12 +348,14 @@ export class TeamsGatewayService {
           result.errors += 1;
           this.logError(error, "Teams gateway identity resolution failed", { agentId: agent.id });
         }
-      }
+      });
       this.gatewayUserIds = new Set(pollable.map(({ graphContext }) => graphContext.selfId));
       this.gatewayEmails = new Set(pollable.map(({ graphContext }) => graphContext.selfEmail.toLowerCase()));
-      for (const { agent, graphContext } of pollable) {
+      await runWithConcurrency(pollable, maxConcurrentAgents, async ({ agent, graphContext }) => {
         try {
-          const agentResult = await this.pollAgent(agent, graphContext);
+          const agentResult = await this.withOperationLock(agentPollLockKey(agent.id), () =>
+            this.pollAgent(agent, graphContext),
+          );
           result.chats += agentResult.chats;
           result.messages += agentResult.messages;
           result.errors += agentResult.errors;
@@ -358,7 +363,7 @@ export class TeamsGatewayService {
           result.errors += 1;
           this.logError(error, "Teams gateway agent poll failed", { agentId: agent.id });
         }
-      }
+      });
       return result;
     } finally {
       this.polling = false;
@@ -376,6 +381,7 @@ export class TeamsGatewayService {
     const payload = optionalRecord(input);
     const notifications = Array.isArray(payload?.value) ? payload.value.slice(0, 100) : [];
     let accepted = 0;
+    const agentIds = new Set<string>();
     for (const value of notifications) {
       const notification = optionalRecord(value);
       const subscriptionId = optionalString(notification?.subscriptionId);
@@ -384,14 +390,43 @@ export class TeamsGatewayService {
       const subscription = await this.options.store.getSubscriptionById(subscriptionId);
       if (!subscription || !sameSecret(subscription.clientState, clientState)) continue;
       accepted += 1;
+      agentIds.add(subscription.agentId);
     }
     if (accepted > 0) {
-      const processing = this.pollNow().catch((error) =>
+      this.options.logger?.info(
+        { notificationCount: accepted, agentIds: [...agentIds] },
+        "Teams gateway notifications accepted",
+      );
+      const processing = Promise.all([...agentIds].map((agentId) => this.pollNotifiedAgent(agentId))).catch((error) =>
         this.logError(error, "Teams gateway notification poll failed"),
       );
       waitUntil?.(processing);
     }
     return accepted;
+  }
+
+  private pollNotifiedAgent(agentId: string): Promise<void> {
+    const active = this.notificationPolls.get(agentId);
+    if (active) {
+      this.notificationRepolls.add(agentId);
+      return active;
+    }
+    const processing = (async () => {
+      do {
+        await this.withOperationLock(agentPollLockKey(agentId), async () => {
+          const agent = await this.options.store.getAgent(agentId);
+          if (!agent?.enabled) return;
+          const graphContext = await this.options.graph.context(agent.teamsConnectionId);
+          this.gatewayUserIds.add(graphContext.selfId);
+          this.gatewayEmails.add(graphContext.selfEmail.toLowerCase());
+          await this.pollAgent(agent, graphContext);
+        });
+      } while (this.notificationRepolls.delete(agentId));
+    })().finally(() => {
+      if (this.notificationPolls.get(agentId) === processing) this.notificationPolls.delete(agentId);
+    });
+    this.notificationPolls.set(agentId, processing);
+    return processing;
   }
 
   async sendProactiveMessage(
@@ -423,6 +458,11 @@ export class TeamsGatewayService {
     graphContext: TeamsGatewayGraphContext,
   ): Promise<Pick<TeamsGatewayPollResult, "chats" | "messages" | "errors">> {
     const result = { chats: 0, messages: 0, errors: 0 };
+    result.messages += await this.resumeConfirmedPlans(
+      agent,
+      graphContext,
+      await this.options.store.listGroups(agent.id),
+    );
     agent = await this.refreshPresence(agent, graphContext);
     const chats = (await this.options.graph.listChats(graphContext)).filter(
       (chat) => chat.chatType === "oneOnOne" || chat.chatType === "group",
@@ -434,7 +474,6 @@ export class TeamsGatewayService {
     );
     const pollableChats = chats.filter((chat) => chat.chatType === "oneOnOne" || enabledGroupChats.has(chat.id));
     await this.resumeResolvedApprovals(agent, graphContext, groups);
-    result.errors += await this.reconcileSubscriptions(agent, graphContext, enabledGroups);
     const teamChannels = enabledGroups
       .filter((group) => group.kind === "team")
       .flatMap((group) => group.channels.map((channel) => ({ group, channel })));
@@ -513,7 +552,7 @@ export class TeamsGatewayService {
         });
       }
     });
-    result.messages += await this.resumeConfirmedPlans(agent, graphContext, groups);
+    result.errors += await this.reconcileSubscriptions(agent, graphContext, enabledGroups);
     return result;
   }
 
@@ -552,24 +591,28 @@ export class TeamsGatewayService {
     const existingBySource = new Map(existing.map((subscription) => [subscription.sourceKey, subscription]));
     const retained = new Set(desired.map((subscription) => subscription.sourceKey));
     let errors = 0;
-    for (const subscription of existing.filter((item) => !retained.has(item.sourceKey))) {
-      try {
-        await this.options.graph.deleteSubscription(graphContext, subscription.subscriptionId);
-      } catch (error) {
-        if (!(error instanceof ProviderRequestError && error.status === 404)) {
-          errors += 1;
-          this.logError(error, "Teams gateway subscription deletion failed", {
-            agentId: agent.id,
-            subscriptionId: subscription.subscriptionId,
-          });
-          continue;
+    await runWithConcurrency(
+      existing.filter((item) => !retained.has(item.sourceKey)),
+      maxConcurrentChats,
+      async (subscription) => {
+        try {
+          await this.options.graph.deleteSubscription(graphContext, subscription.subscriptionId);
+        } catch (error) {
+          if (!(error instanceof ProviderRequestError && error.status === 404)) {
+            errors += 1;
+            this.logError(error, "Teams gateway subscription deletion failed", {
+              agentId: agent.id,
+              subscriptionId: subscription.subscriptionId,
+            });
+            return;
+          }
         }
-      }
-      await this.options.store.deleteSubscription(subscription.sourceKey);
-    }
-    for (const source of desired) {
+        await this.options.store.deleteSubscription(subscription.sourceKey);
+      },
+    );
+    await runWithConcurrency(desired, maxConcurrentChats, async (source) => {
       const current = existingBySource.get(source.sourceKey);
-      if (current && Date.parse(current.expiresAt) > this.now().getTime() + subscriptionRenewalWindowMs) continue;
+      if (current && Date.parse(current.expiresAt) > this.now().getTime() + subscriptionRenewalWindowMs) return;
       try {
         await this.ensureSubscription(agent, graphContext, notificationUrl, source, current);
       } catch (error) {
@@ -579,7 +622,7 @@ export class TeamsGatewayService {
           resource: source.resource,
         });
       }
-    }
+    });
     return errors;
   }
 
@@ -671,7 +714,7 @@ export class TeamsGatewayService {
     const teams = await this.options.graph.listJoinedTeams(graphContext);
     const now = this.now().toISOString();
     const groups: TeamsGatewayGroup[] = [];
-    for (const team of teams) {
+    await runWithConcurrency(teams, maxConcurrentChats, async (team) => {
       const id = groupId(agent.id, "team", team.id);
       const channels = await this.options.graph.listChannels(graphContext, team.id);
       groups.push(
@@ -692,7 +735,7 @@ export class TeamsGatewayService {
           updatedAt: now,
         }),
       );
-    }
+    });
     for (const chat of chats.filter((item) => item.chatType === "group")) {
       const id = groupId(agent.id, "group_chat", chat.id);
       groups.push(
@@ -1238,9 +1281,15 @@ export class TeamsGatewayService {
             thread.pendingPlan.messageId ??
             thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
           if (!messageId || !(await this.hasAuthorizedPlanLike(agent, graphContext, thread, messageId))) return;
+          const approvedPlan = thread.pendingPlan;
           await this.sendProcessingAcknowledgement(graphContext, thread, planApprovedAcknowledgement);
           thread.pendingPlan = undefined;
-          await this.options.store.setThread(thread);
+          thread.messages = appendMessage(thread.messages, {
+            id: crypto.randomUUID(),
+            role: "user",
+            content: approvedPlanContinuation(approvedPlan),
+            createdAt: this.now().toISOString(),
+          });
           await this.runAgentTurn(agent, graphContext, thread, false);
           confirmedPlans += 1;
         });
@@ -1716,6 +1765,10 @@ function groupLockKey(id: string): string {
   return `group:${id}`;
 }
 
+function agentPollLockKey(id: string): string {
+  return `agent-poll:${id}`;
+}
+
 function isThreadConversationEnabled(thread: TeamsGatewayThread, groups: TeamsGatewayGroup[]): boolean {
   if ((thread.conversationKind ?? "direct") === "direct") return true;
   const externalId = thread.conversationKind === "channel" ? thread.teamId : thread.chatId;
@@ -1731,6 +1784,11 @@ function laterTimestamp(first: string, second?: string): string {
 function formatPlan(plan: TeamsGatewayPlan): string {
   const steps = plan.steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
   return `Plan: ${plan.summary}\n\n${steps}\n\nReact 👍 to approve this plan, reply with changes to update it, or reply “cancel” to stop.`;
+}
+
+function approvedPlanContinuation(plan: TeamsGatewayPlan): string {
+  const steps = plan.steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+  return `The user approved this plan with a thumbs-up reaction. Carry it out now.\n\nPlan: ${plan.summary}\n\n${steps}`;
 }
 
 function planReply(value: string): "cancel" | "change" {

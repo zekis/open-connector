@@ -29,7 +29,9 @@ When `OOMOL_CONNECT_ORIGIN` is a public HTTPS origin, OpenConnector creates Micr
 notification subscriptions for the agent's chats, joined-team channel lists, and visible channel
 messages. Team and channel subscriptions are removed while that Team is disabled. The public
 `/api/teams-gateway/webhook` endpoint validates each subscription's durable,
-random `clientState` and wakes the normal cursor-based reader immediately. Subscriptions use a
+random `clientState` and wakes the owning agent's cursor-based reader immediately. Notifications for
+an agent are coalesced without waiting for unrelated agents, while the scheduled global reader stays
+available as a fallback. Subscriptions use a
 55-minute lifetime and renew before expiry, staying below the duration that requires a separate
 lifecycle notification URL.
 

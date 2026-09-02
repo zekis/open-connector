@@ -342,6 +342,10 @@ describe("TeamsGatewayService", () => {
     expect(graph.sent.at(-2)?.text).toBe("I’m on it.");
     expect(graph.sent.at(-1)?.text).toBe("Tomorrow has two meetings.");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toBeUndefined();
+    expect((chat.inputs[1] as { messages: Array<{ role: string; content: string }> }).messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("approved this plan with a thumbs-up reaction"),
+    });
     expect(chat.respondExtensions[1]?.systemPrompt).toContain("confirmed the current plan");
   });
 
