@@ -29,9 +29,9 @@ When `OOMOL_CONNECT_ORIGIN` is a public HTTPS origin, OpenConnector creates Micr
 notification subscriptions for the agent's chats, joined-team channel lists, and visible channel
 messages. Team and channel subscriptions are removed while that Team is disabled. The public
 `/api/teams-gateway/webhook` endpoint validates each subscription's durable,
-random `clientState` and wakes the owning agent's cursor-based reader immediately. Notifications for
-an agent are coalesced without waiting for unrelated agents, while the scheduled global reader stays
-available as a fallback. Subscriptions use a
+random `clientState` and reads the changed chat or channel message directly. Notifications for an
+agent are coalesced without waiting for unrelated agents or full group discovery, while the scheduled
+global reader stays available as a fallback. Subscriptions use a
 55-minute lifetime and renew before expiry, staying below the duration that requires a separate
 lifecycle notification URL.
 
@@ -69,14 +69,11 @@ after upgrading to attachment support so the new file scopes are granted.
 ## Conversations, plans, and approvals
 
 Threads are durable, isolated per Teams agent and conversation, and processed with bounded
-concurrency. Group rosters and channel/post names are supplied as conversation context. Channel
+concurrency. Recent Teams messages and their IDs, including proactive messages sent by the agent, are
+supplied as conversation context. Group rosters and channel/post names are also included. Channel
 responses are posted as replies to the root post rather than as new channel posts. The configured
 thread window controls when idle conversation context expires. Re-enabling a group starts from that
 moment, so messages sent while it was disabled are not handled retroactively.
-
-Because delegated Teams identities cannot publish a native typing indicator, the gateway immediately
-sends a short acknowledgement when it accepts a message and when a thumbs-up releases a pending plan.
-These transient notices are not added to the agent's conversation context.
 
 Agent Markdown is converted to Teams-safe HTML before sending. Paragraphs, headings, bold and
 italic text, links, code, quotes, lists, task lists, and tables retain their structure in chats and
@@ -86,6 +83,8 @@ The proactive-DM list in agent setup also acts as the named escalation-recipient
 combine it with people who have previously DMed that identity to resolve an exact recipient email,
 then calls the host-owned `send_teams_dm` tool. Gateway host tools are constrained to the exact names
 available for the current turn and remain separate from connector action discovery.
+The `thumbs_up_teams_message` host tool lets the agent react to the latest user message, or another
+recent message by ID, without requiring a plan.
 
 Agents can inspect reference attachments and inline images received from Teams. Files returned to a
 channel are uploaded into that channel's SharePoint-backed **Files** folder and attached to the

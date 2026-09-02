@@ -104,6 +104,7 @@ export interface TeamsGatewayGraphSubscription {
 export interface ITeamsGatewayGraphClient {
   context(connectionId: string): Promise<TeamsGatewayGraphContext>;
   listChats(context: TeamsGatewayGraphContext): Promise<TeamsGatewayGraphChat[]>;
+  getChat(context: TeamsGatewayGraphContext, chatId: string): Promise<TeamsGatewayGraphChat>;
   listJoinedTeams(context: TeamsGatewayGraphContext): Promise<TeamsGatewayGraphTeam[]>;
   listChannels(context: TeamsGatewayGraphContext, teamId: string): Promise<TeamsGatewayGraphChannel[]>;
   listChannelThreads(
@@ -120,6 +121,24 @@ export interface ITeamsGatewayGraphClient {
     since: string,
   ): Promise<TeamsGatewayGraphMessage[]>;
   listMessages(context: TeamsGatewayGraphContext, chatId: string, since: string): Promise<TeamsGatewayGraphMessage[]>;
+  getChatMessage(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined>;
+  getChannelMessage(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined>;
+  getChannelReply(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined>;
   getChatMessageReactions(
     context: TeamsGatewayGraphContext,
     chatId: string,
@@ -132,6 +151,20 @@ export interface ITeamsGatewayGraphClient {
     rootMessageId: string,
     replyId: string,
   ): Promise<TeamsGatewayGraphReaction[]>;
+  setChatMessageReaction(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+    reactionType: string,
+  ): Promise<void>;
+  setChannelMessageReaction(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string | undefined,
+    reactionType: string,
+  ): Promise<void>;
   downloadAttachment(
     context: TeamsGatewayGraphContext,
     attachment: TeamsGatewayGraphAttachment,
@@ -224,25 +257,23 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
       });
       chats.push(
         ...result.items.flatMap((item) => {
-          const id = optionalString(item.id);
-          if (!id) return [];
-          return [
-            {
-              id,
-              chatType: optionalString(item.chatType) ?? "unknown",
-              topic: optionalString(item.topic),
-              tenantId: optionalString(item.tenantId),
-              webUrl: optionalString(item.webUrl),
-              members: Array.isArray(item.members) ? item.members.flatMap(readMember) : [],
-              lastMessageAt: optionalString(optionalRecord(item.lastMessagePreview)?.createdDateTime),
-            },
-          ];
+          return optionalString(item.id) ? [readChat(item)] : [];
         }),
       );
       path = result.nextLink;
       pages += 1;
     }
     return chats;
+  }
+
+  async getChat(context: TeamsGatewayGraphContext, chatId: string): Promise<TeamsGatewayGraphChat> {
+    const item = requiredRecord(
+      await microsoftTeamsJsonRequest<unknown>(`chats/${encodePathSegment(chatId)}`, context.deps, {
+        query: { $expand: "members" },
+      }),
+      "Microsoft Teams chat",
+    );
+    return readChat(item);
   }
 
   async listJoinedTeams(context: TeamsGatewayGraphContext): Promise<TeamsGatewayGraphTeam[]> {
@@ -398,6 +429,47 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
     return messages.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
   }
 
+  async getChatMessage(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined> {
+    const value = await microsoftTeamsJsonRequest<unknown>(
+      `chats/${encodePathSegment(chatId)}/messages/${encodePathSegment(messageId)}`,
+      context.deps,
+    );
+    return readMessage(value)[0];
+  }
+
+  async getChannelMessage(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    messageId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined> {
+    const value = await microsoftTeamsJsonRequest<unknown>(
+      `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}` +
+        `/messages/${encodePathSegment(messageId)}`,
+      context.deps,
+    );
+    return readMessage(value)[0];
+  }
+
+  async getChannelReply(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string,
+  ): Promise<TeamsGatewayGraphMessage | undefined> {
+    const value = await microsoftTeamsJsonRequest<unknown>(
+      `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}` +
+        `/messages/${encodePathSegment(rootMessageId)}/replies/${encodePathSegment(replyId)}`,
+      context.deps,
+    );
+    return readMessage(value)[0];
+  }
+
   async getChatMessageReactions(
     context: TeamsGatewayGraphContext,
     chatId: string,
@@ -423,6 +495,37 @@ export class TeamsGatewayGraphClient implements ITeamsGatewayGraphClient {
       context.deps,
     );
     return readReactions(message);
+  }
+
+  async setChatMessageReaction(
+    context: TeamsGatewayGraphContext,
+    chatId: string,
+    messageId: string,
+    reactionType: string,
+  ): Promise<void> {
+    await microsoftTeamsRequest(
+      `chats/${encodePathSegment(chatId)}/messages/${encodePathSegment(messageId)}/setReaction`,
+      context.deps,
+      { method: "POST", body: { reactionType } },
+    );
+  }
+
+  async setChannelMessageReaction(
+    context: TeamsGatewayGraphContext,
+    teamId: string,
+    channelId: string,
+    rootMessageId: string,
+    replyId: string | undefined,
+    reactionType: string,
+  ): Promise<void> {
+    const messagePath =
+      `teams/${encodePathSegment(teamId)}/channels/${encodePathSegment(channelId)}` +
+      `/messages/${encodePathSegment(rootMessageId)}`;
+    const targetPath = replyId ? `${messagePath}/replies/${encodePathSegment(replyId)}` : messagePath;
+    await microsoftTeamsRequest(`${targetPath}/setReaction`, context.deps, {
+      method: "POST",
+      body: { reactionType },
+    });
   }
 
   async downloadAttachment(
@@ -665,6 +768,19 @@ function readGraphSubscription(
     id: requiredString(value.id, "Microsoft Graph subscription id"),
     resource: optionalString(value.resource) ?? fallbackResource,
     expiresAt: requiredString(value.expirationDateTime, "Microsoft Graph subscription expiration"),
+  };
+}
+
+function readChat(value: Record<string, unknown>): TeamsGatewayGraphChat {
+  const id = requiredString(value.id, "Microsoft Teams chat id");
+  return {
+    id,
+    chatType: optionalString(value.chatType) ?? "unknown",
+    topic: optionalString(value.topic),
+    tenantId: optionalString(value.tenantId),
+    webUrl: optionalString(value.webUrl),
+    members: Array.isArray(value.members) ? value.members.flatMap(readMember) : [],
+    lastMessageAt: optionalString(optionalRecord(value.lastMessagePreview)?.createdDateTime),
   };
 }
 

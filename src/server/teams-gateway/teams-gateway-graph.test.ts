@@ -131,6 +131,35 @@ describe("TeamsGatewayGraphClient reactions", () => {
       "https://graph.microsoft.com/v1.0/teams/team%201/channels/channel%2F1/messages/root%201/replies/reply%2F1",
     ]);
   });
+
+  it("sets thumbs-up reactions on chat messages and channel replies", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    const client = createClient();
+    const context = createContext(async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+      return new Response(null, { status: 204 });
+    });
+
+    await client.setChatMessageReaction(context, "chat 1", "message/1", "👍");
+    await client.setChannelMessageReaction(context, "team 1", "channel/1", "root 1", "reply/1", "👍");
+
+    expect(requests).toEqual([
+      {
+        url: "https://graph.microsoft.com/v1.0/chats/chat%201/messages/message%2F1/setReaction",
+        method: "POST",
+        body: { reactionType: "👍" },
+      },
+      {
+        url: "https://graph.microsoft.com/v1.0/teams/team%201/channels/channel%2F1/messages/root%201/replies/reply%2F1/setReaction",
+        method: "POST",
+        body: { reactionType: "👍" },
+      },
+    ]);
+  });
 });
 
 describe("TeamsGatewayGraphClient messages", () => {

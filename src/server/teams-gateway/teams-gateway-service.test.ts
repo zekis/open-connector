@@ -82,6 +82,7 @@ describe("TeamsGatewayService", () => {
     });
 
     graph.messages.push(inboundMessage("incoming-1", "2026-09-01T01:00:00.000Z", "Hello"));
+    const listChatsCalls = graph.listChatsCalls;
     await expect(
       service.handleNotifications({
         value: [{ subscriptionId: subscription!.subscriptionId, clientState: "wrong" }],
@@ -89,11 +90,18 @@ describe("TeamsGatewayService", () => {
     ).resolves.toBe(0);
     await expect(
       service.handleNotifications({
-        value: [{ subscriptionId: subscription!.subscriptionId, clientState: subscription!.clientState }],
+        value: [
+          {
+            subscriptionId: subscription!.subscriptionId,
+            clientState: subscription!.clientState,
+            resource: "chats('chat-1')/messages('incoming-1')",
+          },
+        ],
       }),
     ).resolves.toBe(1);
-    await vi.waitFor(() => expect(graph.sent).toHaveLength(2));
-    expect(graph.sent.map((item) => item.text)).toEqual(["Let me think about that.", "Immediate reply"]);
+    await vi.waitFor(() => expect(graph.sent).toHaveLength(1));
+    expect(graph.sent.map((item) => item.text)).toEqual(["Immediate reply"]);
+    expect(graph.listChatsCalls).toBe(listChatsCalls);
   });
 
   it("binds each Teams identity to only one configured agent runtime", async () => {
@@ -197,7 +205,7 @@ describe("TeamsGatewayService", () => {
     expect(chat.respondExtensions[0]?.connectorGrants).toEqual([
       { connectionId: "calendar-connection", actionIds: new Set(["calendar.list_events"]) },
     ]);
-    expect(graph.sent.map((item) => item.text)).toEqual(["Let me think about that.", "Here is your summary."]);
+    expect(graph.sent.map((item) => item.text)).toEqual(["Here is your summary."]);
     expect(await store.getContact("agent-1", "person@company.test")).toMatchObject({
       userId: "person-user-id",
       chatId: "chat-1",
@@ -325,22 +333,34 @@ describe("TeamsGatewayService", () => {
       },
       completedResponse("Tomorrow has two meetings."),
     ]);
-    const service = createService(store, graph, chat);
+    const service = createService(store, graph, chat, undefined, undefined, {
+      publicOrigin: "https://connect.example.test",
+    });
 
     await service.pollNow();
-    expect(graph.sent[0]?.text).toBe("Let me think about that.");
-    expect(graph.sent[1]?.text).toContain("Plan: Check tomorrow's calendar");
+    expect(graph.sent[0]?.text).toContain("Plan: Check tomorrow's calendar");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toMatchObject({
       steps: ["Read tomorrow's events", "Summarize the schedule"],
-      messageId: "sent-2",
+      messageId: "sent-1",
     });
-    expect(graph.sent[1]?.text).toContain("React 👍 to approve this plan");
+    expect(graph.sent[0]?.text).toContain("React 👍 to approve this plan");
 
-    graph.reactions.set("sent-2", [{ reactionType: "like", userId: "person-user-id" }]);
-    await service.pollNow();
+    graph.reactions.set("sent-1", [{ reactionType: "like", userId: "person-user-id" }]);
+    const subscription = (await store.listSubscriptions("agent-1")).find((item) => item.kind === "chat_messages");
+    const listChatsCalls = graph.listChatsCalls;
+    await service.handleNotifications({
+      value: [
+        {
+          subscriptionId: subscription!.subscriptionId,
+          clientState: subscription!.clientState,
+          resource: "chats('chat-1')/messages('sent-1')",
+        },
+      ],
+    });
+    await vi.waitFor(() => expect(graph.sent.at(-1)?.text).toBe("Tomorrow has two meetings."));
 
-    expect(graph.sent.at(-2)?.text).toBe("I’m on it.");
     expect(graph.sent.at(-1)?.text).toBe("Tomorrow has two meetings.");
+    expect(graph.listChatsCalls).toBe(listChatsCalls);
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toBeUndefined();
     expect((chat.inputs[1] as { messages: Array<{ role: string; content: string }> }).messages.at(-1)).toMatchObject({
       role: "user",
@@ -374,14 +394,13 @@ describe("TeamsGatewayService", () => {
     expect(graph.sent.at(-1)?.text).toBe("Not yet — the plan is still waiting for your thumbs-up.");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toMatchObject({
       summary: "Escalate the blocker",
-      messageId: "sent-2",
+      messageId: "sent-1",
     });
     expect(chat.respondExtensions[1]?.systemPrompt).toContain("existing plan remains pending");
 
-    graph.reactions.set("sent-2", [{ reactionType: "like", userId: "person-user-id" }]);
+    graph.reactions.set("sent-1", [{ reactionType: "like", userId: "person-user-id" }]);
     await service.pollNow();
 
-    expect(graph.sent.at(-2)?.text).toBe("I’m on it.");
     expect(graph.sent.at(-1)?.text).toBe("The escalation was sent.");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toBeUndefined();
   });
@@ -416,7 +435,7 @@ describe("TeamsGatewayService", () => {
     expect(graph.sent.at(-1)?.text).toContain("Plan: Check customer meetings tomorrow");
     expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toMatchObject({
       summary: "Check customer meetings tomorrow",
-      messageId: "sent-4",
+      messageId: "sent-2",
     });
     expect(chat.respondExtensions[1]?.systemPrompt).toContain("before any connected application access");
   });
@@ -477,10 +496,7 @@ describe("TeamsGatewayService", () => {
     const service = createService(store, graph, chat);
 
     expect(await service.pollNow()).toMatchObject({ chats: 1, messages: 1, errors: 0 });
-    expect(graph.sent).toEqual([
-      { chatId: "group-chat-1", text: "Let me think about that." },
-      { chatId: "group-chat-1", text: "Yes — replying to the whole group." },
-    ]);
+    expect(graph.sent).toEqual([{ chatId: "group-chat-1", text: "Yes — replying to the whole group." }]);
     expect(await store.listGroups("agent-1")).toMatchObject([
       { kind: "group_chat", displayName: "Operations room", members: [{}, {}, {}] },
     ]);
@@ -526,10 +542,7 @@ describe("TeamsGatewayService", () => {
 
     graph.messages.push(inboundMessage("new-message", "2026-09-01T03:01:00.000Z", "Can you answer now?"));
     expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
-    expect(graph.sent).toEqual([
-      { chatId: "group-chat-1", text: "Let me think about that." },
-      { chatId: "group-chat-1", text: "This is a new reply." },
-    ]);
+    expect(graph.sent).toEqual([{ chatId: "group-chat-1", text: "This is a new reply." }]);
   });
 
   it("keeps a group disabled when Graph temporarily omits and rediscovers it", async () => {
@@ -580,12 +593,6 @@ describe("TeamsGatewayService", () => {
 
     expect(await service.pollNow()).toMatchObject({ chats: 1, messages: 1, errors: 0 });
     expect(graph.channelReplies).toEqual([
-      {
-        teamId: "team-1",
-        channelId: "channel-1",
-        rootMessageId: "root-1",
-        text: "Let me think about that.",
-      },
       {
         teamId: "team-1",
         channelId: "channel-1",
@@ -784,11 +791,66 @@ describe("TeamsGatewayService", () => {
     );
     expect(dmActivity).toMatchObject({ ok: true, label: "Send Teams DM" });
     expect(graph.sent).toEqual([
-      { chatId: "chat-1", text: "Let me think about that." },
       { chatId: "created-chat", text: "Clark needs approval for the account configuration." },
       { chatId: "chat-1", text: "I escalated the blocker to Zeke." },
     ]);
     expect(result).toMatchObject({ messages: 1, errors: 0 });
+  });
+
+  it("keeps a proactive DM in context when the recipient replies with approval", async () => {
+    const store = new MemoryTeamsGatewayStore([
+      createAgent({ confirmBeforeTools: true, proactiveDmUsers: ["zeke@company.test"] }),
+    ]);
+    const graph = new FakeTeamsGraph([]);
+    const chat = new FakeAgentChat([completedResponse("Thanks — I understand that you approved the proposal.")]);
+    const service = createService(store, graph, chat);
+
+    const sent = await service.sendProactiveMessage(
+      "agent-1",
+      "zeke@company.test",
+      "Can you approve adding the external work account without an Entra join?",
+    );
+    graph.chats = [
+      {
+        id: sent.chatId,
+        chatType: "oneOnOne",
+        members: [
+          { userId: "agent-user-id", email: "agent@company.test", displayName: "Agent" },
+          { userId: "zeke-user-id", email: "zeke@company.test", displayName: "Zeke" },
+        ],
+      },
+    ];
+    graph.messages.push(inboundMessage("approval-reply", "2026-09-01T02:01:00.000Z", "approved"));
+
+    await service.pollNow();
+
+    expect((chat.inputs[0] as { messages: Array<{ role: string; content: string }> }).messages).toMatchObject([
+      { role: "assistant", content: "Can you approve adding the external work account without an Entra join?" },
+      { role: "user", content: "approved" },
+    ]);
+    expect(chat.respondExtensions[0]?.systemPrompt).toContain("they are answers to that message");
+    const context = chat.respondExtensions[0]?.context as { recentTeamsMessages?: unknown[] } | undefined;
+    expect(context?.recentTeamsMessages).toHaveLength(2);
+  });
+
+  it("lets the agent thumbs up the latest Teams message without a plan", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: true })]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Here is the information you requested."),
+    ]);
+    const chat = new FakeAgentChat([
+      async (extension) => {
+        const activity = await extension.runTool("thumbs_up_teams_message", {});
+        expect(activity).toMatchObject({ ok: true, label: "Thumbs up Teams message" });
+        return completedResponse("Thank you.", activity ? [activity] : []);
+      },
+    ]);
+    const service = createService(store, graph, chat);
+
+    await service.pollNow();
+
+    expect(graph.setReactions).toEqual([{ kind: "chat", messageId: "message-1", reactionType: "👍" }]);
+    expect(graph.sent).toEqual([{ chatId: "chat-1", text: "Thank you." }]);
   });
 
   it("enforces both DM gates before creating a proactive chat", async () => {
@@ -991,6 +1053,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   channelThreads: TeamsGatewayGraphChannelThread[] = [];
   listedChannelReplies: ReturnType<typeof inboundMessage>[] = [];
   readonly reactions = new Map<string, Array<{ reactionType: string; userId: string }>>();
+  readonly setReactions: Array<{ kind: "chat" | "channel"; messageId: string; reactionType: string }> = [];
   readonly contexts = new Map<string, { selfId: string; selfEmail: string }>();
   readonly attachmentFiles = new Map<string, TeamsGatewayGraphFile>();
   readonly sentAttachments: Array<{ kind: "chat" | "channel"; chatId?: string; rootMessageId?: string; file: File }> =
@@ -1002,6 +1065,7 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
     expiresAt: string;
   }> = [];
   presenceSets = 0;
+  listChatsCalls = 0;
   presenceError?: Error;
   beforeListChannels?: () => Promise<void>;
   subscriptionSequence = 0;
@@ -1034,7 +1098,21 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
   }
 
   async listChats(): Promise<TeamsGatewayGraphChat[]> {
+    this.listChatsCalls += 1;
     return this.chats.map((chat) => ({ ...chat, lastMessageAt: this.messages.at(-1)?.createdAt }));
+  }
+
+  async getChat(_context: TeamsGatewayGraphContext, chatId: string): Promise<TeamsGatewayGraphChat> {
+    return (
+      this.chats.find((chat) => chat.id === chatId) ?? {
+        id: chatId,
+        chatType: "oneOnOne",
+        members: [
+          { userId: this.selfId, email: this.selfEmail, displayName: "Agent" },
+          { userId: "person-user-id", email: "person@company.test", displayName: "Person" },
+        ],
+      }
+    );
   }
 
   async listJoinedTeams(): Promise<TeamsGatewayGraphTeam[]> {
@@ -1064,6 +1142,24 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
     return this.messages.filter((message) => Date.parse(message.createdAt) > Date.parse(since));
   }
 
+  async getChatMessage(_context: TeamsGatewayGraphContext, _chatId: string, messageId: string) {
+    return this.messages.find((message) => message.id === messageId);
+  }
+
+  async getChannelMessage(_context: TeamsGatewayGraphContext, _teamId: string, _channelId: string, messageId: string) {
+    return this.channelThreads.find((thread) => thread.root.id === messageId)?.root;
+  }
+
+  async getChannelReply(
+    _context: TeamsGatewayGraphContext,
+    _teamId: string,
+    _channelId: string,
+    _rootMessageId: string,
+    replyId: string,
+  ) {
+    return this.listedChannelReplies.find((message) => message.id === replyId);
+  }
+
   async getChatMessageReactions(_context: TeamsGatewayGraphContext, _chatId: string, messageId: string) {
     return this.reactions.get(messageId) ?? [];
   }
@@ -1076,6 +1172,26 @@ class FakeTeamsGraph implements ITeamsGatewayGraphClient {
     replyId: string,
   ) {
     return this.reactions.get(replyId) ?? [];
+  }
+
+  async setChatMessageReaction(
+    _context: TeamsGatewayGraphContext,
+    _chatId: string,
+    messageId: string,
+    reactionType: string,
+  ): Promise<void> {
+    this.setReactions.push({ kind: "chat", messageId, reactionType });
+  }
+
+  async setChannelMessageReaction(
+    _context: TeamsGatewayGraphContext,
+    _teamId: string,
+    _channelId: string,
+    _rootMessageId: string,
+    replyId: string | undefined,
+    reactionType: string,
+  ): Promise<void> {
+    this.setReactions.push({ kind: "channel", messageId: replyId ?? _rootMessageId, reactionType });
   }
 
   async downloadAttachment(
