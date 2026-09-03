@@ -11,10 +11,11 @@ import type {
   ProviderDefinition,
   SynapseWorkspace,
 } from "./model";
-import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import type { ChangeEvent, CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowDownUp,
   Bot,
   BrainCircuit,
@@ -67,6 +68,28 @@ interface TransitUpload {
 type InboxView = "open" | "unread" | "waiting" | "resolved";
 type InboxSort = "newest" | "oldest" | "priority";
 type ComposerMode = "reply" | "note";
+type InboxMobilePane = "list" | "thread";
+type InboxPanel = keyof InboxPanelWidths;
+
+interface InboxPanelWidths {
+  sources: number;
+  conversations: number;
+  details: number;
+}
+
+interface InboxResizeState {
+  panel: InboxPanel;
+  pointerId: number;
+  startX: number;
+  startWidth: number;
+}
+
+const defaultInboxPanelWidths: InboxPanelWidths = {
+  sources: 224,
+  conversations: 340,
+  details: 260,
+};
+const inboxPanelWidthsStorageKey = "oomol.inbox.panel-widths";
 
 interface AiHandoffTarget {
   scope: InboxAiActionScope;
@@ -99,6 +122,8 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [sending, setSending] = useState(false);
   const [composerMode, setComposerMode] = useState<ComposerMode>("reply");
   const [detailsOpen, setDetailsOpen] = useState(true);
+  const [mobilePane, setMobilePane] = useState<InboxMobilePane>("list");
+  const [panelWidths, setPanelWidths] = useState<InboxPanelWidths>(readInboxPanelWidths);
   const [labelDraft, setLabelDraft] = useState("");
   const [linkedTasks, setLinkedTasks] = useState<InboxLinkedTasks>();
   const [loadingLinkedTasks, setLoadingLinkedTasks] = useState(false);
@@ -112,6 +137,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
+  const resizeState = useRef<InboxResizeState | undefined>(undefined);
   const providersByService = useMemo(
     () => new Map(props.providers.map((provider) => [provider.service, provider])),
     [props.providers],
@@ -161,6 +187,18 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     const timer = window.setInterval(() => void loadPage(true), 30_000);
     return () => window.clearInterval(timer);
   }, [loadPage]);
+
+  useEffect(() => {
+    window.localStorage.setItem(inboxPanelWidthsStorageKey, JSON.stringify(panelWidths));
+  }, [panelWidths]);
+
+  useEffect(
+    () => () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!selectedId) {
@@ -230,6 +268,54 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       })
       .sort(conversationSorter(sort));
   }, [query, sort, sourceConversations, view]);
+
+  function openConversation(id: string): void {
+    setSelectedId(id);
+    setMobilePane("thread");
+  }
+
+  function beginPanelResize(panel: InboxPanel, event: ReactPointerEvent<HTMLButtonElement>): void {
+    event.preventDefault();
+    resizeState.current = {
+      panel,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: panelWidths[panel],
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  function continuePanelResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const active = resizeState.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const movement = event.clientX - active.startX;
+    setPanelWidths((current) => ({
+      ...current,
+      [active.panel]: clampInboxPanelWidth(
+        active.panel,
+        active.startWidth + (active.panel === "details" ? -movement : movement),
+        current,
+      ),
+    }));
+  }
+
+  function endPanelResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (resizeState.current?.pointerId !== event.pointerId) return;
+    resizeState.current = undefined;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+
+  function resizePanelWithKeyboard(panel: InboxPanel, key: string): void {
+    if (key !== "ArrowLeft" && key !== "ArrowRight") return;
+    const movement = key === "ArrowRight" ? 12 : -12;
+    setPanelWidths((current) => ({
+      ...current,
+      [panel]: clampInboxPanelWidth(panel, current[panel] + (panel === "details" ? -movement : movement), current),
+    }));
+  }
 
   async function submitComposer(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -432,8 +518,18 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         )
       : undefined;
 
+  const inboxStyle = {
+    "--inbox-source-width": `${panelWidths.sources}px`,
+    "--inbox-conversation-width": `${panelWidths.conversations}px`,
+    "--inbox-detail-width": `${panelWidths.details}px`,
+  } as CSSProperties;
+
   return (
-    <section className={`unified-inbox${detailsOpen ? "" : " details-collapsed"}`} aria-label="Unified inbox">
+    <section
+      className={`unified-inbox${detailsOpen ? "" : " details-collapsed"} mobile-${mobilePane}-open`}
+      style={inboxStyle}
+      aria-label="Unified inbox"
+    >
       <aside className="inbox-sources">
         <div className="inbox-pane-title">
           <div>
@@ -488,7 +584,42 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         ) : null}
       </aside>
 
+      <button
+        type="button"
+        className="inbox-resize-handle sources"
+        aria-label="Resize inbox sources panel"
+        title="Drag to resize · Double-click to reset"
+        onPointerDown={(event) => beginPanelResize("sources", event)}
+        onPointerMove={continuePanelResize}
+        onPointerUp={endPanelResize}
+        onPointerCancel={endPanelResize}
+        onDoubleClick={() => setPanelWidths((current) => ({ ...current, sources: defaultInboxPanelWidths.sources }))}
+        onKeyDown={(event) => resizePanelWithKeyboard("sources", event.key)}
+      />
+
       <aside className="inbox-conversations">
+        <div className="inbox-mobile-bar">
+          <div>
+            <strong>Inbox</strong>
+            <small>Teams + Outlook</small>
+          </div>
+          <label>
+            <span>Source</span>
+            <select value={sourceId} onChange={(event) => setSourceId(event.target.value)}>
+              <option value="all">All accounts</option>
+              <option value="microsoft_teams">Microsoft Teams</option>
+              <option value="outlook">Outlook</option>
+              {page.sources.map((source) => (
+                <option key={source.id} value={source.id} disabled={!source.enabled}>
+                  {source.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button variant="ghost" size="icon-sm" onClick={() => void loadPage()} aria-label="Refresh inbox">
+            {loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+          </Button>
+        </div>
         <div className="inbox-search">
           <Search size={15} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search conversations" />
@@ -535,7 +666,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
               key={item.id}
               conversation={item}
               active={selectedId === item.id}
-              onClick={() => setSelectedId(item.id)}
+              onClick={() => openConversation(item.id)}
             />
           ))}
           {!loading && visibleConversations.length === 0 ? (
@@ -544,10 +675,34 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         </div>
       </aside>
 
-      <main className="inbox-thread">
+      <button
+        type="button"
+        className="inbox-resize-handle conversations"
+        aria-label="Resize conversation list"
+        title="Drag to resize · Double-click to reset"
+        onPointerDown={(event) => beginPanelResize("conversations", event)}
+        onPointerMove={continuePanelResize}
+        onPointerUp={endPanelResize}
+        onPointerCancel={endPanelResize}
+        onDoubleClick={() =>
+          setPanelWidths((current) => ({ ...current, conversations: defaultInboxPanelWidths.conversations }))
+        }
+        onKeyDown={(event) => resizePanelWithKeyboard("conversations", event.key)}
+      />
+
+      <main className={`inbox-thread${conversation?.provider === "outlook" ? " outlook" : ""}`}>
         {conversation ? (
           <>
             <header className="inbox-thread-header">
+              <Button
+                className="inbox-mobile-back"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setMobilePane("list")}
+                aria-label="Back to conversations"
+              >
+                <ArrowLeft size={17} />
+              </Button>
               <ContactAvatar
                 label={conversationAvatarLabel(conversation)}
                 provider={conversation.provider}
@@ -559,14 +714,16 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
               </div>
               <span className={`inbox-status ${conversation.status}`}>{conversation.status}</span>
               <Button
+                className="inbox-header-action"
                 variant="outline"
                 size="sm"
                 onClick={() => openAiHandoff({ scope: "conversation", label: conversation.title })}
               >
                 <Sparkles size={14} />
-                Send to AI
+                <span>Send to AI</span>
               </Button>
               <Button
+                className="inbox-header-action"
                 variant={conversation.status === "resolved" ? "outline" : "default"}
                 size="sm"
                 onClick={() =>
@@ -574,9 +731,10 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 }
               >
                 <CheckCircle2 size={14} />
-                {conversation.status === "resolved" ? "Reopen" : "Resolve"}
+                <span>{conversation.status === "resolved" ? "Reopen" : "Resolve"}</span>
               </Button>
               <Button
+                className="inbox-details-toggle"
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => setDetailsOpen((current) => !current)}
@@ -593,78 +751,80 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
               ) : null}
               {conversation.messages.map((message) => (
                 <article className={`inbox-message ${message.direction} ${message.kind}`} key={message.id}>
-                  {message.kind === "message" ? (
-                    <div className="inbox-message-toolbar" aria-label="Message actions">
-                      <button type="button" onClick={() => beginReply(message)}>
-                        <ReplyIcon size={12} /> Reply
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openAiHandoff({
-                            scope: "message",
-                            targetId: message.id,
-                            label: messagePreview(message.content),
-                            instruction: "Forward this message to ",
-                            preferredConnectionId: selectedSource?.connectionId,
-                          })
-                        }
-                      >
-                        <ForwardIcon size={12} /> Forward
-                      </button>
-                      <button
-                        type="button"
-                        disabled={Boolean(synapseMessageId)}
-                        onClick={() => void sendToSynapse(message)}
-                      >
-                        {synapseMessageId === message.id ? (
-                          <Loader2 className="spin" size={12} />
-                        ) : (
-                          <BrainCircuit size={12} />
-                        )}
-                        Synapse
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openAiHandoff({
-                            scope: "message",
-                            targetId: message.id,
-                            label: messagePreview(message.content),
-                            instruction:
-                              "Create a task from this message. Preserve the source message ID in the task details.",
-                            preferredService: "microsoft_todo",
-                          })
-                        }
-                      >
-                        <ListTodo size={12} /> Task
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openAiHandoff({
-                            scope: "message",
-                            targetId: message.id,
-                            label: messagePreview(message.content),
-                          })
-                        }
-                      >
-                        <Sparkles size={12} /> AI
-                      </button>
+                  <div className="inbox-message-heading">
+                    {message.kind === "message" ? (
+                      <div className="inbox-message-toolbar" aria-label="Message actions">
+                        <button type="button" onClick={() => beginReply(message)}>
+                          <ReplyIcon size={12} /> Reply
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openAiHandoff({
+                              scope: "message",
+                              targetId: message.id,
+                              label: messagePreview(message.content),
+                              instruction: "Forward this message to ",
+                              preferredConnectionId: selectedSource?.connectionId,
+                            })
+                          }
+                        >
+                          <ForwardIcon size={12} /> Forward
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(synapseMessageId)}
+                          onClick={() => void sendToSynapse(message)}
+                        >
+                          {synapseMessageId === message.id ? (
+                            <Loader2 className="spin" size={12} />
+                          ) : (
+                            <BrainCircuit size={12} />
+                          )}
+                          Synapse
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openAiHandoff({
+                              scope: "message",
+                              targetId: message.id,
+                              label: messagePreview(message.content),
+                              instruction:
+                                "Create a task from this message. Preserve the source message ID in the task details.",
+                              preferredService: "microsoft_todo",
+                            })
+                          }
+                        >
+                          <ListTodo size={12} /> Task
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openAiHandoff({
+                              scope: "message",
+                              targetId: message.id,
+                              label: messagePreview(message.content),
+                            })
+                          }
+                        >
+                          <Sparkles size={12} /> AI
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="inbox-message-meta">
+                      {message.kind === "note" ? (
+                        <StickyNote size={13} />
+                      ) : message.kind === "action" ? (
+                        <Bot size={13} />
+                      ) : message.direction === "inbound" ? (
+                        <ContactAvatar label={message.sender.name} size="small" />
+                      ) : (
+                        <ContactAvatar label={message.sender.name} size="small" outgoing />
+                      )}
+                      <strong>{message.sender.name}</strong>
+                      <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
                     </div>
-                  ) : null}
-                  <div className="inbox-message-meta">
-                    {message.kind === "note" ? (
-                      <StickyNote size={13} />
-                    ) : message.kind === "action" ? (
-                      <Bot size={13} />
-                    ) : message.direction === "inbound" ? (
-                      <ContactAvatar label={message.sender.name} size="small" />
-                    ) : (
-                      <ContactAvatar label={message.sender.name} size="small" outgoing />
-                    )}
-                    <strong>{message.sender.name}</strong>
-                    <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
                   </div>
                   {message.action ? (
                     <div className={`inbox-ai-action-heading ${message.action.status}`}>
@@ -814,6 +974,19 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
           </div>
         )}
       </main>
+
+      <button
+        type="button"
+        className="inbox-resize-handle details"
+        aria-label="Resize conversation details"
+        title="Drag to resize · Double-click to reset"
+        onPointerDown={(event) => beginPanelResize("details", event)}
+        onPointerMove={continuePanelResize}
+        onPointerUp={endPanelResize}
+        onPointerCancel={endPanelResize}
+        onDoubleClick={() => setPanelWidths((current) => ({ ...current, details: defaultInboxPanelWidths.details }))}
+        onKeyDown={(event) => resizePanelWithKeyboard("details", event.key)}
+      />
 
       <aside className="inbox-details">
         {conversation ? (
@@ -1203,6 +1376,47 @@ function DetailBlock(props: { label: string; children: ReactNode }): ReactNode {
       <div>{props.children}</div>
     </section>
   );
+}
+
+function readInboxPanelWidths(): InboxPanelWidths {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(inboxPanelWidthsStorageKey) ?? "null") as Record<
+      string,
+      unknown
+    > | null;
+    return {
+      sources: storedPanelWidth(stored?.sources, "sources"),
+      conversations: storedPanelWidth(stored?.conversations, "conversations"),
+      details: storedPanelWidth(stored?.details, "details"),
+    };
+  } catch {
+    return defaultInboxPanelWidths;
+  }
+}
+
+function storedPanelWidth(value: unknown, panel: InboxPanel): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampInboxPanelWidth(panel, value, defaultInboxPanelWidths, false)
+    : defaultInboxPanelWidths[panel];
+}
+
+function clampInboxPanelWidth(
+  panel: InboxPanel,
+  value: number,
+  widths: InboxPanelWidths,
+  constrainToViewport = true,
+): number {
+  const minimums: InboxPanelWidths = { sources: 176, conversations: 280, details: 220 };
+  const maximums: InboxPanelWidths = { sources: 340, conversations: 540, details: 440 };
+  let maximum = maximums[panel];
+  if (constrainToViewport) {
+    const otherPanels = Object.entries(widths).reduce(
+      (total, [name, width]) => total + (name === panel ? 0 : width),
+      0,
+    );
+    maximum = Math.min(maximum, window.innerWidth - otherPanels - 380);
+  }
+  return Math.round(Math.max(minimums[panel], Math.min(Math.max(minimums[panel], maximum), value)));
 }
 
 function matchesView(conversation: InboxConversationSummary, view: InboxView): boolean {

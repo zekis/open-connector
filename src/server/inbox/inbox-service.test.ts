@@ -253,7 +253,7 @@ describe("InboxService", () => {
             uniqueBody: {
               contentType: "html",
               content:
-                '<h2>Update</h2><p>Hello <strong>team</strong>.</p><ul><li>First item</li><li>Second item</li></ul><p><a href="https://example.com/report">Open report</a></p>',
+                '<table><tr><td></td><td></td></tr></table><h2>Update</h2><p>Hello <strong>team</strong>.</p><ul><li>First item</li><li>Second item</li></ul><p><a href="https://example.com/report">Open report</a></p><p>[&lt;!--unsubscribe%20url--&gt;]Unsubscribe from this digest</p><p>Disclaimer: This message may contain confidential information.</p>',
             },
             bodyPreview: "Update Hello team.",
             receivedDateTime: "2026-09-03T01:00:00.000Z",
@@ -275,6 +275,12 @@ describe("InboxService", () => {
     expect(conversation.messages[0]?.content).toContain("Hello **team**.");
     expect(conversation.messages[0]?.content).toContain("- First item");
     expect(conversation.messages[0]?.content).toContain("[Open report](https://example.com/report)");
+    expect(conversation.messages[0]?.content).toContain("Unsubscribe from this digest");
+    expect(conversation.messages[0]?.content).toContain(
+      "> **Disclaimer:** This message may contain confidential information.",
+    );
+    expect(conversation.messages[0]?.content).not.toMatch(/^\s*\|/mu);
+    expect(conversation.messages[0]?.content).not.toContain("<!--unsubscribe");
     expect(conversation.messages[0]?.content).not.toContain("Quoted thread");
     expect(calls.at(-1)?.input).toMatchObject({
       bodyContentType: "html",

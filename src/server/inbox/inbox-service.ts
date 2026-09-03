@@ -1001,7 +1001,7 @@ function parseOutlookMessage(value: unknown): OutlookMessageRecord | undefined {
     body:
       optionalString(body?.contentType)?.toLowerCase() === "html"
         ? htmlToReadableMarkdown(bodyContent)
-        : bodyContent.trim(),
+        : normalizeReadableEmail(bodyContent),
     from,
     recipients: Array.isArray(message.toRecipients)
       ? message.toRecipients.flatMap((recipient) => {
@@ -1044,40 +1044,70 @@ function isSelf(address: OutlookMessageAddress, connection: ConnectionSummary): 
 }
 
 function htmlToReadableMarkdown(value: string): string {
-  return decodeHtmlEntities(
-    value
-      .replace(/\r/gu, "")
-      .replace(/<!--[\s\S]*?-->/gu, "")
-      .replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, "")
-      .replace(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/giu, (_match, _quote, href, label) =>
-        markdownLink(String(href), plainHtml(String(label))),
-      )
-      .replace(/<img\b[^>]*\balt\s*=\s*(["'])(.*?)\1[^>]*>/giu, (_match, _quote, alt) =>
-        alt ? `[Image: ${plainHtml(String(alt))}]` : "",
-      )
-      .replace(/<h([1-6])\b[^>]*>/giu, (_match, level) => `\n\n${"#".repeat(Number(level))} `)
-      .replace(/<\/h[1-6]\s*>/giu, "\n\n")
-      .replace(/<(strong|b)\b[^>]*>/giu, "**")
-      .replace(/<\/(strong|b)\s*>/giu, "**")
-      .replace(/<(em|i)\b[^>]*>/giu, "_")
-      .replace(/<\/(em|i)\s*>/giu, "_")
-      .replace(/<code\b[^>]*>/giu, "`")
-      .replace(/<\/code\s*>/giu, "`")
-      .replace(/<li\b[^>]*>/giu, "\n- ")
-      .replace(/<\/li\s*>/giu, "")
-      .replace(/<blockquote\b[^>]*>/giu, "\n\n> ")
-      .replace(/<\/blockquote\s*>/giu, "\n\n")
-      .replace(/<br\s*\/?\s*>/giu, "\n")
-      .replace(/<\/?(?:p|div|section|article|header|footer|ul|ol|table|tbody|thead)\b[^>]*>/giu, "\n\n")
-      .replace(/<t[hd]\b[^>]*>/giu, " | ")
-      .replace(/<\/t[hd]\s*>/giu, "")
-      .replace(/<\/?tr\b[^>]*>/giu, "\n")
-      .replace(/<[^>]+>/gu, "")
-      .replace(/[ \t]+\n/gu, "\n")
-      .replace(/\n[ \t]+/gu, "\n")
-      .replace(/[ \t]{2,}/gu, " ")
-      .replace(/\n{3,}/gu, "\n\n"),
-  ).trim();
+  return normalizeReadableEmail(
+    decodeHtmlEntities(
+      value
+        .replace(/\r/gu, "")
+        .replace(/<!--[\s\S]*?-->/gu, "")
+        .replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, "")
+        .replace(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/giu, (_match, _quote, href, label) =>
+          markdownLink(String(href), plainHtml(String(label))),
+        )
+        .replace(/<img\b[^>]*\balt\s*=\s*(["'])(.*?)\1[^>]*>/giu, (_match, _quote, alt) =>
+          alt ? `[Image: ${plainHtml(String(alt))}]` : "",
+        )
+        .replace(/<h([1-6])\b[^>]*>/giu, (_match, level) => `\n\n${"#".repeat(Number(level))} `)
+        .replace(/<\/h[1-6]\s*>/giu, "\n\n")
+        .replace(/<(strong|b)\b[^>]*>/giu, "**")
+        .replace(/<\/(strong|b)\s*>/giu, "**")
+        .replace(/<(em|i)\b[^>]*>/giu, "_")
+        .replace(/<\/(em|i)\s*>/giu, "_")
+        .replace(/<code\b[^>]*>/giu, "`")
+        .replace(/<\/code\s*>/giu, "`")
+        .replace(/<li\b[^>]*>/giu, "\n- ")
+        .replace(/<\/li\s*>/giu, "")
+        .replace(/<blockquote\b[^>]*>/giu, "\n\n> ")
+        .replace(/<\/blockquote\s*>/giu, "\n\n")
+        .replace(/<br\s*\/?\s*>/giu, "\n")
+        .replace(/<\/?(?:p|div|section|article|header|footer|ul|ol|table|tbody|thead)\b[^>]*>/giu, "\n\n")
+        .replace(/<t[hd]\b[^>]*>/giu, "")
+        .replace(/<\/t[hd]\s*>/giu, " ")
+        .replace(/<\/?tr\b[^>]*>/giu, "\n")
+        .replace(/<[^>]+>/gu, ""),
+    ),
+  );
+}
+
+function normalizeReadableEmail(value: string): string {
+  const cleaned = value
+    .replace(/\r/gu, "")
+    .replace(/[\u200b-\u200d\ufeff]/gu, "")
+    .replace(/\u00a0/gu, " ")
+    .replace(/\[?[ \t]*<!--[ \t]*unsubscribe(?:%20|[ \t])+(?:url|link)[ \t]*-->[ \t]*\]?/giu, "")
+    .replace(/\[[ \t]*\][ \t]*(?=Unsubscribe\b)/giu, "")
+    .replace(/^[ \t]*(?:\|[ \t]*)+$/gmu, "")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n[ \t]+/gu, "\n")
+    .replace(/[ \t]{2,}/gu, " ")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+  return formatEmailDisclaimer(cleaned);
+}
+
+function formatEmailDisclaimer(value: string): string {
+  const marker = /(?:^|\n)(Disclaimer|Confidentiality(?: notice)?):[ \t]*/iu.exec(value);
+  if (!marker) return value;
+  const markerIndex = marker.index + (marker[0].startsWith("\n") ? 1 : 0);
+  const main = value.slice(0, markerIndex).trim();
+  const footer = value
+    .slice(markerIndex)
+    .replace(/^(?:Disclaimer|Confidentiality(?: notice)?):[ \t]*/iu, "")
+    .replace(/\n+/gu, " ")
+    .replace(/[ \t]{2,}/gu, " ")
+    .trim();
+  const label = marker[1] ?? "Disclaimer";
+  const formattedFooter = `> **${label}:** ${footer}`;
+  return main ? `${main}\n\n---\n\n${formattedFooter}` : formattedFooter;
 }
 
 function markdownLink(href: string, label: string): string {
