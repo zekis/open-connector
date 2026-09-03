@@ -1402,6 +1402,8 @@
 
 .inbox-handoff-dialog {
   grid-template-rows: auto minmax(0, 1fr);
+  height: min(700px, calc(100vh - 2rem));
+  height: min(700px, calc(100dvh - 2rem));
   max-height: calc(100svh - 2rem);
   overflow: hidden;
 }
@@ -1411,12 +1413,13 @@
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   gap: 14px;
+  overflow: hidden;
 }
 
 .inbox-handoff-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  height: min(520px, calc(100svh - 190px));
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -1427,7 +1430,9 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
   padding: 12px;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: color-mix(in oklab, var(--muted) 35%, var(--background));
 }
@@ -1454,8 +1459,10 @@
   align-content: start;
   min-height: 0;
   gap: 5px;
-  overflow-y: auto;
+  padding-right: 3px;
+  overflow-y: scroll;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .inbox-handoff-account-list > button {
@@ -1780,6 +1787,7 @@
   }
   .inbox-handoff-dialog form {
     grid-template-rows: auto auto;
+    overflow: visible;
   }
   .inbox-handoff-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -1793,6 +1801,8 @@
   }
   .inbox-handoff-account-list {
     max-height: 170px;
+    overflow-y: auto;
+    scrollbar-gutter: auto;
   }
   .inbox-handoff-context {
     max-height: 240px;
