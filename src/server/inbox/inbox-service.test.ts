@@ -1,9 +1,12 @@
 import type { ConnectionSummary } from "../../connection-service.ts";
+import type { ProviderDefinition } from "../../core/types.ts";
 import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts";
+import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
 import type { TeamsGatewayAgent, TeamsGatewayThread } from "../teams-gateway/teams-gateway-types.ts";
 import type { InboxConversationMetadata, IInboxStore } from "./inbox-types.ts";
 
 import { describe, expect, it, vi } from "vitest";
+import { createCatalogStore } from "../../catalog-store.ts";
 import { ActionPolicyService } from "../../core/action-policy.ts";
 import { InboxService } from "./inbox-service.ts";
 
@@ -27,6 +30,39 @@ const todoConnection: ConnectionSummary = {
   id: "todo-connection-1",
   service: "microsoft_todo",
   connectionName: "work-tasks",
+};
+
+const devopsConnection: ConnectionSummary = {
+  ...outlookConnection,
+  id: "devops-connection-1",
+  service: "azure_devops",
+  connectionName: "engineering",
+  authType: "api_key",
+  profile: {
+    accountId: "devops-user-1",
+    displayName: "Engineering DevOps",
+    grantedScopes: [],
+  },
+};
+
+const devopsProvider: ProviderDefinition = {
+  service: "azure_devops",
+  displayName: "Azure DevOps",
+  categories: ["Project Management"],
+  authTypes: ["api_key"],
+  auth: [{ type: "api_key" }],
+  actions: [
+    {
+      id: "azure_devops.create_work_item",
+      service: "azure_devops",
+      name: "create_work_item",
+      description: "Create a work item.",
+      requiredScopes: [],
+      providerPermissions: [],
+      inputSchema: { type: "object" },
+      outputSchema: { type: "object" },
+    },
+  ],
 };
 
 const teamsAgent: TeamsGatewayAgent = {
@@ -285,20 +321,129 @@ describe("InboxService", () => {
       ],
     });
   });
+
+  it("runs a message handoff with one exact connection and stores the AI result inline", async () => {
+    const handoffs: HandoffCall[] = [];
+    const service = createService(
+      vi.fn(async () => actionResult({ messages: [] })),
+      new MemoryInboxStore(),
+      [outlookConnection, devopsConnection],
+      {
+        async respondWithExtension(request, extension) {
+          handoffs.push({ request, extension });
+          return {
+            status: "completed",
+            message: {
+              id: "agent-message-1",
+              role: "assistant",
+              content: "Ticket AB#123 created.",
+              createdAt: "2026-09-03T02:00:00.000Z",
+            },
+            toolActivity: [
+              {
+                id: "tool-1",
+                type: "action",
+                label: "Create work item",
+                ok: true,
+                actionId: "azure_devops.create_work_item",
+                connectionId: devopsConnection.id,
+                input: {},
+                output: { id: 123 },
+              },
+            ],
+          };
+        },
+      },
+    );
+    const conversationId = (await service.list()).conversations.find((item) => item.provider === "microsoft_teams")!.id;
+
+    const conversation = await service.runAiAction(conversationId, {
+      scope: "message",
+      targetId: "teams-message-1",
+      connectionId: devopsConnection.id,
+      instruction: "Create a bug from this report.",
+    });
+
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0]?.extension.connectorGrants).toEqual([
+      {
+        connectionId: devopsConnection.id,
+        actionIds: new Set(["azure_devops.create_work_item"]),
+      },
+    ]);
+    expect(handoffs[0]?.extension).toMatchObject({
+      connectorApprovalPolicy: "bypass",
+      includeFlowTools: false,
+      context: {
+        scope: "message",
+        message: { id: "teams-message-1", content: "Can you check the rollout?" },
+      },
+    });
+    expect(conversation.usedConnections).toEqual([
+      {
+        connectionId: devopsConnection.id,
+        connectionName: "Engineering DevOps · engineering",
+        service: "azure_devops",
+      },
+    ]);
+    expect(conversation.messages.at(-1)).toMatchObject({
+      kind: "action",
+      content: "Ticket AB#123 created.",
+      action: {
+        status: "completed",
+        connectionId: devopsConnection.id,
+        activities: [{ label: "Create work item", ok: true }],
+      },
+    });
+
+    await service.runAiAction(conversationId, {
+      scope: "contact",
+      targetId: "alex@example.com",
+      connectionId: devopsConnection.id,
+      instruction: "Find work owned by this contact.",
+    });
+    await service.runAiAction(conversationId, {
+      scope: "conversation",
+      connectionId: devopsConnection.id,
+      instruction: "Summarise relevant work for this conversation.",
+    });
+
+    expect(handoffs[1]?.extension.context).toMatchObject({
+      scope: "contact",
+      contact: { name: "Alex", email: "alex@example.com" },
+    });
+    expect(handoffs[2]?.extension.context).toMatchObject({
+      scope: "conversation",
+      participants: [{ name: "Alex", email: "alex@example.com" }],
+      messages: [{ id: "teams-message-1" }],
+    });
+  });
 });
+
+interface HandoffCall {
+  request: unknown;
+  extension: AgentChatExtension;
+}
 
 function createService(
   run: IActionRunner["run"],
   store: IInboxStore = new MemoryInboxStore(),
   connections: ConnectionSummary[] = [outlookConnection],
+  agentChat: ConstructorParameters<typeof InboxService>[0]["agentChat"] = {
+    async respondWithExtension() {
+      throw new Error("Unexpected AI handoff.");
+    },
+  },
 ): InboxService {
   return new InboxService({
+    catalog: createCatalogStore([devopsProvider], { executableActionIds: ["azure_devops.create_work_item"] }),
     connections: {
       async listConnections() {
         return connections;
       },
     },
     actions: { run },
+    agentChat,
     teamsGateway: {
       async listAgents() {
         return [teamsAgent];

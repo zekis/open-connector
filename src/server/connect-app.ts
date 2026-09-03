@@ -155,8 +155,10 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     publicOrigin: options.publicOrigin,
   });
   const inbox = new InboxService({
+    catalog: options.catalog,
     connections,
     actions,
+    agentChat,
     teamsGateway,
     getPolicySnapshot,
     store: options.runtimeDatabase.inboxStore,

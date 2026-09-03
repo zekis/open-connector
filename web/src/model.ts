@@ -452,12 +452,37 @@ export interface InboxAttachment {
 
 export interface InboxMessage {
   id: string;
-  kind: "message" | "note";
+  kind: "message" | "note" | "action";
   direction: "inbound" | "outbound";
   sender: InboxParticipant;
   content: string;
   createdAt: string;
   attachments: InboxAttachment[];
+  action?: InboxMessageAction;
+}
+
+export type InboxAiActionScope = "message" | "contact" | "conversation";
+export type InboxAiActionStatus = "running" | "completed" | "waiting_for_approval" | "failed";
+
+export interface InboxAiActionActivity {
+  label: string;
+  ok: boolean;
+}
+
+export interface InboxMessageAction {
+  scope: InboxAiActionScope;
+  status: InboxAiActionStatus;
+  connectionId: string;
+  connectionName: string;
+  service: string;
+  instruction: string;
+  activities: InboxAiActionActivity[];
+}
+
+export interface InboxUsedConnection {
+  connectionId: string;
+  connectionName: string;
+  service: string;
 }
 
 export interface InboxConversationSummary {
@@ -472,6 +497,7 @@ export interface InboxConversationSummary {
   status: InboxConversationStatus;
   priority: InboxPriority;
   labels: string[];
+  usedConnections: InboxUsedConnection[];
   noteCount: number;
   messageCount: number;
   contextLabel?: string;

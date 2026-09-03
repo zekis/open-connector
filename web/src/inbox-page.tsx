@@ -1,18 +1,19 @@
 import type {
   InboxConversation,
   InboxConversationSummary,
+  InboxAiActionScope,
   InboxLinkedTasks,
   InboxPage,
   InboxPriority,
   InboxProvider,
+  ConnectionRecord,
 } from "./model";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 
 import {
   AlertCircle,
   ArrowDownUp,
-  ArrowDownLeft,
-  ArrowUpRight,
+  Bot,
   CheckCircle2,
   ExternalLink,
   FileText,
@@ -26,6 +27,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Sparkles,
   StickyNote,
   Tag,
   Users,
@@ -37,6 +39,14 @@ import { Link } from "react-router";
 import remarkGfm from "remark-gfm";
 import { ApiError, apiGet, apiPost, apiPut, apiUpload } from "./api";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 interface TransitUpload {
@@ -49,6 +59,12 @@ interface TransitUpload {
 type InboxView = "open" | "unread" | "waiting" | "resolved";
 type InboxSort = "newest" | "oldest" | "priority";
 type ComposerMode = "reply" | "note";
+
+interface AiHandoffTarget {
+  scope: InboxAiActionScope;
+  targetId?: string;
+  label: string;
+}
 
 export function InboxPageView(): ReactNode {
   const [page, setPage] = useState<InboxPage>({ sources: [], conversations: [], errors: [] });
@@ -69,6 +85,12 @@ export function InboxPageView(): ReactNode {
   const [labelDraft, setLabelDraft] = useState("");
   const [linkedTasks, setLinkedTasks] = useState<InboxLinkedTasks>();
   const [loadingLinkedTasks, setLoadingLinkedTasks] = useState(false);
+  const [handoffTarget, setHandoffTarget] = useState<AiHandoffTarget>();
+  const [connections, setConnections] = useState<ConnectionRecord[]>([]);
+  const [loadingConnections, setLoadingConnections] = useState(false);
+  const [handoffConnectionId, setHandoffConnectionId] = useState("");
+  const [handoffInstruction, setHandoffInstruction] = useState("");
+  const [sendingHandoff, setSendingHandoff] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
 
@@ -125,15 +147,18 @@ export function InboxPageView(): ReactNode {
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
 
-  const lastMessageId = conversation?.messages.at(-1)?.id;
+  const lastMessage = conversation?.messages.at(-1);
+  const lastMessageSignature = lastMessage
+    ? `${lastMessage.id}:${lastMessage.createdAt}:${lastMessage.action?.status ?? ""}:${lastMessage.content}`
+    : undefined;
   useEffect(() => {
     const element = messageList.current;
-    if (!element || !lastMessageId) return;
+    if (!element || !lastMessageSignature) return;
     const frame = window.requestAnimationFrame(() => {
       element.scrollTop = element.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [conversation?.id, lastMessageId]);
+  }, [conversation?.id, lastMessageSignature]);
 
   useEffect(() => {
     setLinkedTasks(undefined);
@@ -260,6 +285,74 @@ export function InboxPageView(): ReactNode {
     event.target.value = "";
   }
 
+  function openAiHandoff(target: AiHandoffTarget): void {
+    setHandoffTarget(target);
+    setHandoffInstruction(`Review this ${target.scope} context and take the appropriate next action.`);
+    if (connections.length || loadingConnections) return;
+    setLoadingConnections(true);
+    void apiGet<ConnectionRecord[]>("/api/connections")
+      .then((items) => {
+        const configured = items.filter((item) => item.configured && item.id);
+        setConnections(configured);
+        setHandoffConnectionId((current) => current || configured[0]?.id || "");
+      })
+      .catch((loadError) => setError(messageForError(loadError, "Could not load connected accounts.")))
+      .finally(() => setLoadingConnections(false));
+  }
+
+  async function submitAiHandoff(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!conversation || !selectedId || !handoffTarget || !handoffConnectionId || !handoffInstruction.trim()) return;
+    const selectedConnection = connections.find((item) => item.id === handoffConnectionId);
+    if (!selectedConnection) return;
+    const previousConversation = conversation;
+    const createdAt = new Date().toISOString();
+    const pendingId = `action:pending:${createdAt}`;
+    setSendingHandoff(true);
+    setConversation({
+      ...conversation,
+      messages: [
+        ...conversation.messages,
+        {
+          id: pendingId,
+          kind: "action",
+          direction: "outbound",
+          sender: { name: `AI · ${connectionLabel(selectedConnection)}` },
+          content: `Working on: ${handoffInstruction.trim()}`,
+          createdAt,
+          attachments: [],
+          action: {
+            scope: handoffTarget.scope,
+            status: "running",
+            connectionId: handoffConnectionId,
+            connectionName: connectionLabel(selectedConnection),
+            service: selectedConnection.service,
+            instruction: handoffInstruction.trim(),
+            activities: [],
+          },
+        },
+      ],
+    });
+    setHandoffTarget(undefined);
+    try {
+      const next = await apiPost<InboxConversation>(
+        `/api/inbox/conversations/${encodeURIComponent(selectedId)}/ai-actions`,
+        {
+          scope: handoffTarget.scope,
+          targetId: handoffTarget.targetId,
+          connectionId: handoffConnectionId,
+          instruction: handoffInstruction.trim(),
+        },
+      );
+      adoptConversation(next, selectedId);
+    } catch (handoffError) {
+      setConversation(previousConversation);
+      setError(messageForError(handoffError, "Could not send this context to AI."));
+    } finally {
+      setSendingHandoff(false);
+    }
+  }
+
   const selectedSummary = page.conversations.find((item) => item.id === selectedId);
   const selectedSource = page.sources.find((source) => source.id === conversation?.sourceId);
 
@@ -379,14 +472,24 @@ export function InboxPageView(): ReactNode {
         {conversation ? (
           <>
             <header className="inbox-thread-header">
-              <div className={`inbox-avatar ${conversation.provider}`}>
-                <ProviderIcon provider={conversation.provider} />
-              </div>
+              <ContactAvatar
+                label={conversationAvatarLabel(conversation)}
+                provider={conversation.provider}
+                multiple={conversation.participants.length > 1}
+              />
               <div className="inbox-thread-heading">
                 <strong>{conversation.title}</strong>
                 <span>{conversation.contextLabel}</span>
               </div>
               <span className={`inbox-status ${conversation.status}`}>{conversation.status}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openAiHandoff({ scope: "conversation", label: conversation.title })}
+              >
+                <Sparkles size={14} />
+                Send to AI
+              </Button>
               <Button
                 variant={conversation.status === "resolved" ? "outline" : "default"}
                 size="sm"
@@ -417,14 +520,25 @@ export function InboxPageView(): ReactNode {
                   <div className="inbox-message-meta">
                     {message.kind === "note" ? (
                       <StickyNote size={13} />
+                    ) : message.kind === "action" ? (
+                      <Bot size={13} />
                     ) : message.direction === "inbound" ? (
-                      <ArrowDownLeft size={13} />
+                      <ContactAvatar label={message.sender.name} size="small" />
                     ) : (
-                      <ArrowUpRight size={13} />
+                      <ContactAvatar label={message.sender.name} size="small" outgoing />
                     )}
                     <strong>{message.sender.name}</strong>
                     <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
                   </div>
+                  {message.action ? (
+                    <div className={`inbox-ai-action-heading ${message.action.status}`}>
+                      <span>
+                        <Sparkles size={12} /> {capitalize(message.action.scope)} sent to{" "}
+                        {message.action.connectionName}
+                      </span>
+                      <small>{message.action.instruction}</small>
+                    </div>
+                  ) : null}
                   <div className="inbox-message-body">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
                   </div>
@@ -443,6 +557,32 @@ export function InboxPageView(): ReactNode {
                           </span>
                         ),
                       )}
+                    </div>
+                  ) : null}
+                  {message.action?.activities.length ? (
+                    <div className="inbox-ai-activities">
+                      {message.action.activities.map((activity, index) => (
+                        <span className={activity.ok ? "success" : "failed"} key={`${activity.label}-${index}`}>
+                          {activity.ok ? <CheckCircle2 size={11} /> : <AlertCircle size={11} />}
+                          {activity.label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.kind === "message" ? (
+                    <div className="inbox-message-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAiHandoff({
+                            scope: "message",
+                            targetId: message.id,
+                            label: messagePreview(message.content),
+                          })
+                        }
+                      >
+                        <Sparkles size={11} /> Send to AI
+                      </button>
                     </div>
                   ) : null}
                 </article>
@@ -607,11 +747,25 @@ export function InboxPageView(): ReactNode {
             <DetailBlock label="Participants">
               {conversation.participants.map((participant) => (
                 <span className="inbox-person" key={participant.email ?? participant.name}>
-                  <span>{initials(participant.name)}</span>
+                  <ContactAvatar label={participant.name} size="small" />
                   <span>
                     <strong>{participant.name}</strong>
                     {participant.email ? <small>{participant.email}</small> : null}
                   </span>
+                  <button
+                    type="button"
+                    title="Send contact to AI"
+                    aria-label={`Send ${participant.name} to AI`}
+                    onClick={() =>
+                      openAiHandoff({
+                        scope: "contact",
+                        targetId: participant.email ?? participant.name,
+                        label: participant.name,
+                      })
+                    }
+                  >
+                    <Sparkles size={13} />
+                  </button>
                 </span>
               ))}
             </DetailBlock>
@@ -682,6 +836,60 @@ export function InboxPageView(): ReactNode {
           </button>
         </div>
       ) : null}
+
+      <Dialog open={Boolean(handoffTarget)} onOpenChange={(open) => !open && setHandoffTarget(undefined)}>
+        <DialogContent className="inbox-handoff-dialog sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Send context to AI</DialogTitle>
+            <DialogDescription>
+              The AI can use only the connected account you select. Its result will appear in this conversation.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(event) => void submitAiHandoff(event)}>
+            <div className="inbox-handoff-target">
+              <span>{handoffTarget ? capitalize(handoffTarget.scope) : "Context"}</span>
+              <strong>{handoffTarget?.label}</strong>
+            </div>
+            <label className="inbox-handoff-field">
+              <span>Connected account</span>
+              <select
+                value={handoffConnectionId}
+                onChange={(event) => setHandoffConnectionId(event.target.value)}
+                disabled={loadingConnections}
+              >
+                {loadingConnections ? <option>Loading connections…</option> : null}
+                {!loadingConnections && connections.length === 0 ? (
+                  <option value="">No connections available</option>
+                ) : null}
+                {connections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {providerLabel(connection.service)} · {connectionLabel(connection)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inbox-handoff-field">
+              <span>What should the AI do?</span>
+              <Textarea
+                value={handoffInstruction}
+                onChange={(event) => setHandoffInstruction(event.target.value)}
+                rows={4}
+                maxLength={10_000}
+                autoFocus
+              />
+            </label>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setHandoffTarget(undefined)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!handoffConnectionId || !handoffInstruction.trim() || sendingHandoff}>
+                {sendingHandoff ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />}
+                Send to AI
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -720,9 +928,11 @@ function ConversationButton(props: {
   const item = props.conversation;
   return (
     <button className={`inbox-list-item${props.active ? " active" : ""}`} type="button" onClick={props.onClick}>
-      <div className={`inbox-avatar ${item.provider}`}>
-        <ProviderIcon provider={item.provider} />
-      </div>
+      <ContactAvatar
+        label={conversationAvatarLabel(item)}
+        provider={item.provider}
+        multiple={item.participants.length > 1}
+      />
       <div className="inbox-list-copy">
         <div>
           <strong>{item.title}</strong>
@@ -730,7 +940,7 @@ function ConversationButton(props: {
         </div>
         <span className="inbox-list-context">{item.contextLabel}</span>
         <p>{item.preview || "Attachment"}</p>
-        {item.labels.length || item.priority !== "none" || item.status === "waiting" ? (
+        {item.labels.length || item.usedConnections.length || item.priority !== "none" || item.status === "waiting" ? (
           <span className="inbox-list-tags">
             {item.priority !== "none" ? (
               <small className={`inbox-priority ${item.priority}`}>{item.priority}</small>
@@ -741,11 +951,46 @@ function ConversationButton(props: {
                 {label}
               </small>
             ))}
+            {item.usedConnections.slice(0, 3).map((connection) => (
+              <small
+                className="inbox-connection-badge"
+                key={connection.connectionId}
+                title={`Used ${providerLabel(connection.service)} connection: ${connection.connectionName}`}
+              >
+                <Sparkles size={9} /> {providerLabel(connection.service)}
+              </small>
+            ))}
+            {item.usedConnections.length > 3 ? (
+              <small className="inbox-connection-badge">+{item.usedConnections.length - 3}</small>
+            ) : null}
           </span>
         ) : null}
       </div>
       {item.unread ? <span className="inbox-unread" title="Unread" /> : null}
     </button>
+  );
+}
+
+function ContactAvatar(props: {
+  label: string;
+  provider?: InboxProvider;
+  size?: "small";
+  multiple?: boolean;
+  outgoing?: boolean;
+}): ReactNode {
+  const tone = avatarTone(props.label);
+  return (
+    <span
+      className={`inbox-contact-avatar tone-${tone}${props.size ? ` ${props.size}` : ""}${props.outgoing ? " outgoing" : ""}`}
+      aria-hidden="true"
+    >
+      {props.multiple ? <Users size={props.size ? 11 : 15} /> : initials(props.label)}
+      {props.provider ? (
+        <span className={`inbox-avatar-provider ${props.provider}`}>
+          <ProviderIcon provider={props.provider} />
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -823,6 +1068,39 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function conversationAvatarLabel(conversation: InboxConversationSummary): string {
+  if (conversation.participants.length > 1) return conversation.title;
+  return conversation.participants[0]?.name || conversation.title;
+}
+
+function avatarTone(label: string): number {
+  return [...label].reduce((total, character) => total + character.codePointAt(0)!, 0) % 5;
+}
+
+function providerLabel(service: string): string {
+  if (service === "azure_devops") return "Azure DevOps";
+  if (service === "microsoft_todo") return "Microsoft To Do";
+  if (service === "microsoft_teams") return "Microsoft Teams";
+  return service.split(/[_-]/gu).filter(Boolean).map(capitalize).join(" ");
+}
+
+function connectionLabel(connection: ConnectionRecord): string {
+  const displayName = connection.profile?.displayName;
+  if (typeof displayName === "string" && displayName.trim()) {
+    return connection.connectionName && connection.connectionName !== "default"
+      ? `${displayName} · ${connection.connectionName}`
+      : displayName;
+  }
+  return connection.connectionName && connection.connectionName !== "default"
+    ? connection.connectionName
+    : providerLabel(connection.service);
+}
+
+function messagePreview(content: string): string {
+  const compact = content.replace(/\s+/gu, " ").trim();
+  return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact || "Selected message";
 }
 
 function initials(name: string): string {
