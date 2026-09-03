@@ -81,6 +81,25 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
   });
 
+  it("persists encrypted inbox workflow metadata", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database(), {
+      secretCodec: new AesGcmSecretCodec("inbox-key"),
+    });
+    const metadata = {
+      id: "teams:thread-1",
+      status: "open" as const,
+      priority: "medium" as const,
+      labels: ["follow-up"],
+      notes: [{ id: "note-1", content: "Private context", createdAt: "2026-09-03T01:00:00.000Z" }],
+      updatedAt: "2026-09-03T01:00:00.000Z",
+    };
+
+    await database.inboxStore.setConversation(metadata);
+
+    await expect(database.inboxStore.getConversation(metadata.id)).resolves.toEqual(metadata);
+    await expect(database.inboxStore.listConversations()).resolves.toEqual([metadata]);
+  });
+
   it("persists and cascades encrypted Teams gateway state", async () => {
     const database = new D1RuntimeDatabase(new SqliteD1Database(), {
       secretCodec: new AesGcmSecretCodec("teams-gateway-key"),
@@ -761,6 +780,7 @@ class SqliteD1Database implements D1DatabaseBinding {
     this.database.exec(
       readFileSync(new URL("../../../migrations/0020_teams_gateway_subscriptions.sql", import.meta.url), "utf8"),
     );
+    this.database.exec(readFileSync(new URL("../../../migrations/0021_inbox.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

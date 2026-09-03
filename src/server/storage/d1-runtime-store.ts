@@ -21,6 +21,7 @@ import type {
   FlowTriggerState,
   IFlowStore,
 } from "../flows/flow-types.ts";
+import type { IInboxStore, InboxConversationMetadata } from "../inbox/inbox-types.ts";
 import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
@@ -71,6 +72,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly synapseStore: D1SynapseStore;
   readonly kanbanStore: D1KanbanStore;
   readonly teamsGatewayStore: D1TeamsGatewayStore;
+  readonly inboxStore: D1InboxStore;
 
   constructor(database: D1DatabaseBinding, options: D1RuntimeDatabaseOptions = {}) {
     const secretCodec = options.secretCodec ?? new PlainTextSecretCodec();
@@ -88,6 +90,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.synapseStore = new D1SynapseStore(database, secretCodec);
     this.kanbanStore = new D1KanbanStore(database, secretCodec);
     this.teamsGatewayStore = new D1TeamsGatewayStore(database, secretCodec);
+    this.inboxStore = new D1InboxStore(database, secretCodec);
   }
 }
 
@@ -989,6 +992,49 @@ export class D1SynapseStore implements ISynapseStore {
   async deleteWorkspace(id: string): Promise<boolean> {
     const result = await this.database.prepare("delete from synapse_workspaces where id = ?").bind(id).run();
     return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export class D1InboxStore implements IInboxStore {
+  private readonly database: D1DatabaseBinding;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: D1DatabaseBinding, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setConversation(metadata: InboxConversationMetadata): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into inbox_conversations (id, updated_at, value) values (?, ?, ?)
+         on conflict(id) do update set updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .bind(metadata.id, metadata.updatedAt, await this.secretCodec.encode(JSON.stringify(metadata)))
+      .run();
+  }
+
+  async getConversation(id: string): Promise<InboxConversationMetadata | undefined> {
+    const row = await this.database
+      .prepare("select value from inbox_conversations where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row
+      ? parseJson<InboxConversationMetadata>(await this.secretCodec.decode(readString(row, "value")))
+      : undefined;
+  }
+
+  async listConversations(limit = 1_000): Promise<InboxConversationMetadata[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 5_000));
+    const { results } = await this.database
+      .prepare("select value from inbox_conversations order by updated_at desc, id desc limit ?")
+      .bind(boundedLimit)
+      .all<RuntimeRow>();
+    return await Promise.all(
+      results.map(async (row) =>
+        parseJson<InboxConversationMetadata>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
   }
 }
 

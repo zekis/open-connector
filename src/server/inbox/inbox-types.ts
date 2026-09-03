@@ -1,4 +1,6 @@
 export type InboxProvider = "microsoft_teams" | "outlook";
+export type InboxConversationStatus = "open" | "waiting" | "resolved";
+export type InboxPriority = "none" | "low" | "medium" | "high";
 
 export interface InboxSource {
   id: string;
@@ -25,6 +27,7 @@ export interface InboxAttachment {
 
 export interface InboxMessage {
   id: string;
+  kind: "message" | "note";
   direction: "inbound" | "outbound";
   sender: InboxParticipant;
   content: string;
@@ -41,7 +44,10 @@ export interface InboxConversationSummary {
   participants: InboxParticipant[];
   updatedAt: string;
   unread: boolean;
-  status: "open" | "waiting";
+  status: InboxConversationStatus;
+  priority: InboxPriority;
+  labels: string[];
+  noteCount: number;
   messageCount: number;
   contextLabel?: string;
 }
@@ -61,7 +67,46 @@ export interface InboxPage {
   errors: InboxSourceError[];
 }
 
+export interface InboxLinkedTask {
+  id: string;
+  connectionId: string;
+  taskListId: string;
+  taskListName: string;
+  title: string;
+  status: string;
+  importance: string;
+  dueAt?: string;
+  sourceUrl?: string;
+}
+
+export interface InboxLinkedTasks {
+  available: boolean;
+  tasks: InboxLinkedTask[];
+  errors: string[];
+}
+
 export interface InboxReplyAttachment {
   fileId: string;
   name?: string;
+}
+
+export interface InboxPrivateNote {
+  id: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface InboxConversationMetadata {
+  id: string;
+  status: "open" | "resolved";
+  priority: InboxPriority;
+  labels: string[];
+  notes: InboxPrivateNote[];
+  updatedAt: string;
+}
+
+export interface IInboxStore {
+  setConversation(metadata: InboxConversationMetadata): Promise<void>;
+  getConversation(id: string): Promise<InboxConversationMetadata | undefined>;
+  listConversations(limit?: number): Promise<InboxConversationMetadata[]>;
 }

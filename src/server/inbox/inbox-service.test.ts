@@ -1,6 +1,7 @@
 import type { ConnectionSummary } from "../../connection-service.ts";
 import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts";
 import type { TeamsGatewayAgent, TeamsGatewayThread } from "../teams-gateway/teams-gateway-types.ts";
+import type { InboxConversationMetadata, IInboxStore } from "./inbox-types.ts";
 
 import { describe, expect, it, vi } from "vitest";
 import { ActionPolicyService } from "../../core/action-policy.ts";
@@ -19,6 +20,13 @@ const outlookConnection: ConnectionSummary = {
     displayName: "operator@example.com",
     grantedScopes: ["Mail.ReadWrite", "Mail.Send"],
   },
+};
+
+const todoConnection: ConnectionSummary = {
+  ...outlookConnection,
+  id: "todo-connection-1",
+  service: "microsoft_todo",
+  connectionName: "work-tasks",
 };
 
 const teamsAgent: TeamsGatewayAgent = {
@@ -56,7 +64,7 @@ const teamsThread: TeamsGatewayThread = {
   ],
   cursorAt: "2026-09-02T01:00:00.000Z",
   createdAt: "2026-09-02T01:00:00.000Z",
-  updatedAt: "2026-09-02T01:00:00.000Z",
+  updatedAt: "2026-09-04T01:00:00.000Z",
 };
 
 describe("InboxService", () => {
@@ -95,6 +103,7 @@ describe("InboxService", () => {
     );
     expect(page.conversations.map((conversation) => conversation.provider)).toEqual(["outlook", "microsoft_teams"]);
     expect(page.conversations[0]).toMatchObject({ title: "Quarterly report", unread: true });
+    expect(page.conversations[1]?.updatedAt).toBe("2026-09-02T01:00:00.000Z");
   });
 
   it("sends an Outlook attachment reply through a draft before sending", async () => {
@@ -189,13 +198,104 @@ describe("InboxService", () => {
       select: expect.arrayContaining(["body", "uniqueBody"]),
     });
   });
+
+  it("keeps workflow state and private notes separate from provider messages", async () => {
+    const store = new MemoryInboxStore();
+    const run = vi.fn(async () => actionResult({ messages: [] }));
+    const service = createService(run, store);
+    const conversationId = (await service.list()).conversations.find((item) => item.provider === "microsoft_teams")!.id;
+
+    await service.update(conversationId, { status: "resolved", priority: "high", labels: ["Customer", "urgent"] });
+    await service.addNote(conversationId, { content: "Check the contract before replying." });
+
+    const conversation = await service.get(conversationId);
+    expect(conversation).toMatchObject({
+      status: "resolved",
+      priority: "high",
+      labels: ["Customer", "urgent"],
+      noteCount: 1,
+    });
+    expect(conversation.messages.at(-1)).toMatchObject({
+      kind: "note",
+      content: "Check the contract before replying.",
+      sender: { name: "Private note" },
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds Microsoft To Do tasks that reference an Outlook email ID", async () => {
+    const run = vi.fn(async (input: RunActionInput) => {
+      if (input.actionId === "microsoft_todo.list_task_lists") {
+        return actionResult({ taskLists: [{ id: "list-1", displayName: "Tasks" }], nextLink: null });
+      }
+      if (input.actionId === "microsoft_todo.list_tasks") {
+        return actionResult({
+          tasks: [
+            {
+              id: "task-1",
+              title: "Reply to Morgan",
+              body: { content: "Source email: &lt;internet-message-1@example.com&gt;" },
+              status: "notStarted",
+              importance: "high",
+              linkedResources: [
+                {
+                  externalId: "outlook-message-1",
+                  webUrl: "https://outlook.office.com/mail/inbox/id/outlook-message-1",
+                },
+              ],
+            },
+            { id: "task-2", title: "Unrelated", body: { content: "Another email" }, status: "completed" },
+          ],
+          nextLink: null,
+        });
+      }
+      return actionResult({
+        messages: [
+          {
+            id: "outlook-message-1",
+            conversationId: "conversation-1",
+            internetMessageId: "<internet-message-1@example.com>",
+            subject: "Quarterly report",
+            bodyPreview: "The report is ready.",
+            receivedDateTime: "2026-09-03T01:00:00.000Z",
+            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
+            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
+            isRead: true,
+            hasAttachments: false,
+          },
+        ],
+        nextLink: null,
+      });
+    });
+    const service = createService(run, new MemoryInboxStore(), [outlookConnection, todoConnection]);
+    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
+
+    const result = await service.listLinkedTasks(conversationId);
+
+    expect(result).toEqual({
+      available: true,
+      errors: [],
+      tasks: [
+        expect.objectContaining({
+          id: "task-1",
+          taskListName: "Tasks",
+          title: "Reply to Morgan",
+          sourceUrl: "https://outlook.office.com/mail/inbox/id/outlook-message-1",
+        }),
+      ],
+    });
+  });
 });
 
-function createService(run: IActionRunner["run"]): InboxService {
+function createService(
+  run: IActionRunner["run"],
+  store: IInboxStore = new MemoryInboxStore(),
+  connections: ConnectionSummary[] = [outlookConnection],
+): InboxService {
   return new InboxService({
     connections: {
       async listConnections() {
-        return [outlookConnection];
+        return connections;
       },
     },
     actions: { run },
@@ -213,7 +313,25 @@ function createService(run: IActionRunner["run"]): InboxService {
     async getPolicySnapshot() {
       return new ActionPolicyService().createSnapshot();
     },
+    store,
   });
+}
+
+class MemoryInboxStore implements IInboxStore {
+  private readonly conversations = new Map<string, InboxConversationMetadata>();
+
+  async setConversation(metadata: InboxConversationMetadata): Promise<void> {
+    this.conversations.set(metadata.id, structuredClone(metadata));
+  }
+
+  async getConversation(id: string): Promise<InboxConversationMetadata | undefined> {
+    const metadata = this.conversations.get(id);
+    return metadata ? structuredClone(metadata) : undefined;
+  }
+
+  async listConversations(): Promise<InboxConversationMetadata[]> {
+    return [...this.conversations.values()].map((metadata) => structuredClone(metadata));
+  }
 }
 
 function actionResult(output: unknown) {

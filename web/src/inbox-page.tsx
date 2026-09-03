@@ -1,18 +1,33 @@
-import type { InboxConversation, InboxConversationSummary, InboxPage, InboxProvider } from "./model";
+import type {
+  InboxConversation,
+  InboxConversationSummary,
+  InboxLinkedTasks,
+  InboxPage,
+  InboxPriority,
+  InboxProvider,
+} from "./model";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 
 import {
   AlertCircle,
+  ArrowDownUp,
   ArrowDownLeft,
   ArrowUpRight,
+  CheckCircle2,
+  ExternalLink,
   FileText,
   Loader2,
+  ListTodo,
   Mail,
   MessageSquare,
   Paperclip,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCw,
   Search,
   Send,
+  StickyNote,
+  Tag,
   Users,
   X,
 } from "lucide-react";
@@ -20,7 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router";
 import remarkGfm from "remark-gfm";
-import { ApiError, apiGet, apiPost, apiUpload } from "./api";
+import { ApiError, apiGet, apiPost, apiPut, apiUpload } from "./api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -31,11 +46,17 @@ interface TransitUpload {
   sizeBytes: number;
 }
 
+type InboxView = "open" | "unread" | "waiting" | "resolved";
+type InboxSort = "newest" | "oldest" | "priority";
+type ComposerMode = "reply" | "note";
+
 export function InboxPageView(): ReactNode {
   const [page, setPage] = useState<InboxPage>({ sources: [], conversations: [], errors: [] });
   const [selectedId, setSelectedId] = useState<string>();
   const [conversation, setConversation] = useState<InboxConversation>();
   const [sourceId, setSourceId] = useState("all");
+  const [view, setView] = useState<InboxView>("open");
+  const [sort, setSort] = useState<InboxSort>("newest");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingConversation, setLoadingConversation] = useState(false);
@@ -43,7 +64,13 @@ export function InboxPageView(): ReactNode {
   const [reply, setReply] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  const [composerMode, setComposerMode] = useState<ComposerMode>("reply");
+  const [detailsOpen, setDetailsOpen] = useState(true);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [linkedTasks, setLinkedTasks] = useState<InboxLinkedTasks>();
+  const [loadingLinkedTasks, setLoadingLinkedTasks] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const messageList = useRef<HTMLDivElement>(null);
 
   const loadPage = useCallback(async (silent = false): Promise<void> => {
     if (!silent) setLoading(true);
@@ -98,27 +125,78 @@ export function InboxPageView(): ReactNode {
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
 
+  const lastMessageId = conversation?.messages.at(-1)?.id;
+  useEffect(() => {
+    const element = messageList.current;
+    if (!element || !lastMessageId) return;
+    const frame = window.requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversation?.id, lastMessageId]);
+
+  useEffect(() => {
+    setLinkedTasks(undefined);
+    if (!selectedId) return;
+    const controller = new AbortController();
+    setLoadingLinkedTasks(true);
+    void apiGet<InboxLinkedTasks>(`/api/inbox/conversations/${encodeURIComponent(selectedId)}/linked-tasks`, {
+      signal: controller.signal,
+    })
+      .then(setLinkedTasks)
+      .catch((loadError) => {
+        if (!controller.signal.aborted) {
+          setLinkedTasks({ available: true, tasks: [], errors: [messageForError(loadError, "Could not load tasks.")] });
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingLinkedTasks(false);
+      });
+    return () => controller.abort();
+  }, [selectedId]);
+
+  const sourceConversations = useMemo(
+    () =>
+      page.conversations.filter(
+        (item) => sourceId === "all" || item.sourceId === sourceId || item.provider === sourceId,
+      ),
+    [page.conversations, sourceId],
+  );
+
   const visibleConversations = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return page.conversations.filter((item) => {
-      if (sourceId !== "all" && item.sourceId !== sourceId && item.provider !== sourceId) return false;
-      if (!normalizedQuery) return true;
-      return [
-        item.title,
-        item.preview,
-        item.contextLabel,
-        ...item.participants.flatMap((person) => [person.name, person.email]),
-      ]
-        .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(normalizedQuery));
-    });
-  }, [page.conversations, query, sourceId]);
+    return sourceConversations
+      .filter((item) => matchesView(item, view))
+      .filter((item) => {
+        if (!normalizedQuery) return true;
+        return [
+          item.title,
+          item.preview,
+          item.contextLabel,
+          ...item.labels,
+          ...item.participants.flatMap((person) => [person.name, person.email]),
+        ]
+          .filter(Boolean)
+          .some((value) => value!.toLowerCase().includes(normalizedQuery));
+      })
+      .sort(conversationSorter(sort));
+  }, [query, sort, sourceConversations, view]);
 
-  async function sendReply(event: FormEvent): Promise<void> {
+  async function submitComposer(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!selectedId || (!reply.trim() && files.length === 0) || sending) return;
+    if (!selectedId || (!reply.trim() && (composerMode === "note" || files.length === 0)) || sending) return;
     setSending(true);
     try {
+      if (composerMode === "note") {
+        const next = await apiPost<InboxConversation>(
+          `/api/inbox/conversations/${encodeURIComponent(selectedId)}/notes`,
+          { content: reply.trim() },
+        );
+        adoptConversation(next, selectedId);
+        setReply("");
+        await loadPage(true);
+        return;
+      }
       const attachments: TransitUpload[] = [];
       for (const file of files) attachments.push(await apiUpload<TransitUpload>("/api/files", file));
       const next = await apiPost<InboxConversation>(
@@ -128,7 +206,7 @@ export function InboxPageView(): ReactNode {
           attachments: attachments.map((file) => ({ fileId: file.fileId, name: file.name })),
         },
       );
-      setConversation(next);
+      adoptConversation(next, selectedId);
       setReply("");
       setFiles([]);
       if (fileInput.current) fileInput.current.value = "";
@@ -138,6 +216,42 @@ export function InboxPageView(): ReactNode {
     } finally {
       setSending(false);
     }
+  }
+
+  function adoptConversation(next: InboxConversation, previousId: string): void {
+    const { messages: _messages, ...summary } = next;
+    setConversation(next);
+    setSelectedId(next.id);
+    setPage((current) => ({
+      ...current,
+      conversations: current.conversations.map((item) => (item.id === previousId ? summary : item)),
+    }));
+  }
+
+  async function updateConversation(patch: {
+    status?: "open" | "resolved";
+    priority?: InboxPriority;
+    labels?: string[];
+  }) {
+    if (!selectedId) return;
+    try {
+      const next = await apiPut<InboxConversation>(`/api/inbox/conversations/${encodeURIComponent(selectedId)}`, patch);
+      adoptConversation(next, selectedId);
+      await loadPage(true);
+    } catch (updateError) {
+      setError(messageForError(updateError, "Could not update the conversation."));
+    }
+  }
+
+  function addLabel(): void {
+    const label = labelDraft.trim();
+    if (!conversation || !label) return;
+    if (conversation.labels.some((item) => item.toLowerCase() === label.toLowerCase())) {
+      setLabelDraft("");
+      return;
+    }
+    setLabelDraft("");
+    void updateConversation({ labels: [...conversation.labels, label] });
   }
 
   function addFiles(event: ChangeEvent<HTMLInputElement>): void {
@@ -150,7 +264,7 @@ export function InboxPageView(): ReactNode {
   const selectedSource = page.sources.find((source) => source.id === conversation?.sourceId);
 
   return (
-    <section className="unified-inbox" aria-label="Unified inbox">
+    <section className={`unified-inbox${detailsOpen ? "" : " details-collapsed"}`} aria-label="Unified inbox">
       <aside className="inbox-sources">
         <div className="inbox-pane-title">
           <div>
@@ -214,13 +328,38 @@ export function InboxPageView(): ReactNode {
               <X size={14} />
             </button>
           ) : null}
+          <button
+            type="button"
+            onClick={() => setSort((current) => nextSort(current))}
+            aria-label={`Sort conversations: ${sort}`}
+            title={`Sort: ${sort}`}
+          >
+            <ArrowDownUp size={14} />
+          </button>
         </div>
-        {page.errors.map((sourceError) => (
-          <div className="inbox-source-error" key={sourceError.sourceId}>
-            <AlertCircle size={14} />
-            <span>{sourceError.message}</span>
-          </div>
-        ))}
+        <div className="inbox-view-tabs" role="tablist" aria-label="Conversation status">
+          {(["open", "unread", "waiting", "resolved"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={view === item}
+              className={view === item ? "active" : ""}
+              onClick={() => setView(item)}
+            >
+              {item === "open" ? "All" : capitalize(item)}
+              <span>{sourceConversations.filter((conversation) => matchesView(conversation, item)).length}</span>
+            </button>
+          ))}
+        </div>
+        <div className="inbox-source-errors">
+          {page.errors.map((sourceError) => (
+            <div className="inbox-source-error" key={sourceError.sourceId}>
+              <AlertCircle size={14} />
+              <span>{sourceError.message}</span>
+            </div>
+          ))}
+        </div>
         <div className="inbox-list" aria-label="Conversations">
           {visibleConversations.map((item) => (
             <ConversationButton
@@ -243,22 +382,46 @@ export function InboxPageView(): ReactNode {
               <div className={`inbox-avatar ${conversation.provider}`}>
                 <ProviderIcon provider={conversation.provider} />
               </div>
-              <div>
+              <div className="inbox-thread-heading">
                 <strong>{conversation.title}</strong>
                 <span>{conversation.contextLabel}</span>
               </div>
               <span className={`inbox-status ${conversation.status}`}>{conversation.status}</span>
+              <Button
+                variant={conversation.status === "resolved" ? "outline" : "default"}
+                size="sm"
+                onClick={() =>
+                  void updateConversation({ status: conversation.status === "resolved" ? "open" : "resolved" })
+                }
+              >
+                <CheckCircle2 size={14} />
+                {conversation.status === "resolved" ? "Reopen" : "Resolve"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setDetailsOpen((current) => !current)}
+                aria-label={detailsOpen ? "Hide conversation details" : "Show conversation details"}
+              >
+                {detailsOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </Button>
             </header>
-            <div className="inbox-messages" aria-live="polite">
+            <div ref={messageList} className="inbox-messages" aria-live="polite">
               {loadingConversation ? (
                 <div className="inbox-loading">
                   <Loader2 className="spin" size={18} /> Loading conversation…
                 </div>
               ) : null}
               {conversation.messages.map((message) => (
-                <article className={`inbox-message ${message.direction}`} key={message.id}>
+                <article className={`inbox-message ${message.direction} ${message.kind}`} key={message.id}>
                   <div className="inbox-message-meta">
-                    {message.direction === "inbound" ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}
+                    {message.kind === "note" ? (
+                      <StickyNote size={13} />
+                    ) : message.direction === "inbound" ? (
+                      <ArrowDownLeft size={13} />
+                    ) : (
+                      <ArrowUpRight size={13} />
+                    )}
                     <strong>{message.sender.name}</strong>
                     <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
                   </div>
@@ -285,7 +448,26 @@ export function InboxPageView(): ReactNode {
                 </article>
               ))}
             </div>
-            <form className="inbox-composer" onSubmit={(event) => void sendReply(event)}>
+            <form className={`inbox-composer ${composerMode}`} onSubmit={(event) => void submitComposer(event)}>
+              <div className="inbox-composer-tabs">
+                <button
+                  className={composerMode === "reply" ? "active" : ""}
+                  type="button"
+                  onClick={() => setComposerMode("reply")}
+                >
+                  Reply
+                </button>
+                <button
+                  className={composerMode === "note" ? "active" : ""}
+                  type="button"
+                  onClick={() => {
+                    setComposerMode("note");
+                    setFiles([]);
+                  }}
+                >
+                  Private note
+                </button>
+              </div>
               {files.length ? (
                 <div className="inbox-composer-files">
                   {files.map((file, index) => (
@@ -304,7 +486,11 @@ export function InboxPageView(): ReactNode {
               <Textarea
                 value={reply}
                 onChange={(event) => setReply(event.target.value)}
-                placeholder={`Reply via ${conversation.provider === "outlook" ? "Outlook" : "Teams"}…`}
+                placeholder={
+                  composerMode === "note"
+                    ? "Add a private note (not sent to the contact)…"
+                    : `Reply via ${conversation.provider === "outlook" ? "Outlook" : "Teams"}…`
+                }
                 rows={3}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -314,20 +500,34 @@ export function InboxPageView(): ReactNode {
                 }}
               />
               <div className="inbox-composer-actions">
-                <input ref={fileInput} hidden type="file" multiple onChange={addFiles} />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => fileInput.current?.click()}
-                  aria-label="Attach files"
-                >
-                  <Paperclip size={16} />
-                </Button>
+                {composerMode === "reply" ? (
+                  <>
+                    <input ref={fileInput} hidden type="file" multiple onChange={addFiles} />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => fileInput.current?.click()}
+                      aria-label="Attach files"
+                    >
+                      <Paperclip size={16} />
+                    </Button>
+                  </>
+                ) : null}
                 <span>Enter to send · Shift + Enter for a new line</span>
-                <Button type="submit" size="sm" disabled={sending || (!reply.trim() && files.length === 0)}>
-                  {sending ? <Loader2 className="spin" size={15} /> : <Send size={15} />}
-                  Send
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={sending || (!reply.trim() && (composerMode === "note" || files.length === 0))}
+                >
+                  {sending ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : composerMode === "note" ? (
+                    <StickyNote size={15} />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  {composerMode === "note" ? "Add note" : "Send"}
                 </Button>
               </div>
             </form>
@@ -357,6 +557,53 @@ export function InboxPageView(): ReactNode {
                 <small>{selectedSource.accountLabel}</small>
               ) : null}
             </DetailBlock>
+            <DetailBlock label="Priority">
+              <select
+                className={`inbox-priority-select ${conversation.priority}`}
+                value={conversation.priority}
+                onChange={(event) => void updateConversation({ priority: event.target.value as InboxPriority })}
+              >
+                <option value="none">No priority</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </DetailBlock>
+            <DetailBlock label="Labels">
+              <div className="inbox-labels">
+                {conversation.labels.map((label) => (
+                  <span key={label}>
+                    <Tag size={10} /> {label}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${label} label`}
+                      onClick={() =>
+                        void updateConversation({ labels: conversation.labels.filter((item) => item !== label) })
+                      }
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="inbox-label-input">
+                <input
+                  value={labelDraft}
+                  maxLength={40}
+                  placeholder="Add label"
+                  onChange={(event) => setLabelDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addLabel();
+                    }
+                  }}
+                />
+                <button type="button" onClick={addLabel} disabled={!labelDraft.trim()}>
+                  Add
+                </button>
+              </div>
+            </DetailBlock>
             <DetailBlock label="Participants">
               {conversation.participants.map((participant) => (
                 <span className="inbox-person" key={participant.email ?? participant.name}>
@@ -368,8 +615,58 @@ export function InboxPageView(): ReactNode {
                 </span>
               ))}
             </DetailBlock>
+            {conversation.provider === "outlook" ? (
+              <DetailBlock label="Linked tasks">
+                {loadingLinkedTasks ? (
+                  <span className="inbox-linked-tasks-state">
+                    <Loader2 className="spin" size={13} /> Finding related tasks…
+                  </span>
+                ) : linkedTasks?.available === false ? (
+                  <span className="inbox-linked-tasks-state">Connect Microsoft To Do to find AI-created tasks.</span>
+                ) : linkedTasks?.tasks.length ? (
+                  <div className="inbox-linked-tasks">
+                    {linkedTasks.tasks.map((task) => (
+                      <div className={`inbox-linked-task ${task.status}`} key={`${task.connectionId}:${task.id}`}>
+                        <span className="inbox-linked-task-icon">
+                          {task.status === "completed" ? <CheckCircle2 size={14} /> : <ListTodo size={14} />}
+                        </span>
+                        <span>
+                          <a href="https://to-do.office.com/tasks/" target="_blank" rel="noreferrer">
+                            {task.title}
+                          </a>
+                          <small>
+                            {task.taskListName} · {formatTaskStatus(task.status)}
+                            {task.dueAt ? ` · Due ${formatTaskDate(task.dueAt)}` : ""}
+                          </small>
+                        </span>
+                        {task.sourceUrl ? (
+                          <a
+                            className="inbox-linked-task-source"
+                            href={task.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Open task source"
+                            title="Open source email"
+                          >
+                            <ExternalLink size={12} />
+                          </a>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="inbox-linked-tasks-state">No Microsoft To Do tasks reference this email yet.</span>
+                )}
+                {linkedTasks?.errors.map((message) => (
+                  <small className="inbox-linked-task-error" key={message}>
+                    {message}
+                  </small>
+                ))}
+              </DetailBlock>
+            ) : null}
             <DetailBlock label="Activity">
               <span>{conversation.messageCount} recent messages</span>
+              <span>{conversation.noteCount} private notes</span>
               <span>Updated {formatRelativeTime(conversation.updatedAt)}</span>
             </DetailBlock>
           </>
@@ -433,7 +730,19 @@ function ConversationButton(props: {
         </div>
         <span className="inbox-list-context">{item.contextLabel}</span>
         <p>{item.preview || "Attachment"}</p>
-        {item.status === "waiting" ? <small className="inbox-waiting">Waiting for approval</small> : null}
+        {item.labels.length || item.priority !== "none" || item.status === "waiting" ? (
+          <span className="inbox-list-tags">
+            {item.priority !== "none" ? (
+              <small className={`inbox-priority ${item.priority}`}>{item.priority}</small>
+            ) : null}
+            {item.status === "waiting" ? <small className="inbox-waiting">Waiting</small> : null}
+            {item.labels.slice(0, 2).map((label) => (
+              <small className="inbox-label" key={label}>
+                {label}
+              </small>
+            ))}
+          </span>
+        ) : null}
       </div>
       {item.unread ? <span className="inbox-unread" title="Unread" /> : null}
     </button>
@@ -451,6 +760,44 @@ function DetailBlock(props: { label: string; children: ReactNode }): ReactNode {
       <div>{props.children}</div>
     </section>
   );
+}
+
+function matchesView(conversation: InboxConversationSummary, view: InboxView): boolean {
+  if (view === "resolved") return conversation.status === "resolved";
+  if (view === "waiting") return conversation.status === "waiting";
+  if (view === "unread") return conversation.status !== "resolved" && conversation.unread;
+  return conversation.status !== "resolved";
+}
+
+function conversationSorter(
+  sort: InboxSort,
+): (left: InboxConversationSummary, right: InboxConversationSummary) => number {
+  if (sort === "oldest") return (left, right) => left.updatedAt.localeCompare(right.updatedAt);
+  if (sort === "priority") {
+    const rank: Record<InboxPriority, number> = { none: 0, low: 1, medium: 2, high: 3 };
+    return (left, right) => rank[right.priority] - rank[left.priority] || right.updatedAt.localeCompare(left.updatedAt);
+  }
+  return (left, right) => right.updatedAt.localeCompare(left.updatedAt);
+}
+
+function nextSort(sort: InboxSort): InboxSort {
+  if (sort === "newest") return "oldest";
+  if (sort === "oldest") return "priority";
+  return "newest";
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatTaskStatus(value: string): string {
+  return value.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
+}
+
+function formatTaskDate(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
 function formatRelativeTime(value: string): string {

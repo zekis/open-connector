@@ -309,8 +309,17 @@ export class ConnectServer {
     if (this.options.inbox) {
       app.get("/api/inbox", (context) => this.listInbox(context));
       app.get("/api/inbox/conversations/:id", (context) => this.getInboxConversation(context, context.req.param("id")));
+      app.put("/api/inbox/conversations/:id", (context) =>
+        this.updateInboxConversation(context, context.req.param("id")),
+      );
       app.post("/api/inbox/conversations/:id/replies", (context) =>
         this.replyToInboxConversation(context, context.req.param("id")),
+      );
+      app.post("/api/inbox/conversations/:id/notes", (context) =>
+        this.addInboxConversationNote(context, context.req.param("id")),
+      );
+      app.get("/api/inbox/conversations/:id/linked-tasks", (context) =>
+        this.listInboxLinkedTasks(context, context.req.param("id")),
       );
       app.post("/api/inbox/conversations/:id/read", (context) =>
         this.markInboxConversationRead(context, context.req.param("id")),
@@ -1405,8 +1414,20 @@ export class ConnectServer {
     return context.json(await this.options.inbox!.get(id));
   }
 
+  private async updateInboxConversation(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.update(id, await readJsonBody(context)));
+  }
+
   private async replyToInboxConversation(context: Context, id: string): Promise<Response> {
     return context.json(await this.options.inbox!.reply(id, await readJsonBody(context)));
+  }
+
+  private async addInboxConversationNote(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.addNote(id, await readJsonBody(context)));
+  }
+
+  private async listInboxLinkedTasks(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.listLinkedTasks(id));
   }
 
   private async markInboxConversationRead(context: Context, id: string): Promise<Response> {

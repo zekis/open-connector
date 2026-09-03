@@ -20,6 +20,7 @@ import type {
   FlowTriggerState,
   IFlowStore,
 } from "../flows/flow-types.ts";
+import type { IInboxStore, InboxConversationMetadata } from "../inbox/inbox-types.ts";
 import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
@@ -106,7 +107,8 @@ type IdSecretTable =
   | "teams_gateway_threads"
   | "teams_gateway_contacts"
   | "teams_gateway_groups"
-  | "teams_gateway_subscriptions";
+  | "teams_gateway_subscriptions"
+  | "inbox_conversations";
 
 /**
  * Shared SQLite connection for local runtime state.
@@ -126,6 +128,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
   readonly synapseStore: SqliteSynapseStore;
   readonly kanbanStore: SqliteKanbanStore;
   readonly teamsGatewayStore: SqliteTeamsGatewayStore;
+  readonly inboxStore: SqliteInboxStore;
 
   private readonly database: DatabaseSync;
   private readonly secretCodec: ISecretCodec;
@@ -148,6 +151,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
     this.synapseStore = new SqliteSynapseStore(this.database, this.secretCodec);
     this.kanbanStore = new SqliteKanbanStore(this.database, this.secretCodec);
     this.teamsGatewayStore = new SqliteTeamsGatewayStore(this.database, this.secretCodec);
+    this.inboxStore = new SqliteInboxStore(this.database, this.secretCodec);
   }
 
   close(): void {
@@ -181,6 +185,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "teams_gateway_contacts",
           "teams_gateway_groups",
           "teams_gateway_subscriptions",
+          "inbox_conversations",
         ] as IdSecretTable[]
       ).map((table) => readRotatedIdSecrets(this.database, this.secretCodec, nextSecretCodec, table)),
     );
@@ -205,6 +210,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
           "teams_gateway_contacts",
           "teams_gateway_groups",
           "teams_gateway_subscriptions",
+          "inbox_conversations",
         ] as IdSecretTable[]
       ).entries()) {
         writeRotatedIdSecrets(this.database, table, flowRecords[index]!);
@@ -233,6 +239,7 @@ export class SqliteRuntimeDatabase implements RuntimeDatabase {
       delete from teams_gateway_groups;
       delete from teams_gateway_subscriptions;
       delete from teams_gateway_agents;
+      delete from inbox_conversations;
       delete from flow_trigger_states;
       delete from flow_approvals;
       delete from flow_steps;
@@ -1080,6 +1087,44 @@ export class SqliteSynapseStore implements ISynapseStore {
 
   async deleteWorkspace(id: string): Promise<boolean> {
     return this.database.prepare("delete from synapse_workspaces where id = ?").run(id).changes > 0;
+  }
+}
+
+export class SqliteInboxStore implements IInboxStore {
+  private readonly database: DatabaseSync;
+  private readonly secretCodec: ISecretCodec;
+
+  constructor(database: DatabaseSync, secretCodec: ISecretCodec) {
+    this.database = database;
+    this.secretCodec = secretCodec;
+  }
+
+  async setConversation(metadata: InboxConversationMetadata): Promise<void> {
+    this.database
+      .prepare(
+        `insert into inbox_conversations (id, updated_at, value) values (?, ?, ?)
+         on conflict(id) do update set updated_at = excluded.updated_at, value = excluded.value`,
+      )
+      .run(metadata.id, metadata.updatedAt, await this.secretCodec.encode(JSON.stringify(metadata)));
+  }
+
+  async getConversation(id: string): Promise<InboxConversationMetadata | undefined> {
+    const row = this.database.prepare("select value from inbox_conversations where id = ?").get(id);
+    return row
+      ? parseJson<InboxConversationMetadata>(await this.secretCodec.decode(readString(row, "value")))
+      : undefined;
+  }
+
+  async listConversations(limit = 1_000): Promise<InboxConversationMetadata[]> {
+    const boundedLimit = Math.max(1, Math.min(limit, 5_000));
+    const rows = this.database
+      .prepare("select value from inbox_conversations order by updated_at desc, id desc limit ?")
+      .all(boundedLimit);
+    return await Promise.all(
+      rows.map(async (row) =>
+        parseJson<InboxConversationMetadata>(await this.secretCodec.decode(readString(row, "value"))),
+      ),
+    );
   }
 }
 

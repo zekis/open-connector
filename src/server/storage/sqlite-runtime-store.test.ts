@@ -93,6 +93,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0018_teams_gateway.sql",
       "0019_teams_gateway_groups.sql",
       "0020_teams_gateway_subscriptions.sql",
+      "0021_inbox.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -170,6 +171,30 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.kanbanStore.getBoard(board.id)).resolves.toEqual(board);
     await expect(second.kanbanStore.listBoards()).resolves.toEqual([board]);
     await expect(second.kanbanStore.deleteBoard(board.id)).resolves.toBe(true);
+    second.close();
+  });
+
+  it("persists encrypted inbox workflow metadata", async () => {
+    const databasePath = await createDatabasePath();
+    const metadata = {
+      id: "outlook:connection-1:conversation-1",
+      status: "resolved" as const,
+      priority: "high" as const,
+      labels: ["customer"],
+      notes: [{ id: "note-1", content: "Private context", createdAt: "2026-09-03T01:00:00.000Z" }],
+      updatedAt: "2026-09-03T01:00:00.000Z",
+    };
+    const first = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("inbox-key"),
+    });
+    await first.inboxStore.setConversation(metadata);
+    first.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath, {
+      secretCodec: new AesGcmSecretCodec("inbox-key"),
+    });
+    await expect(second.inboxStore.getConversation(metadata.id)).resolves.toEqual(metadata);
+    await expect(second.inboxStore.listConversations()).resolves.toEqual([metadata]);
     second.close();
   });
 

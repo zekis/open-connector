@@ -154,7 +154,13 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     logger: options.logger,
     publicOrigin: options.publicOrigin,
   });
-  const inbox = new InboxService({ connections, actions, teamsGateway, getPolicySnapshot });
+  const inbox = new InboxService({
+    connections,
+    actions,
+    teamsGateway,
+    getPolicySnapshot,
+    store: options.runtimeDatabase.inboxStore,
+  });
   const feed = new FeedService({
     flows: flowRunner,
     approvals: connectionApprovals,

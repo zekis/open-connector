@@ -10,21 +10,28 @@ import type {
 import type {
   InboxAttachment,
   InboxConversation,
+  InboxConversationMetadata,
   InboxConversationSummary,
+  InboxLinkedTask,
+  InboxLinkedTasks,
   InboxMessage,
   InboxPage,
   InboxParticipant,
+  InboxPriority,
   InboxReplyAttachment,
   InboxSource,
+  IInboxStore,
 } from "./inbox-types.ts";
 
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { optionalRecord, optionalString, requiredRecord } from "../../core/cast.ts";
 
 export interface InboxServiceOptions {
   connections: Pick<ConnectionService, "listConnections">;
   actions: IActionRunner;
   teamsGateway: Pick<TeamsGatewayService, "listAgents" | "listThreads" | "sendOperatorReply">;
+  store: IInboxStore;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
 }
 
@@ -72,11 +79,13 @@ export class InboxService {
   }
 
   async list(input: { query?: string; sourceId?: string } = {}): Promise<InboxPage> {
-    const [connections, agents, threads] = await Promise.all([
+    const [connections, agents, threads, storedMetadata] = await Promise.all([
       this.options.connections.listConnections(),
       this.options.teamsGateway.listAgents(),
       this.options.teamsGateway.listThreads(),
+      this.options.store.listConversations(),
     ]);
+    const metadata = new Map(storedMetadata.map((item) => [item.id, item]));
     const outlookConnections = connections.filter(
       (connection) => connection.service === "outlook" && connection.configured,
     );
@@ -85,14 +94,14 @@ export class InboxService {
     const errors: InboxPage["errors"] = [];
     const conversations: InboxConversationSummary[] = threads
       .filter((thread) => !sourceFilter || teamsSourceId(thread.agentId) === sourceFilter)
-      .map((thread) => this.teamsSummary(thread, agents));
+      .map((thread) => this.teamsSummary(thread, agents, metadata.get(teamsMetadataId(thread.id))));
 
     await Promise.all(
       outlookConnections
         .filter((connection) => !sourceFilter || outlookSourceId(connection.id) === sourceFilter)
         .map(async (connection) => {
           try {
-            conversations.push(...(await this.listOutlookConversations(connection)));
+            conversations.push(...(await this.listOutlookConversations(connection, metadata)));
           } catch (error) {
             errors.push({ sourceId: outlookSourceId(connection.id), message: errorMessage(error) });
           }
@@ -119,16 +128,56 @@ export class InboxService {
   async get(conversationId: string): Promise<InboxConversation> {
     const reference = decodeReference(conversationId);
     if (reference.provider === "microsoft_teams") {
-      const [agents, threads] = await Promise.all([
+      const [agents, threads, metadata] = await Promise.all([
         this.options.teamsGateway.listAgents(),
         this.options.teamsGateway.listThreads(),
+        this.options.store.getConversation(metadataId(reference)),
       ]);
       const thread = threads.find((item) => item.id === reference.threadId);
       if (!thread) throw new InboxError("conversation_not_found", "Teams conversation not found.", 404);
-      return this.teamsConversation(thread, agents);
+      return this.teamsConversation(thread, agents, metadata);
     }
-    const connection = await this.requireOutlookConnection(reference.connectionId);
-    return this.getOutlookConversation(reference, connection);
+    const [connection, metadata] = await Promise.all([
+      this.requireOutlookConnection(reference.connectionId),
+      this.options.store.getConversation(metadataId(reference)),
+    ]);
+    return this.getOutlookConversation(reference, connection, metadata);
+  }
+
+  async update(conversationId: string, input: unknown): Promise<InboxConversation> {
+    await this.get(conversationId);
+    const reference = decodeReference(conversationId);
+    const id = metadataId(reference);
+    const current = (await this.options.store.getConversation(id)) ?? emptyMetadata(id);
+    const value = requiredRecord(input, "inbox conversation update", invalidInput);
+    const status = value.status === undefined ? current.status : readStatus(value.status);
+    const priority = value.priority === undefined ? current.priority : readPriority(value.priority);
+    const labels = value.labels === undefined ? current.labels : readLabels(value.labels);
+    await this.options.store.setConversation({
+      ...current,
+      status,
+      priority,
+      labels,
+      updatedAt: new Date().toISOString(),
+    });
+    return this.get(conversationId);
+  }
+
+  async addNote(conversationId: string, input: unknown): Promise<InboxConversation> {
+    await this.get(conversationId);
+    const value = requiredRecord(input, "private note", invalidInput);
+    const content = readReplyText(value.content);
+    if (!content) throw invalidInput("Private note content is required.");
+    const reference = decodeReference(conversationId);
+    const id = metadataId(reference);
+    const current = (await this.options.store.getConversation(id)) ?? emptyMetadata(id);
+    const createdAt = new Date().toISOString();
+    await this.options.store.setConversation({
+      ...current,
+      notes: [...current.notes, { id: randomUUID(), content, createdAt }].slice(-100),
+      updatedAt: createdAt,
+    });
+    return this.get(conversationId);
   }
 
   async reply(conversationId: string, input: unknown): Promise<InboxConversation> {
@@ -180,6 +229,38 @@ export class InboxService {
     return { success: true };
   }
 
+  async listLinkedTasks(conversationId: string): Promise<InboxLinkedTasks> {
+    const reference = decodeReference(conversationId);
+    if (reference.provider !== "outlook") return { available: false, tasks: [], errors: [] };
+    const outlookConnection = await this.requireOutlookConnection(reference.connectionId);
+    const todoConnections = (await this.options.connections.listConnections()).filter(
+      (connection) => connection.service === "microsoft_todo" && connection.configured,
+    );
+    const matchingAccountConnections = todoConnections.filter(
+      (connection) => connection.profile.accountId === outlookConnection.profile.accountId,
+    );
+    const connections = matchingAccountConnections.length ? matchingAccountConnections : todoConnections;
+    if (connections.length === 0) return { available: false, tasks: [], errors: [] };
+
+    const identifiers = await this.outlookConversationIdentifiers(reference);
+    const tasks: InboxLinkedTask[] = [];
+    const errors: string[] = [];
+    await Promise.all(
+      connections.map(async (connection) => {
+        try {
+          tasks.push(...(await this.findLinkedTasks(connection, identifiers)));
+        } catch (error) {
+          errors.push(`${connection.profile.displayName}: ${errorMessage(error)}`);
+        }
+      }),
+    );
+    tasks.sort(
+      (left, right) =>
+        taskStatusRank(left.status) - taskStatusRank(right.status) || left.title.localeCompare(right.title),
+    );
+    return { available: true, tasks, errors };
+  }
+
   async downloadOutlookAttachment(referenceToken: string): Promise<string> {
     const reference = decodeAttachmentReference(referenceToken);
     await this.requireOutlookConnection(reference.connectionId);
@@ -221,8 +302,12 @@ export class InboxService {
     ];
   }
 
-  private teamsSummary(thread: TeamsGatewayThread, agents: TeamsGatewayAgent[]): InboxConversationSummary {
-    const last = thread.messages.at(-1);
+  private teamsSummary(
+    thread: TeamsGatewayThread,
+    agents: TeamsGatewayAgent[],
+    metadata?: InboxConversationMetadata,
+  ): InboxConversationSummary {
+    const last = latestTeamsMessage(thread.messages);
     const title = thread.conversationName ?? thread.participantName ?? thread.participantEmail;
     return {
       id: encodeReference({ provider: "microsoft_teams", threadId: thread.id }),
@@ -231,22 +316,32 @@ export class InboxService {
       title,
       preview: last?.content ?? "",
       participants: teamsParticipants(thread),
-      updatedAt: thread.updatedAt,
+      updatedAt: last?.createdAt ?? thread.createdAt,
       unread: false,
-      status: thread.pendingPlan || thread.pendingApprovalIds?.length ? "waiting" : "open",
+      ...metadataSummary(metadata, Boolean(thread.pendingPlan || thread.pendingApprovalIds?.length)),
       messageCount: thread.messages.length,
       contextLabel: teamsContextLabel(thread, agents),
     };
   }
 
-  private teamsConversation(thread: TeamsGatewayThread, agents: TeamsGatewayAgent[]): InboxConversation {
+  private teamsConversation(
+    thread: TeamsGatewayThread,
+    agents: TeamsGatewayAgent[],
+    metadata?: InboxConversationMetadata,
+  ): InboxConversation {
     return {
-      ...this.teamsSummary(thread, agents),
-      messages: thread.messages.map((message) => mapTeamsMessage(message, thread, agents)),
+      ...this.teamsSummary(thread, agents, metadata),
+      messages: mergePrivateNotes(
+        thread.messages.map((message) => mapTeamsMessage(message, thread, agents)),
+        metadata,
+      ),
     };
   }
 
-  private async listOutlookConversations(connection: ConnectionSummary): Promise<InboxConversationSummary[]> {
+  private async listOutlookConversations(
+    connection: ConnectionSummary,
+    metadata: Map<string, InboxConversationMetadata>,
+  ): Promise<InboxConversationSummary[]> {
     const output = asRecord(
       await this.runOutlookAction(connection.id, "outlook.list_messages", {
         mailFolderId: "inbox",
@@ -291,7 +386,7 @@ export class InboxService {
         participants: [toParticipant(latest.from)],
         updatedAt: latest.createdAt,
         unread: messages.some((message) => !message.isRead),
-        status: "open",
+        ...metadataSummary(metadata.get(outlookMetadataId(connection.id, latest.conversationId)), false),
         messageCount: messages.length,
         contextLabel: connection.profile.displayName,
       };
@@ -301,6 +396,7 @@ export class InboxService {
   private async getOutlookConversation(
     reference: OutlookConversationReference,
     connection: ConnectionSummary,
+    metadata?: InboxConversationMetadata,
   ): Promise<InboxConversation> {
     const output = asRecord(
       await this.runOutlookAction(connection.id, "outlook.list_messages", {
@@ -346,10 +442,10 @@ export class InboxService {
       participants: otherParticipants.map(toParticipant),
       updatedAt: latest.createdAt,
       unread: messages.some((message) => !message.isRead && !isSelf(message.from, connection)),
-      status: "open",
+      ...metadataSummary(metadata, false),
       messageCount: mappedMessages.length,
       contextLabel: connection.profile.displayName,
-      messages: mappedMessages,
+      messages: mergePrivateNotes(mappedMessages, metadata),
     };
   }
 
@@ -380,6 +476,7 @@ export class InboxService {
     }
     return {
       id: message.id,
+      kind: "message",
       direction: isSelf(message.from, connection) ? "outbound" : "inbound",
       sender: toParticipant(message.from),
       content: message.body || message.preview,
@@ -396,7 +493,66 @@ export class InboxService {
     return connection;
   }
 
+  private async outlookConversationIdentifiers(reference: OutlookConversationReference): Promise<Set<string>> {
+    const identifiers = new Set([reference.conversationId, reference.messageId]);
+    const output = asRecord(
+      await this.runOutlookAction(reference.connectionId, "outlook.list_messages", {
+        top: 50,
+        filter: `conversationId eq '${reference.conversationId.replaceAll("'", "''")}'`,
+        select: ["id", "internetMessageId", "conversationId"],
+      }),
+    );
+    for (const raw of Array.isArray(output.messages) ? output.messages : []) {
+      const message = optionalRecord(raw);
+      for (const value of [message?.id, message?.internetMessageId, message?.conversationId]) {
+        const identifier = optionalString(value);
+        if (identifier) identifiers.add(identifier);
+      }
+    }
+    return identifiers;
+  }
+
+  private async findLinkedTasks(connection: ConnectionSummary, identifiers: Set<string>): Promise<InboxLinkedTask[]> {
+    const output = asRecord(
+      await this.runConnectedAction(connection.id, "microsoft_todo.list_task_lists", { top: 50 }, "Microsoft To Do"),
+    );
+    const lists = (Array.isArray(output.taskLists) ? output.taskLists : []).flatMap((raw) => {
+      const list = optionalRecord(raw);
+      const id = optionalString(list?.id);
+      return id ? [{ id, name: optionalString(list?.displayName) ?? "Microsoft To Do" }] : [];
+    });
+    const tasks: InboxLinkedTask[] = [];
+    for (const list of lists) {
+      const taskOutput = asRecord(
+        await this.runConnectedAction(
+          connection.id,
+          "microsoft_todo.list_tasks",
+          {
+            taskListId: list.id,
+            top: 100,
+            orderby: "lastModifiedDateTime desc",
+          },
+          "Microsoft To Do",
+        ),
+      );
+      for (const raw of Array.isArray(taskOutput.tasks) ? taskOutput.tasks : []) {
+        const task = parseLinkedTask(raw, connection.id, list.id, list.name, identifiers);
+        if (task) tasks.push(task);
+      }
+    }
+    return tasks;
+  }
+
   private async runOutlookAction(connectionId: string, actionId: string, input: unknown): Promise<unknown> {
+    return this.runConnectedAction(connectionId, actionId, input, "Outlook");
+  }
+
+  private async runConnectedAction(
+    connectionId: string,
+    actionId: string,
+    input: unknown,
+    providerName: string,
+  ): Promise<unknown> {
     const run = await this.options.actions.run({
       actionId,
       input,
@@ -405,11 +561,12 @@ export class InboxService {
       policy: await this.options.getPolicySnapshot(),
       approvalPolicy: "bypass",
     });
-    if (!run) throw new InboxError("action_not_found", `Required Outlook action is unavailable: ${actionId}.`, 500);
+    if (!run)
+      throw new InboxError("action_not_found", `Required ${providerName} action is unavailable: ${actionId}.`, 500);
     if (!run.result.ok) {
       throw new InboxError(
         run.result.error?.code ?? "provider_error",
-        run.result.error?.message ?? "Outlook request failed.",
+        run.result.error?.message ?? `${providerName} request failed.`,
         503,
       );
     }
@@ -428,12 +585,126 @@ export class InboxError extends Error {
   }
 }
 
+function latestTeamsMessage(messages: TeamsGatewayMessage[]): TeamsGatewayMessage | undefined {
+  return messages.reduce<TeamsGatewayMessage | undefined>((latest, message) => {
+    if (!latest) return message;
+    return Date.parse(message.createdAt) >= Date.parse(latest.createdAt) ? message : latest;
+  }, undefined);
+}
+
 function teamsSourceId(agentId: string): string {
   return `teams:${agentId}`;
 }
 
 function outlookSourceId(connectionId: string): string {
   return `outlook:${connectionId}`;
+}
+
+function teamsMetadataId(threadId: string): string {
+  return `teams:${threadId}`;
+}
+
+function outlookMetadataId(connectionId: string, conversationId: string): string {
+  return `outlook:${connectionId}:${conversationId}`;
+}
+
+function metadataId(reference: InboxConversationReference): string {
+  return reference.provider === "microsoft_teams"
+    ? teamsMetadataId(reference.threadId)
+    : outlookMetadataId(reference.connectionId, reference.conversationId);
+}
+
+function emptyMetadata(id: string): InboxConversationMetadata {
+  return { id, status: "open", priority: "none", labels: [], notes: [], updatedAt: new Date(0).toISOString() };
+}
+
+function metadataSummary(
+  metadata: InboxConversationMetadata | undefined,
+  waiting: boolean,
+): Pick<InboxConversationSummary, "status" | "priority" | "labels" | "noteCount"> {
+  return {
+    status: waiting ? "waiting" : (metadata?.status ?? "open"),
+    priority: metadata?.priority ?? "none",
+    labels: metadata?.labels ?? [],
+    noteCount: metadata?.notes.length ?? 0,
+  };
+}
+
+function mergePrivateNotes(messages: InboxMessage[], metadata?: InboxConversationMetadata): InboxMessage[] {
+  if (!metadata?.notes.length) return messages;
+  return [
+    ...messages,
+    ...metadata.notes.map<InboxMessage>((note) => ({
+      id: `note:${note.id}`,
+      kind: "note",
+      direction: "outbound",
+      sender: { name: "Private note" },
+      content: note.content,
+      createdAt: note.createdAt,
+      attachments: [],
+    })),
+  ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function parseLinkedTask(
+  value: unknown,
+  connectionId: string,
+  taskListId: string,
+  taskListName: string,
+  identifiers: Set<string>,
+): InboxLinkedTask | undefined {
+  const task = optionalRecord(value);
+  const id = optionalString(task?.id);
+  if (!task || !id) return undefined;
+  const body = optionalRecord(task.body);
+  const linkedResources = Array.isArray(task.linkedResources) ? task.linkedResources : [];
+  const fragments = [optionalString(task.title), optionalString(body?.content)];
+  for (const raw of linkedResources) {
+    const resource = optionalRecord(raw);
+    fragments.push(
+      optionalString(resource?.externalId),
+      optionalString(resource?.webUrl),
+      optionalString(resource?.displayName),
+    );
+  }
+  if (!fragments.some((fragment) => fragment && containsInboxIdentifier(fragment, identifiers))) return undefined;
+  const dueDateTime = optionalRecord(task.dueDateTime);
+  const matchingResource = linkedResources
+    .map(optionalRecord)
+    .find((resource) =>
+      [resource?.externalId, resource?.webUrl, resource?.displayName].some(
+        (fragment) => typeof fragment === "string" && containsInboxIdentifier(fragment, identifiers),
+      ),
+    );
+  const sourceUrl = optionalString(matchingResource?.webUrl);
+  return {
+    id,
+    connectionId,
+    taskListId,
+    taskListName,
+    title: optionalString(task.title) ?? "Untitled task",
+    status: optionalString(task.status) ?? "notStarted",
+    importance: optionalString(task.importance) ?? "normal",
+    dueAt: optionalString(dueDateTime?.dateTime),
+    sourceUrl: isHttpsUrl(sourceUrl) ? sourceUrl : undefined,
+  };
+}
+
+function containsInboxIdentifier(value: string, identifiers: Set<string>): boolean {
+  const haystack = decodeHtmlEntities(value).toLowerCase();
+  for (const identifier of identifiers) {
+    const normalized = identifier.toLowerCase();
+    if (haystack.includes(normalized) || haystack.includes(encodeURIComponent(identifier).toLowerCase())) return true;
+  }
+  return false;
+}
+
+function isHttpsUrl(value: string | undefined): value is string {
+  return Boolean(value && value.startsWith("https://"));
+}
+
+function taskStatusRank(status: string): number {
+  return status === "completed" ? 1 : 0;
 }
 
 function teamsParticipants(thread: TeamsGatewayThread): InboxParticipant[] {
@@ -459,6 +730,7 @@ function mapTeamsMessage(
   const outbound = message.role === "assistant";
   return {
     id: message.id,
+    kind: "message",
     direction: outbound ? "outbound" : "inbound",
     sender: outbound
       ? { name: agents.find((agent) => agent.id === thread.agentId)?.name ?? "Agent" }
@@ -628,6 +900,33 @@ function readReplyAttachments(value: unknown): InboxReplyAttachment[] {
     if (!fileId) throw invalidInput(`attachments[${index}].fileId is required.`);
     return { fileId, name: optionalString(attachment.name) };
   });
+}
+
+function readStatus(value: unknown): "open" | "resolved" {
+  if (value === "open" || value === "resolved") return value;
+  throw invalidInput("status must be open or resolved.");
+}
+
+function readPriority(value: unknown): InboxPriority {
+  if (value === "none" || value === "low" || value === "medium" || value === "high") return value;
+  throw invalidInput("priority must be none, low, medium, or high.");
+}
+
+function readLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) throw invalidInput("labels must be an array.");
+  if (value.length > 20) throw invalidInput("A conversation can have at most 20 labels.");
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "string") throw invalidInput(`labels[${index}] must be a string.`);
+    const label = item.trim();
+    if (!label || label.length > 40) throw invalidInput(`labels[${index}] must be between 1 and 40 characters.`);
+    const normalized = label.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    labels.push(label);
+  }
+  return labels;
 }
 
 function encodeReference(reference: InboxConversationReference): string {
