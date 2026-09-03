@@ -1,7 +1,26 @@
+.app-shell.inbox-shell {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main-region-inbox {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .inbox-main {
+  display: block;
   width: 100%;
   max-width: none;
+  height: 100%;
+  margin: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .unified-inbox {

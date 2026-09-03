@@ -400,9 +400,7 @@ async function listAttachments(input: Record<string, unknown>, { accessToken, fe
     accessToken,
     fetcher,
     query: {
-      $select: ["id", "name", "contentType", "size", "isInline", "contentId", "sourceUrl", "lastModifiedDateTime"].join(
-        ",",
-      ),
+      $select: ["id", "name", "contentType", "size", "isInline", "lastModifiedDateTime"].join(","),
     },
   });
   return { attachments: Array.isArray(payload.value) ? payload.value : [] };

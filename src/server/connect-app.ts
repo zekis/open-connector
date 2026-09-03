@@ -28,8 +28,6 @@ import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import { InboxService } from "./inbox/inbox-service.ts";
-import { KanbanGenerator } from "./kanban/kanban-generator.ts";
-import { KanbanService } from "./kanban/kanban-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import { SynapseService } from "./synapse/synapse-service.ts";
 import { TeamsGatewayGraphClient } from "./teams-gateway/teams-gateway-graph.ts";
@@ -157,20 +155,6 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
     publicOrigin: options.publicOrigin,
   });
   const inbox = new InboxService({ connections, actions, teamsGateway, getPolicySnapshot });
-  const kanban = new KanbanService({
-    catalog: options.catalog,
-    connections,
-    actions,
-    approvals: connectionApprovals,
-    store: options.runtimeDatabase.kanbanStore,
-    generator: new KanbanGenerator({
-      catalog: options.catalog,
-      connections,
-      agents: agentCredentials,
-      agentChat,
-    }),
-    getPolicySnapshot,
-  });
   const feed = new FeedService({
     flows: flowRunner,
     approvals: connectionApprovals,
@@ -208,7 +192,6 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
       agentChat,
       feed,
       synapse,
-      kanban,
       oauthClientConfigs,
       oauthFlow: new OAuthFlowService({
         clientConfigs: oauthClientConfigs,

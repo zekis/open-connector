@@ -306,12 +306,13 @@ export class InboxService {
       await this.runOutlookAction(connection.id, "outlook.list_messages", {
         top: 50,
         filter: `conversationId eq '${reference.conversationId.replaceAll("'", "''")}'`,
-        bodyContentType: "text",
+        bodyContentType: "html",
         select: [
           "id",
           "conversationId",
           "subject",
           "body",
+          "uniqueBody",
           "bodyPreview",
           "receivedDateTime",
           "sentDateTime",
@@ -481,14 +482,17 @@ function parseOutlookMessage(value: unknown): OutlookMessageRecord | undefined {
   if (!message || !id) return undefined;
   const conversationId = optionalString(message.conversationId) ?? id;
   const from = readOutlookAddress(message.from) ?? readOutlookAddress(message.sender) ?? { name: "Unknown sender" };
-  const body = optionalRecord(message.body);
+  const body = optionalRecord(message.uniqueBody) ?? optionalRecord(message.body);
   const bodyContent = optionalString(body?.content) ?? "";
   return {
     id,
     conversationId,
     subject: optionalString(message.subject) ?? "",
     preview: optionalString(message.bodyPreview) ?? "",
-    body: optionalString(body?.contentType)?.toLowerCase() === "html" ? stripHtml(bodyContent) : bodyContent.trim(),
+    body:
+      optionalString(body?.contentType)?.toLowerCase() === "html"
+        ? htmlToReadableMarkdown(bodyContent)
+        : bodyContent.trim(),
     from,
     recipients: Array.isArray(message.toRecipients)
       ? message.toRecipients.flatMap((recipient) => {
@@ -530,19 +534,76 @@ function isSelf(address: OutlookMessageAddress, connection: ConnectionSummary): 
   return Boolean(address.address && address.address.toLowerCase() === connection.profile.displayName.toLowerCase());
 }
 
-function stripHtml(value: string): string {
-  return value
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p\s*>/gi, "\n\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function htmlToReadableMarkdown(value: string): string {
+  return decodeHtmlEntities(
+    value
+      .replace(/\r/gu, "")
+      .replace(/<!--[\s\S]*?-->/gu, "")
+      .replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, "")
+      .replace(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/giu, (_match, _quote, href, label) =>
+        markdownLink(String(href), plainHtml(String(label))),
+      )
+      .replace(/<img\b[^>]*\balt\s*=\s*(["'])(.*?)\1[^>]*>/giu, (_match, _quote, alt) =>
+        alt ? `[Image: ${plainHtml(String(alt))}]` : "",
+      )
+      .replace(/<h([1-6])\b[^>]*>/giu, (_match, level) => `\n\n${"#".repeat(Number(level))} `)
+      .replace(/<\/h[1-6]\s*>/giu, "\n\n")
+      .replace(/<(strong|b)\b[^>]*>/giu, "**")
+      .replace(/<\/(strong|b)\s*>/giu, "**")
+      .replace(/<(em|i)\b[^>]*>/giu, "_")
+      .replace(/<\/(em|i)\s*>/giu, "_")
+      .replace(/<code\b[^>]*>/giu, "`")
+      .replace(/<\/code\s*>/giu, "`")
+      .replace(/<li\b[^>]*>/giu, "\n- ")
+      .replace(/<\/li\s*>/giu, "")
+      .replace(/<blockquote\b[^>]*>/giu, "\n\n> ")
+      .replace(/<\/blockquote\s*>/giu, "\n\n")
+      .replace(/<br\s*\/?\s*>/giu, "\n")
+      .replace(/<\/?(?:p|div|section|article|header|footer|ul|ol|table|tbody|thead)\b[^>]*>/giu, "\n\n")
+      .replace(/<t[hd]\b[^>]*>/giu, " | ")
+      .replace(/<\/t[hd]\s*>/giu, "")
+      .replace(/<\/?tr\b[^>]*>/giu, "\n")
+      .replace(/<[^>]+>/gu, "")
+      .replace(/[ \t]+\n/gu, "\n")
+      .replace(/\n[ \t]+/gu, "\n")
+      .replace(/[ \t]{2,}/gu, " ")
+      .replace(/\n{3,}/gu, "\n\n"),
+  ).trim();
+}
+
+function markdownLink(href: string, label: string): string {
+  const decodedHref = decodeHtmlEntities(href.trim());
+  if (!/^(?:https?:|mailto:)/iu.test(decodedHref)) return label;
+  const escapedHref = decodedHref.replaceAll("(", "%28").replaceAll(")", "%29");
+  return `[${label || decodedHref}](${escapedHref})`;
+}
+
+function plainHtml(value: string): string {
+  return decodeHtmlEntities(
+    value
+      .replace(/<[^>]+>/gu, "")
+      .replace(/[[\]]/gu, "")
+      .trim(),
+  );
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    hellip: "…",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  return value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/giu, (match, hexadecimal, decimal, entity) => {
+    if (entity) return named[String(entity).toLowerCase()] ?? match;
+    const codePoint = Number.parseInt(hexadecimal ?? decimal ?? "", hexadecimal ? 16 : 10);
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) return match;
+    return String.fromCodePoint(codePoint);
+  });
 }
 
 function readReplyText(value: unknown): string {

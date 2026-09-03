@@ -146,6 +146,49 @@ describe("InboxService", () => {
       }),
     );
   });
+
+  it("preserves useful formatting from an Outlook HTML unique body", async () => {
+    const calls: RunActionInput[] = [];
+    const run = vi.fn(async (input: RunActionInput) => {
+      calls.push(input);
+      return actionResult({
+        messages: [
+          {
+            id: "outlook-message-1",
+            conversationId: "conversation-1",
+            subject: "Formatted update",
+            body: { contentType: "html", content: "<p>Quoted thread that should not be repeated.</p>" },
+            uniqueBody: {
+              contentType: "html",
+              content:
+                '<h2>Update</h2><p>Hello <strong>team</strong>.</p><ul><li>First item</li><li>Second item</li></ul><p><a href="https://example.com/report">Open report</a></p>',
+            },
+            bodyPreview: "Update Hello team.",
+            receivedDateTime: "2026-09-03T01:00:00.000Z",
+            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
+            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
+            isRead: true,
+            hasAttachments: false,
+          },
+        ],
+        nextLink: null,
+      });
+    });
+    const service = createService(run);
+    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
+
+    const conversation = await service.get(conversationId);
+
+    expect(conversation.messages[0]?.content).toContain("## Update");
+    expect(conversation.messages[0]?.content).toContain("Hello **team**.");
+    expect(conversation.messages[0]?.content).toContain("- First item");
+    expect(conversation.messages[0]?.content).toContain("[Open report](https://example.com/report)");
+    expect(conversation.messages[0]?.content).not.toContain("Quoted thread");
+    expect(calls.at(-1)?.input).toMatchObject({
+      bodyContentType: "html",
+      select: expect.arrayContaining(["body", "uniqueBody"]),
+    });
+  });
 });
 
 function createService(run: IActionRunner["run"]): InboxService {

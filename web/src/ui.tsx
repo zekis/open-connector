@@ -26,7 +26,6 @@ import {
   BookOpen,
   BrainCircuit,
   Cable,
-  Columns3,
   Home,
   Inbox,
   KeyRound,
@@ -58,7 +57,6 @@ import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
 import { InboxPageView } from "./inbox-page";
-import { KanbanPage } from "./kanban-page";
 import { MobileConnectionPage, MobileConnectLanding } from "./mobile-connection-page";
 import { emptyData } from "./model";
 import { OverviewPage } from "./overview-page";
@@ -86,7 +84,6 @@ const navItems = [
   { path: "/teams-gateway", labelKey: "nav.teamsGateway", icon: MessageSquareMore },
   { path: "/chat", labelKey: "nav.chat", icon: MessageCircle },
   { path: "/synapse", labelKey: "nav.synapse", icon: BrainCircuit },
-  { path: "/kanban", labelKey: "nav.kanban", icon: Columns3 },
   { path: "/flows", labelKey: "nav.flows", icon: Workflow },
   { path: "/triggers", labelKey: "nav.triggers", icon: Zap },
   { path: "/approvals", labelKey: "nav.approvals", icon: Inbox },
@@ -408,15 +405,12 @@ function AppShell(props: {
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
   const isBrowserPage =
-    section === "actions" ||
-    section === "runs" ||
-    section === "chat" ||
-    section === "synapse" ||
-    section === "kanban" ||
-    section === "inbox";
+    section === "actions" || section === "runs" || section === "chat" || section === "synapse" || section === "inbox";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
   const isSynapsePage = section === "synapse";
+  const isInboxPage = section === "inbox";
+  const isImmersivePage = isSynapsePage || isInboxPage;
   const pendingApprovalCount =
     (props.data.flowApprovals ?? []).filter((approval) => approval.status === "pending").length +
     (props.data.actionApprovals ?? []).filter((approval) => approval.status === "pending").length;
@@ -426,7 +420,7 @@ function AppShell(props: {
     isRunsPage ? "runs-main" : "",
     isChatPage ? "chat-main" : "",
     isSynapsePage ? "synapse-main" : "",
-    section === "inbox" ? "inbox-main" : "",
+    isInboxPage ? "inbox-main" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -434,8 +428,11 @@ function AppShell(props: {
   const CurrentNavIcon = currentNavItem.icon;
 
   return (
-    <div className={isSynapsePage ? "app-shell synapse-shell" : "app-shell"} aria-busy={props.loading}>
-      {!isSynapsePage ? (
+    <div
+      className={isSynapsePage ? "app-shell synapse-shell" : isInboxPage ? "app-shell inbox-shell" : "app-shell"}
+      aria-busy={props.loading}
+    >
+      {!isImmersivePage ? (
         <aside className="sidebar">
           <div className="brand">
             <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
@@ -489,12 +486,14 @@ function AppShell(props: {
         className={
           isSynapsePage
             ? "main-region main-region-browser main-region-synapse"
-            : isBrowserPage
-              ? "main-region main-region-browser"
-              : "main-region"
+            : isInboxPage
+              ? "main-region main-region-browser main-region-inbox"
+              : isBrowserPage
+                ? "main-region main-region-browser"
+                : "main-region"
         }
       >
-        {!isSynapsePage ? (
+        {!isImmersivePage ? (
           <header className="shell-header">
             <div className="shell-header-title">
               <CurrentNavIcon size={16} />
@@ -524,7 +523,6 @@ function AppShell(props: {
             <Route path="/teams-gateway/:agentId/edit" element={<TeamsGatewayAgentPage data={props.data} />} />
             <Route path="/chat" element={<ChatPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/synapse" element={<SynapsePage data={props.data} onRefresh={props.onRefresh} />} />
-            <Route path="/kanban" element={<KanbanPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/runs"
               element={<RunsPage initialRuns={props.data.runs} nextCursor={props.data.runsNextCursor} />}
@@ -722,9 +720,6 @@ function headingForPath(pathname: string): string {
   }
   if (section === "synapse") {
     return "synapse";
-  }
-  if (section === "kanban") {
-    return "kanban";
   }
   if (section === "access") {
     return "access";

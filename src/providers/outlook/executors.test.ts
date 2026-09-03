@@ -102,6 +102,8 @@ describe("Outlook executors", () => {
     const url = new URL(request instanceof Request ? request.url : request.toString());
     expect(url.pathname).toBe("/v1.0/me/messages/message%201/attachments");
     expect(url.searchParams.get("$select")).not.toContain("contentBytes");
+    expect(url.searchParams.get("$select")).not.toContain("contentId");
+    expect(url.searchParams.get("$select")).not.toContain("sourceUrl");
   });
 
   it("downloads bounded raw attachment content into transit storage", async () => {
