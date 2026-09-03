@@ -509,7 +509,7 @@ function AppShell(props: {
             <Route index element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/feed" element={<FeedPageView data={props.data} onRefresh={props.onRefresh} />} />
-            <Route path="/inbox" element={<InboxPageView />} />
+            <Route path="/inbox" element={<InboxPageView providers={props.data.providers} />} />
             <Route path="/providers" element={<ProvidersPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/providers/:service"

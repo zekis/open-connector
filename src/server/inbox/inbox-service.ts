@@ -274,23 +274,31 @@ export class InboxService {
     const value = requiredRecord(input, "inbox reply", invalidInput);
     const text = readReplyText(value.text);
     const attachments = readReplyAttachments(value.attachments);
+    const targetMessageId = optionalString(value.targetMessageId);
     if (!text && attachments.length === 0) throw invalidInput("A reply or attachment is required.");
     const reference = decodeReference(conversationId);
+    if (targetMessageId) {
+      const conversation = await this.get(conversationId);
+      if (!conversation.messages.some((message) => message.kind === "message" && message.id === targetMessageId)) {
+        throw new InboxError("message_not_found", "Inbox reply target was not found.", 404);
+      }
+    }
     if (reference.provider === "microsoft_teams") {
       await this.options.teamsGateway.sendOperatorReply(reference.threadId, text, attachments);
       return this.get(conversationId);
     }
 
     await this.requireOutlookConnection(reference.connectionId);
+    const messageId = targetMessageId ?? reference.messageId;
     if (attachments.length === 0) {
       await this.runOutlookAction(reference.connectionId, "outlook.reply_email", {
-        messageId: reference.messageId,
+        messageId,
         comment: text,
       });
     } else {
       const draft = asRecord(
         await this.runOutlookAction(reference.connectionId, "outlook.create_reply_draft", {
-          messageId: reference.messageId,
+          messageId,
           comment: text || undefined,
         }),
       );

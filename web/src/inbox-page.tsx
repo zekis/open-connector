@@ -1,12 +1,15 @@
 import type {
+  ConnectionRecord,
+  InboxAiActionScope,
   InboxConversation,
   InboxConversationSummary,
-  InboxAiActionScope,
   InboxLinkedTasks,
+  InboxMessage,
   InboxPage,
   InboxPriority,
   InboxProvider,
-  ConnectionRecord,
+  ProviderDefinition,
+  SynapseWorkspace,
 } from "./model";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 
@@ -14,6 +17,8 @@ import {
   AlertCircle,
   ArrowDownUp,
   Bot,
+  BrainCircuit,
+  Cable,
   CheckCircle2,
   ExternalLink,
   FileText,
@@ -25,8 +30,10 @@ import {
   PanelRightClose,
   PanelRightOpen,
   RefreshCw,
+  Reply as ReplyIcon,
   Search,
   Send,
+  Forward as ForwardIcon,
   Sparkles,
   StickyNote,
   Tag,
@@ -35,9 +42,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import remarkGfm from "remark-gfm";
 import { ApiError, apiGet, apiPost, apiPut, apiUpload } from "./api";
+import { ProviderIcon as CatalogProviderIcon } from "./shared-ui";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -64,9 +72,17 @@ interface AiHandoffTarget {
   scope: InboxAiActionScope;
   targetId?: string;
   label: string;
+  instruction?: string;
+  preferredConnectionId?: string;
+  preferredService?: string;
 }
 
-export function InboxPageView(): ReactNode {
+interface InboxPageProps {
+  providers: ProviderDefinition[];
+}
+
+export function InboxPageView(props: InboxPageProps): ReactNode {
+  const navigate = useNavigate();
   const [page, setPage] = useState<InboxPage>({ sources: [], conversations: [], errors: [] });
   const [selectedId, setSelectedId] = useState<string>();
   const [conversation, setConversation] = useState<InboxConversation>();
@@ -78,6 +94,7 @@ export function InboxPageView(): ReactNode {
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [error, setError] = useState<string>();
   const [reply, setReply] = useState("");
+  const [replyingTo, setReplyingTo] = useState<InboxMessage>();
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const [composerMode, setComposerMode] = useState<ComposerMode>("reply");
@@ -91,8 +108,14 @@ export function InboxPageView(): ReactNode {
   const [handoffConnectionId, setHandoffConnectionId] = useState("");
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [sendingHandoff, setSendingHandoff] = useState(false);
+  const [synapseMessageId, setSynapseMessageId] = useState<string>();
   const fileInput = useRef<HTMLInputElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
+  const providersByService = useMemo(
+    () => new Map(props.providers.map((provider) => [provider.service, provider])),
+    [props.providers],
+  );
 
   const loadPage = useCallback(async (silent = false): Promise<void> => {
     if (!silent) setLoading(true);
@@ -144,6 +167,7 @@ export function InboxPageView(): ReactNode {
       setConversation(undefined);
       return;
     }
+    setReplyingTo(undefined);
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
 
@@ -228,11 +252,13 @@ export function InboxPageView(): ReactNode {
         `/api/inbox/conversations/${encodeURIComponent(selectedId)}/replies`,
         {
           text: reply.trim(),
+          targetMessageId: replyingTo?.id,
           attachments: attachments.map((file) => ({ fileId: file.fileId, name: file.name })),
         },
       );
       adoptConversation(next, selectedId);
       setReply("");
+      setReplyingTo(undefined);
       setFiles([]);
       if (fileInput.current) fileInput.current.value = "";
       await loadPage(true);
@@ -287,14 +313,18 @@ export function InboxPageView(): ReactNode {
 
   function openAiHandoff(target: AiHandoffTarget): void {
     setHandoffTarget(target);
-    setHandoffInstruction(`Review this ${target.scope} context and take the appropriate next action.`);
-    if (connections.length || loadingConnections) return;
+    setHandoffInstruction(target.instruction ?? "");
+    if (connections.length) {
+      setHandoffConnectionId((current) => chooseHandoffConnection(connections, target, current));
+      return;
+    }
+    if (loadingConnections) return;
     setLoadingConnections(true);
     void apiGet<ConnectionRecord[]>("/api/connections")
       .then((items) => {
         const configured = items.filter((item) => item.configured && item.id);
         setConnections(configured);
-        setHandoffConnectionId((current) => current || configured[0]?.id || "");
+        setHandoffConnectionId((current) => chooseHandoffConnection(configured, target, current));
       })
       .catch((loadError) => setError(messageForError(loadError, "Could not load connected accounts.")))
       .finally(() => setLoadingConnections(false));
@@ -353,8 +383,54 @@ export function InboxPageView(): ReactNode {
     }
   }
 
+  function beginReply(message: InboxMessage): void {
+    setComposerMode("reply");
+    setReplyingTo(message);
+    window.requestAnimationFrame(() => composerInput.current?.focus());
+  }
+
+  async function sendToSynapse(message: InboxMessage): Promise<void> {
+    if (!conversation || synapseMessageId) return;
+    setSynapseMessageId(message.id);
+    try {
+      const workspace = await apiPost<SynapseWorkspace>("/api/synapses", {
+        name: `Inbox · ${conversation.title}`.slice(0, 120),
+      });
+      await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(workspace.id)}/nodes`, {
+        kind: "artifact",
+        artifactKind: conversation.provider === "outlook" ? "email" : "note",
+        title: `${conversation.title} · ${message.sender.name}`.slice(0, 240),
+        summary: `${message.sender.name} · ${formatMessageTime(message.createdAt)}`,
+        content: message.content.slice(0, 40_000),
+        position: { x: 120, y: 120 },
+        data: {
+          inboxConversationId: conversation.id,
+          inboxMessageId: message.id,
+          provider: conversation.provider,
+          sender: message.sender,
+          attachments: message.attachments,
+        },
+      });
+      navigate("/synapse");
+    } catch (synapseError) {
+      setError(messageForError(synapseError, "Could not add this message to Synapse."));
+    } finally {
+      setSynapseMessageId(undefined);
+    }
+  }
+
   const selectedSummary = page.conversations.find((item) => item.id === selectedId);
   const selectedSource = page.sources.find((source) => source.id === conversation?.sourceId);
+  const handoffMessage =
+    handoffTarget?.scope === "message"
+      ? conversation?.messages.find((message) => message.kind === "message" && message.id === handoffTarget.targetId)
+      : undefined;
+  const handoffContact =
+    handoffTarget?.scope === "contact"
+      ? conversation?.participants.find(
+          (participant) => (participant.email ?? participant.name) === handoffTarget.targetId,
+        )
+      : undefined;
 
   return (
     <section className={`unified-inbox${detailsOpen ? "" : " details-collapsed"}`} aria-label="Unified inbox">
@@ -517,6 +593,66 @@ export function InboxPageView(): ReactNode {
               ) : null}
               {conversation.messages.map((message) => (
                 <article className={`inbox-message ${message.direction} ${message.kind}`} key={message.id}>
+                  {message.kind === "message" ? (
+                    <div className="inbox-message-toolbar" aria-label="Message actions">
+                      <button type="button" onClick={() => beginReply(message)}>
+                        <ReplyIcon size={12} /> Reply
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAiHandoff({
+                            scope: "message",
+                            targetId: message.id,
+                            label: messagePreview(message.content),
+                            instruction: "Forward this message to ",
+                            preferredConnectionId: selectedSource?.connectionId,
+                          })
+                        }
+                      >
+                        <ForwardIcon size={12} /> Forward
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(synapseMessageId)}
+                        onClick={() => void sendToSynapse(message)}
+                      >
+                        {synapseMessageId === message.id ? (
+                          <Loader2 className="spin" size={12} />
+                        ) : (
+                          <BrainCircuit size={12} />
+                        )}
+                        Synapse
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAiHandoff({
+                            scope: "message",
+                            targetId: message.id,
+                            label: messagePreview(message.content),
+                            instruction:
+                              "Create a task from this message. Preserve the source message ID in the task details.",
+                            preferredService: "microsoft_todo",
+                          })
+                        }
+                      >
+                        <ListTodo size={12} /> Task
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAiHandoff({
+                            scope: "message",
+                            targetId: message.id,
+                            label: messagePreview(message.content),
+                          })
+                        }
+                      >
+                        <Sparkles size={12} /> AI
+                      </button>
+                    </div>
+                  ) : null}
                   <div className="inbox-message-meta">
                     {message.kind === "note" ? (
                       <StickyNote size={13} />
@@ -569,22 +705,6 @@ export function InboxPageView(): ReactNode {
                       ))}
                     </div>
                   ) : null}
-                  {message.kind === "message" ? (
-                    <div className="inbox-message-actions">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openAiHandoff({
-                            scope: "message",
-                            targetId: message.id,
-                            label: messagePreview(message.content),
-                          })
-                        }
-                      >
-                        <Sparkles size={11} /> Send to AI
-                      </button>
-                    </div>
-                  ) : null}
                 </article>
               ))}
             </div>
@@ -602,12 +722,25 @@ export function InboxPageView(): ReactNode {
                   type="button"
                   onClick={() => {
                     setComposerMode("note");
+                    setReplyingTo(undefined);
                     setFiles([]);
                   }}
                 >
                   Private note
                 </button>
               </div>
+              {composerMode === "reply" && replyingTo ? (
+                <div className="inbox-reply-context">
+                  <ReplyIcon size={13} />
+                  <span>
+                    <strong>Replying to {replyingTo.sender.name}</strong>
+                    <small>{messagePreview(replyingTo.content)}</small>
+                  </span>
+                  <button type="button" onClick={() => setReplyingTo(undefined)} aria-label="Clear reply target">
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : null}
               {files.length ? (
                 <div className="inbox-composer-files">
                   {files.map((file, index) => (
@@ -624,6 +757,7 @@ export function InboxPageView(): ReactNode {
                 </div>
               ) : null}
               <Textarea
+                ref={composerInput}
                 value={reply}
                 onChange={(event) => setReply(event.target.value)}
                 placeholder={
@@ -838,46 +972,110 @@ export function InboxPageView(): ReactNode {
       ) : null}
 
       <Dialog open={Boolean(handoffTarget)} onOpenChange={(open) => !open && setHandoffTarget(undefined)}>
-        <DialogContent className="inbox-handoff-dialog sm:max-w-[520px]">
+        <DialogContent className="inbox-handoff-dialog sm:max-w-[min(920px,calc(100vw-2rem))]">
           <DialogHeader>
             <DialogTitle>Send context to AI</DialogTitle>
             <DialogDescription>
-              The AI can use only the connected account you select. Its result will appear in this conversation.
+              Choose the account the AI may use. The result will appear inline in this conversation.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={(event) => void submitAiHandoff(event)}>
-            <div className="inbox-handoff-target">
-              <span>{handoffTarget ? capitalize(handoffTarget.scope) : "Context"}</span>
-              <strong>{handoffTarget?.label}</strong>
+            <div className="inbox-handoff-layout">
+              <aside className="inbox-handoff-accounts">
+                <div>
+                  <strong>Connected accounts</strong>
+                  <small>AI access is limited to one selection</small>
+                </div>
+                <div className="inbox-handoff-account-list">
+                  {loadingConnections ? (
+                    <span className="inbox-handoff-empty">
+                      <Loader2 className="spin" size={14} /> Loading accounts…
+                    </span>
+                  ) : null}
+                  {!loadingConnections && connections.length === 0 ? (
+                    <span className="inbox-handoff-empty">
+                      <Cable size={15} /> No connected accounts
+                    </span>
+                  ) : null}
+                  {connections.map((connection) => {
+                    const provider = providersByService.get(connection.service);
+                    return (
+                      <button
+                        className={handoffConnectionId === connection.id ? "selected" : ""}
+                        key={connection.id}
+                        type="button"
+                        onClick={() => setHandoffConnectionId(connection.id ?? "")}
+                      >
+                        <span className="inbox-handoff-account-icon">
+                          {provider ? <CatalogProviderIcon provider={provider} large /> : <Cable size={18} />}
+                        </span>
+                        <span>
+                          <strong>{provider?.displayName ?? providerLabel(connection.service)}</strong>
+                          <small>{connectionLabel(connection)}</small>
+                        </span>
+                        {handoffConnectionId === connection.id ? <CheckCircle2 size={15} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+              <section className="inbox-handoff-compose">
+                <div className="inbox-handoff-context-heading">
+                  <span>{handoffTarget ? capitalize(handoffTarget.scope) : "Context"} context</span>
+                  <strong>{handoffTarget?.label}</strong>
+                </div>
+                <div className="inbox-handoff-context">
+                  {handoffMessage ? (
+                    <>
+                      <div className="inbox-handoff-message-meta">
+                        <ContactAvatar label={handoffMessage.sender.name} size="small" />
+                        <strong>{handoffMessage.sender.name}</strong>
+                        <time>{formatMessageTime(handoffMessage.createdAt)}</time>
+                      </div>
+                      <div className="inbox-handoff-message-body">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{handoffMessage.content}</ReactMarkdown>
+                      </div>
+                      {handoffMessage.attachments.length ? (
+                        <small>{handoffMessage.attachments.map((attachment) => attachment.name).join(" · ")}</small>
+                      ) : null}
+                    </>
+                  ) : handoffContact ? (
+                    <div className="inbox-handoff-contact">
+                      <ContactAvatar label={handoffContact.name} />
+                      <span>
+                        <strong>{handoffContact.name}</strong>
+                        {handoffContact.email ? <small>{handoffContact.email}</small> : null}
+                      </span>
+                    </div>
+                  ) : conversation ? (
+                    <div className="inbox-handoff-conversation">
+                      <strong>{conversation.title}</strong>
+                      <small>{conversation.participants.map((participant) => participant.name).join(", ")}</small>
+                      {conversation.messages
+                        .filter((message) => message.kind === "message")
+                        .slice(-6)
+                        .map((message) => (
+                          <p key={message.id}>
+                            <strong>{message.sender.name}</strong>
+                            <span>{messagePreview(message.content)}</span>
+                          </p>
+                        ))}
+                    </div>
+                  ) : null}
+                </div>
+                <label className="inbox-handoff-field">
+                  <span>Your message to AI</span>
+                  <Textarea
+                    value={handoffInstruction}
+                    onChange={(event) => setHandoffInstruction(event.target.value)}
+                    placeholder="Tell the AI what to do with this context…"
+                    rows={5}
+                    maxLength={10_000}
+                    autoFocus
+                  />
+                </label>
+              </section>
             </div>
-            <label className="inbox-handoff-field">
-              <span>Connected account</span>
-              <select
-                value={handoffConnectionId}
-                onChange={(event) => setHandoffConnectionId(event.target.value)}
-                disabled={loadingConnections}
-              >
-                {loadingConnections ? <option>Loading connections…</option> : null}
-                {!loadingConnections && connections.length === 0 ? (
-                  <option value="">No connections available</option>
-                ) : null}
-                {connections.map((connection) => (
-                  <option key={connection.id} value={connection.id}>
-                    {providerLabel(connection.service)} · {connectionLabel(connection)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="inbox-handoff-field">
-              <span>What should the AI do?</span>
-              <Textarea
-                value={handoffInstruction}
-                onChange={(event) => setHandoffInstruction(event.target.value)}
-                rows={4}
-                maxLength={10_000}
-                autoFocus
-              />
-            </label>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setHandoffTarget(undefined)}>
                 Cancel
@@ -1096,6 +1294,20 @@ function connectionLabel(connection: ConnectionRecord): string {
   return connection.connectionName && connection.connectionName !== "default"
     ? connection.connectionName
     : providerLabel(connection.service);
+}
+
+function chooseHandoffConnection(
+  connections: ConnectionRecord[],
+  target: AiHandoffTarget,
+  currentConnectionId: string,
+): string {
+  return (
+    connections.find((connection) => connection.id === target.preferredConnectionId)?.id ??
+    connections.find((connection) => connection.service === target.preferredService)?.id ??
+    connections.find((connection) => connection.id === currentConnectionId)?.id ??
+    connections[0]?.id ??
+    ""
+  );
 }
 
 function messagePreview(content: string): string {

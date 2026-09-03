@@ -533,7 +533,7 @@
 .inbox-messages {
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: 18px;
   min-height: 0;
   padding: 24px clamp(18px, 4vw, 52px);
   overflow-y: auto;
@@ -552,6 +552,39 @@
   display: grid;
   max-width: min(720px, 84%);
   gap: 6px;
+}
+.inbox-message-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.inbox-message.outbound .inbox-message-toolbar {
+  justify-content: flex-end;
+}
+.inbox-message-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inbox-message-toolbar button:hover {
+  border-color: var(--border);
+  background: var(--accent);
+  color: var(--foreground);
+}
+.inbox-message-toolbar button:last-child {
+  color: var(--brand);
+}
+.inbox-message-toolbar button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 .inbox-message.action {
   align-self: center;
@@ -688,46 +721,6 @@
 .inbox-ai-activities > span.failed {
   color: var(--destructive);
 }
-.inbox-message-actions {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 1;
-  display: flex;
-  justify-content: flex-start;
-  margin-top: 2px;
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    opacity 120ms ease,
-    visibility 120ms ease;
-}
-.inbox-message.outbound .inbox-message-actions {
-  right: 0;
-  left: auto;
-  justify-content: flex-end;
-}
-.inbox-message:hover .inbox-message-actions,
-.inbox-message:focus-within .inbox-message-actions {
-  opacity: 1;
-  visibility: visible;
-}
-.inbox-message-actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 9px;
-  cursor: pointer;
-}
-.inbox-message-actions button:hover {
-  background: var(--accent);
-  color: var(--brand);
-}
 .inbox-message-files {
   display: flex;
   flex-wrap: wrap;
@@ -798,6 +791,45 @@
 .inbox-composer.note .inbox-composer-tabs button.active {
   background: color-mix(in oklab, var(--warning) 15%, transparent);
   color: var(--warning);
+}
+.inbox-reply-context {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-left: 2px solid var(--brand);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: color-mix(in oklab, var(--brand) 7%, var(--background));
+  color: var(--brand);
+}
+.inbox-reply-context > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.inbox-reply-context strong,
+.inbox-reply-context small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-reply-context strong {
+  color: var(--foreground);
+  font-size: 10px;
+}
+.inbox-reply-context small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+.inbox-reply-context > button {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
 }
 
 .inbox-composer textarea {
@@ -1087,27 +1119,221 @@
   gap: 14px;
 }
 
-.inbox-handoff-target {
+.inbox-handoff-layout {
   display: grid;
-  gap: 3px;
-  padding: 10px 12px;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: 430px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+}
+
+.inbox-handoff-accounts {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  padding: 12px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 35%, var(--background));
+}
+
+.inbox-handoff-accounts > div:first-child {
+  display: grid;
+  gap: 3px;
+  padding: 2px 4px 11px;
+}
+
+.inbox-handoff-accounts > div:first-child strong {
+  font-size: 11px;
+}
+
+.inbox-handoff-accounts small,
+.inbox-handoff-context-heading span,
+.inbox-handoff-field > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.inbox-handoff-account-list {
+  display: grid;
+  align-content: start;
+  min-height: 0;
+  gap: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.inbox-handoff-account-list > button {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inbox-handoff-account-list > button:hover {
   background: var(--accent);
 }
 
-.inbox-handoff-target span,
-.inbox-handoff-field > span {
-  color: var(--muted-foreground);
+.inbox-handoff-account-list > button.selected {
+  border-color: color-mix(in oklab, var(--brand) 38%, var(--border));
+  background: color-mix(in oklab, var(--brand) 9%, var(--background));
+}
+
+.inbox-handoff-account-list > button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.inbox-handoff-account-list > button strong,
+.inbox-handoff-account-list > button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-handoff-account-list > button strong {
   font-size: 10px;
   font-weight: 600;
 }
 
-.inbox-handoff-target strong {
+.inbox-handoff-account-list > button > svg {
+  color: var(--brand);
+}
+
+.inbox-handoff-account-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+}
+
+.inbox-handoff-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 120px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.inbox-handoff-compose {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  gap: 10px;
+  padding: 14px;
+}
+
+.inbox-handoff-context-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.inbox-handoff-context-heading span {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.inbox-handoff-context-heading strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+}
+
+.inbox-handoff-context {
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  font-size: 11px;
+}
+
+.inbox-handoff-message-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.inbox-handoff-message-meta time {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.inbox-handoff-message-body {
+  line-height: 1.55;
+}
+
+.inbox-handoff-message-body > :first-child {
+  margin-top: 0;
+}
+
+.inbox-handoff-message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.inbox-handoff-context > small {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted-foreground);
+}
+
+.inbox-handoff-contact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.inbox-handoff-contact > span {
+  display: grid;
+  gap: 2px;
+}
+
+.inbox-handoff-contact small {
+  color: var(--muted-foreground);
+}
+
+.inbox-handoff-conversation {
+  display: grid;
+  gap: 8px;
+}
+
+.inbox-handoff-conversation > small {
+  color: var(--muted-foreground);
+}
+
+.inbox-handoff-conversation p {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+}
+
+.inbox-handoff-conversation p strong {
+  font-size: 9px;
+}
+
+.inbox-handoff-conversation p span {
+  color: var(--muted-foreground);
+  font-size: 10px;
 }
 
 .inbox-handoff-field {
@@ -1115,24 +1341,8 @@
   gap: 6px;
 }
 
-.inbox-handoff-field select {
-  width: 100%;
-  height: 36px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  outline: none;
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 11px;
-}
-
-.inbox-handoff-field select:focus {
-  border-color: var(--brand);
-}
-
 .inbox-handoff-field textarea {
+  min-height: 96px;
   resize: vertical;
 }
 
@@ -1173,10 +1383,23 @@
   .inbox-composer-actions > span {
     display: none;
   }
-  .inbox-message-actions {
-    position: static;
-    margin-top: 0;
-    opacity: 1;
-    visibility: visible;
+  .inbox-handoff-dialog {
+    max-height: calc(100svh - 2rem);
+    overflow-y: auto;
+  }
+  .inbox-handoff-layout {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+  .inbox-handoff-accounts {
+    grid-template-rows: auto auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .inbox-handoff-account-list {
+    max-height: 170px;
+  }
+  .inbox-handoff-context {
+    max-height: 240px;
   }
 }

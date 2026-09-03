@@ -192,6 +192,53 @@ describe("InboxService", () => {
     );
   });
 
+  it("replies to the specific Outlook message selected from the timeline", async () => {
+    const run = vi.fn(async (input: RunActionInput) => {
+      if (input.actionId !== "outlook.list_messages") return actionResult({ success: true });
+      return actionResult({
+        messages: [
+          {
+            id: "outlook-message-older",
+            conversationId: "conversation-1",
+            subject: "Quarterly report",
+            bodyPreview: "Can you review this?",
+            receivedDateTime: "2026-09-02T01:00:00.000Z",
+            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
+            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
+            isRead: true,
+            hasAttachments: false,
+          },
+          {
+            id: "outlook-message-latest",
+            conversationId: "conversation-1",
+            subject: "Quarterly report",
+            bodyPreview: "One more detail.",
+            receivedDateTime: "2026-09-03T01:00:00.000Z",
+            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
+            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
+            isRead: true,
+            hasAttachments: false,
+          },
+        ],
+        nextLink: null,
+      });
+    });
+    const service = createService(run);
+    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
+
+    await service.reply(conversationId, {
+      text: "Reviewed.",
+      targetMessageId: "outlook-message-older",
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "outlook.reply_email",
+        input: { messageId: "outlook-message-older", comment: "Reviewed." },
+      }),
+    );
+  });
+
   it("preserves useful formatting from an Outlook HTML unique body", async () => {
     const calls: RunActionInput[] = [];
     const run = vi.fn(async (input: RunActionInput) => {
