@@ -142,6 +142,21 @@ describe("InboxService", () => {
     expect(page.conversations[1]?.updatedAt).toBe("2026-09-02T01:00:00.000Z");
   });
 
+  it("tracks unread Teams conversations until the operator opens them", async () => {
+    const store = new MemoryInboxStore();
+    const run = vi.fn(async () => actionResult({ messages: [], nextLink: null }));
+    const service = createService(run, store);
+
+    const initial = await service.list();
+    const teamsConversation = initial.conversations.find((item) => item.provider === "microsoft_teams")!;
+    expect(teamsConversation.unread).toBe(true);
+
+    await service.markRead(teamsConversation.id);
+
+    const refreshed = await service.list();
+    expect(refreshed.conversations.find((item) => item.provider === "microsoft_teams")?.unread).toBe(false);
+  });
+
   it("sends an Outlook attachment reply through a draft before sending", async () => {
     const actions: string[] = [];
     const run = vi.fn(async (input: RunActionInput) => {

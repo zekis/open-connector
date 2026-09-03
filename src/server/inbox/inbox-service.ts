@@ -323,6 +323,11 @@ export class InboxService {
         messageId: reference.messageId,
         isRead: true,
       });
+    } else {
+      const id = metadataId(reference);
+      const current = (await this.options.store.getConversation(id)) ?? emptyMetadata(id);
+      const readAt = new Date().toISOString();
+      await this.options.store.setConversation({ ...current, readAt, updatedAt: readAt });
     }
     return { success: true };
   }
@@ -415,7 +420,7 @@ export class InboxService {
       preview: last?.content ?? "",
       participants: teamsParticipants(thread),
       updatedAt: last?.createdAt ?? thread.createdAt,
-      unread: false,
+      unread: hasUnreadTeamsMessages(thread.messages, metadata?.readAt),
       ...metadataSummary(metadata, Boolean(thread.pendingPlan || thread.pendingApprovalIds?.length)),
       messageCount: thread.messages.length,
       contextLabel: teamsContextLabel(thread, agents),
@@ -713,6 +718,12 @@ function latestTeamsMessage(messages: TeamsGatewayMessage[]): TeamsGatewayMessag
     if (!latest) return message;
     return Date.parse(message.createdAt) >= Date.parse(latest.createdAt) ? message : latest;
   }, undefined);
+}
+
+function hasUnreadTeamsMessages(messages: TeamsGatewayMessage[], readAt: string | undefined): boolean {
+  const readTimestamp = readAt ? Date.parse(readAt) : 0;
+  const lastRead = Number.isFinite(readTimestamp) ? readTimestamp : 0;
+  return messages.some((message) => message.role !== "assistant" && Date.parse(message.createdAt) > lastRead);
 }
 
 function teamsSourceId(agentId: string): string {

@@ -129,6 +129,7 @@ export interface InboxConversationMetadata {
   labels: string[];
   notes: InboxPrivateNote[];
   aiActions?: InboxAiAction[];
+  readAt?: string;
   updatedAt: string;
 }
 

@@ -195,6 +195,183 @@
   font-size: 10px;
 }
 
+.inbox-channel-tree {
+  display: grid;
+  gap: 2px;
+}
+
+.inbox-channel-header {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+}
+
+.inbox-channel-toggle,
+.inbox-channel-select,
+.inbox-channel-contact-select,
+.inbox-channel-pin {
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.inbox-channel-toggle {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 40px;
+  padding: 0;
+  color: var(--muted-foreground);
+}
+
+.inbox-channel-select {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 40px;
+  gap: 7px;
+  padding: 6px 7px 6px 4px;
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.inbox-channel-select:hover,
+.inbox-channel-select.active,
+.inbox-channel-contact:hover,
+.inbox-channel-contact.active {
+  background: var(--accent);
+}
+
+.inbox-channel-select > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.inbox-channel-counts {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.inbox-channel-counts small {
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--brand) 15%, transparent);
+  color: var(--brand);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.inbox-channel-contacts {
+  display: grid;
+  gap: 1px;
+  margin: 1px 0 5px 10px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border);
+}
+
+.inbox-channel-contact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
+.inbox-channel-contact-select {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 34px;
+  gap: 7px;
+  padding: 4px 2px 4px 6px;
+  text-align: left;
+}
+
+.inbox-channel-contact-select > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.inbox-channel-contact-select strong,
+.inbox-channel-contact-select small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-channel-contact-select strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.inbox-channel-contact-select small {
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.inbox-channel-pin {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+
+.inbox-channel-contact:hover .inbox-channel-pin,
+.inbox-channel-pin:focus-visible,
+.inbox-channel-pin.pinned {
+  opacity: 1;
+}
+
+.inbox-channel-pin:hover,
+.inbox-channel-pin.pinned {
+  color: var(--brand);
+}
+
+.inbox-channel-pin.pinned svg {
+  fill: currentColor;
+}
+
+.inbox-channel-unread,
+.inbox-channel-conversation-count {
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.inbox-channel-unread {
+  background: var(--brand);
+  color: var(--primary-foreground);
+}
+
+.inbox-channel-conversation-count {
+  background: color-mix(in oklab, var(--muted-foreground) 12%, transparent);
+  color: var(--muted-foreground);
+}
+
+.inbox-channel-empty {
+  padding: 7px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
 .inbox-connect-empty {
   display: grid;
   gap: 7px;
@@ -1511,7 +1688,7 @@
   }
   .inbox-mobile-bar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(120px, auto) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(110px, auto) auto auto;
     align-items: center;
     min-height: 56px;
     gap: 8px;
@@ -1544,6 +1721,12 @@
     background: var(--background);
     color: var(--foreground);
     font-size: 10px;
+  }
+  .inbox-mobile-pin.pinned {
+    color: var(--brand);
+  }
+  .inbox-mobile-pin.pinned svg {
+    fill: currentColor;
   }
   .inbox-mobile-back {
     display: inline-flex;
