@@ -40,6 +40,7 @@
   "nav": {
     "overview": "總覽",
     "feed": "動態",
+    "inbox": "收件匣",
     "providers": "服務提供者",
     "actions": "動作",
     "agents": "代理",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "動態",
         "subtitle": "在單一時間軸中查看觸發活動、代理更新與核准。"
+      },
+      "inbox": {
+        "title": "收件匣",
+        "subtitle": "集中查看 Microsoft Teams 與 Outlook 對話。"
       },
       "providers": {
         "title": "服務提供者",

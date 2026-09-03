@@ -40,6 +40,7 @@
   "nav": {
     "overview": "概要",
     "feed": "フィード",
+    "inbox": "受信トレイ",
     "providers": "プロバイダー",
     "actions": "アクション",
     "agents": "エージェント",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "フィード",
         "subtitle": "トリガーされたアクティビティ、エージェントの更新、承認。"
+      },
+      "inbox": {
+        "title": "受信トレイ",
+        "subtitle": "Microsoft Teams と Outlook の会話を一か所にまとめます。"
       },
       "providers": {
         "title": "プロバイダー",

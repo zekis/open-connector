@@ -145,6 +145,64 @@ describe("Outlook executors", () => {
     });
     expect(create).toHaveBeenCalledOnce();
   });
+
+  it("adds a transit file to a draft as a Graph file attachment", async () => {
+    const fetcher = createFetch(async () => Response.json({ id: "attachment-1", name: "notes.txt" }, { status: 201 }));
+
+    await expect(
+      outlookActionHandlers.add_attachment!(
+        { messageId: "draft 1", file: { fileId: "transit-1" } },
+        {
+          accessToken: "access-token",
+          fetcher,
+          transitFiles: {
+            maxBytes: 5 * 1024 * 1024,
+            async create() {
+              throw new Error("not used");
+            },
+            async read() {
+              return {
+                file: new File(["hello"], "notes.txt", { type: "text/plain" }),
+                sizeBytes: 5,
+                name: "notes.txt",
+                mimeType: "text/plain",
+              };
+            },
+            async delete() {
+              return false;
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ id: "attachment-1", name: "notes.txt" });
+
+    const [request, init] = vi.mocked(fetcher).mock.calls[0]!;
+    expect(new URL(request instanceof Request ? request.url : request.toString()).pathname).toBe(
+      "/v1.0/me/messages/draft%201/attachments",
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: "notes.txt",
+      contentType: "text/plain",
+      contentBytes: "aGVsbG8=",
+    });
+  });
+
+  it("marks a message as read", async () => {
+    const fetcher = createFetch(async () => Response.json({ id: "message-1", isRead: true }));
+
+    await expect(
+      outlookActionHandlers.set_message_read!(
+        { messageId: "message-1", isRead: true },
+        { accessToken: "access-token", fetcher },
+      ),
+    ).resolves.toMatchObject({ id: "message-1", isRead: true });
+
+    const [, init] = vi.mocked(fetcher).mock.calls[0]!;
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual({ isRead: true });
+  });
 });
 
 function createFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): typeof fetch {

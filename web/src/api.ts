@@ -34,6 +34,20 @@ export async function apiPost<T = unknown>(path: string, body: unknown, options:
   );
 }
 
+export async function apiUpload<T>(path: string, file: File, options: RequestOptions = {}): Promise<T> {
+  const body = new FormData();
+  body.set("file", file);
+  return readJson<T>(
+    await fetch(path, {
+      method: "POST",
+      headers: headersFor(options),
+      credentials: "same-origin",
+      body,
+      signal: options.signal,
+    }),
+  );
+}
+
 export async function apiPostNdjson<T>(
   path: string,
   body: unknown,

@@ -246,6 +246,20 @@ const actions: OutlookActionSource[] = [
     downloadedAttachment,
   ),
   action(
+    "add_attachment",
+    "Add a locally uploaded file to an Outlook draft message before sending it.",
+    outlookWriteScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input(
+      {
+        messageId,
+        file: s.transitFile("File uploaded through POST /api/files."),
+      },
+      ["messageId", "file"],
+    ),
+    outlookAttachment,
+  ),
+  action(
     "create_draft",
     "Create a new Outlook draft message with subject, body, recipients, and other writable message properties.",
     outlookWriteScopes,
@@ -283,6 +297,17 @@ const actions: OutlookActionSource[] = [
     outlookWriteScopes,
     [outlookProviderScopes.mailReadWrite],
     input({ messageId, ...messageWriteFields }, ["messageId"]),
+    outlookMessage,
+  ),
+  action(
+    "set_message_read",
+    "Mark an Outlook message as read or unread.",
+    outlookWriteScopes,
+    [outlookProviderScopes.mailReadWrite],
+    input({ messageId, isRead: s.boolean({ description: "Whether the message should be marked as read." }) }, [
+      "messageId",
+      "isRead",
+    ]),
     outlookMessage,
   ),
   action(

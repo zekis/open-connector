@@ -40,6 +40,7 @@
   "nav": {
     "overview": "Overview",
     "feed": "Feed",
+    "inbox": "Inbox",
     "providers": "Providers",
     "actions": "Actions",
     "agents": "Agents",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "Feed",
         "subtitle": "Triggered activity, agent updates, and approvals in one timeline."
+      },
+      "inbox": {
+        "title": "Inbox",
+        "subtitle": "Microsoft Teams and Outlook conversations in one place."
       },
       "providers": {
         "title": "Providers",

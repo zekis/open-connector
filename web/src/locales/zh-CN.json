@@ -40,6 +40,7 @@
   "nav": {
     "overview": "概览",
     "feed": "动态",
+    "inbox": "收件箱",
     "providers": "提供商",
     "actions": "操作",
     "agents": "智能体",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "动态",
         "subtitle": "在一个时间线中查看触发活动、代理更新和审批。"
+      },
+      "inbox": {
+        "title": "收件箱",
+        "subtitle": "集中查看 Microsoft Teams 和 Outlook 对话。"
       },
       "providers": {
         "title": "提供商",

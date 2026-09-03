@@ -31,6 +31,7 @@ import {
   Inbox,
   KeyRound,
   Loader2,
+  Mails,
   MessageCircle,
   MessageSquareMore,
   Monitor,
@@ -56,6 +57,7 @@ import { FeedPageView } from "./feed-page";
 import { FlowBuilderPage } from "./flow-builder-page";
 import { FlowsPage } from "./flows-page";
 import { persistLang, supportedLangs } from "./i18n";
+import { InboxPageView } from "./inbox-page";
 import { KanbanPage } from "./kanban-page";
 import { MobileConnectionPage, MobileConnectLanding } from "./mobile-connection-page";
 import { emptyData } from "./model";
@@ -77,6 +79,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 const navItems = [
   { path: "/overview", labelKey: "nav.overview", icon: Home },
   { path: "/feed", labelKey: "nav.feed", icon: Newspaper },
+  { path: "/inbox", labelKey: "nav.inbox", icon: Mails },
   { path: "/providers", labelKey: "nav.providers", icon: Cable },
   { path: "/actions", labelKey: "nav.actions", icon: TerminalSquare },
   { path: "/agents", labelKey: "nav.agents", icon: Bot },
@@ -405,7 +408,12 @@ function AppShell(props: {
   const section = location.pathname.split("/").filter(Boolean)[0];
   const isOverviewPage = heading === "overview";
   const isBrowserPage =
-    section === "actions" || section === "runs" || section === "chat" || section === "synapse" || section === "kanban";
+    section === "actions" ||
+    section === "runs" ||
+    section === "chat" ||
+    section === "synapse" ||
+    section === "kanban" ||
+    section === "inbox";
   const isRunsPage = section === "runs";
   const isChatPage = section === "chat";
   const isSynapsePage = section === "synapse";
@@ -418,6 +426,7 @@ function AppShell(props: {
     isRunsPage ? "runs-main" : "",
     isChatPage ? "chat-main" : "",
     isSynapsePage ? "synapse-main" : "",
+    section === "inbox" ? "inbox-main" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -501,6 +510,7 @@ function AppShell(props: {
             <Route index element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route path="/feed" element={<FeedPageView data={props.data} onRefresh={props.onRefresh} />} />
+            <Route path="/inbox" element={<InboxPageView />} />
             <Route path="/providers" element={<ProvidersPage data={props.data} onRefresh={props.onRefresh} />} />
             <Route
               path="/providers/:service"
@@ -682,6 +692,9 @@ function headingForPath(pathname: string): string {
   }
   if (section === "feed") {
     return "feed";
+  }
+  if (section === "inbox") {
+    return "inbox";
   }
   if (section === "actions") {
     return "actions";

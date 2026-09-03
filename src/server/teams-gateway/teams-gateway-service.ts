@@ -55,6 +55,11 @@ export interface TeamsGatewayPollResult {
   errors: number;
 }
 
+export interface TeamsGatewayOperatorAttachment {
+  fileId: string;
+  name?: string;
+}
+
 interface PlanCapture {
   summary: string;
   steps: string[];
@@ -155,6 +160,87 @@ export class TeamsGatewayService {
 
   listThreads(agentId?: string): Promise<TeamsGatewayThread[]> {
     return this.options.store.listThreads(agentId, 100);
+  }
+
+  /** Send a human operator reply from the unified inbox through the bound Teams identity. */
+  async sendOperatorReply(
+    threadIdValue: string,
+    text: string,
+    attachments: TeamsGatewayOperatorAttachment[] = [],
+  ): Promise<TeamsGatewayThread> {
+    const thread = (await this.options.store.listThreads(undefined, 500)).find((item) => item.id === threadIdValue);
+    if (!thread)
+      throw new TeamsGatewayError("thread_not_found", `Teams gateway thread not found: ${threadIdValue}.`, 404);
+    const agent = await this.options.store.getAgent(thread.agentId);
+    if (!agent?.enabled) {
+      throw new TeamsGatewayError("agent_disabled", "The Teams gateway agent for this conversation is disabled.", 409);
+    }
+    if (!(await this.isConversationEnabled(agent.id, descriptorFromThread(thread)))) {
+      throw new TeamsGatewayError("conversation_disabled", "This Teams group is disabled in the gateway.", 403);
+    }
+    if (!text.trim() && attachments.length === 0) {
+      throw new TeamsGatewayError("invalid_input", "A reply or attachment is required.");
+    }
+    if (attachments.length > maxAttachmentsPerMessage) {
+      throw new TeamsGatewayError(
+        "invalid_input",
+        `A Teams reply can include at most ${maxAttachmentsPerMessage} attachments.`,
+      );
+    }
+
+    return this.withOperationLock(thread.id, async () => {
+      const graphContext = await this.options.graph.context(agent.teamsConnectionId);
+      if (attachments.length === 0) {
+        await this.reply(graphContext, thread, text.trim());
+        return thread;
+      }
+
+      const sentAttachments: AgentChatAttachment[] = [];
+      let messageId: string | undefined;
+      for (const [index, attachment] of attachments.entries()) {
+        const stored = await this.options.files.read(attachment.fileId);
+        const file = await this.resolveOutboundAttachment({
+          fileId: attachment.fileId,
+          fileName: attachment.name ?? stored.name,
+        });
+        const sent =
+          thread.conversationKind === "channel"
+            ? await this.options.graph.sendChannelReplyAttachment(
+                graphContext,
+                requireThreadRoute(thread.teamId, "teamId"),
+                requireThreadRoute(thread.channelId, "channelId"),
+                requireThreadRoute(thread.rootMessageId, "rootMessageId"),
+                file,
+                index === 0 ? text.trim() || undefined : undefined,
+              )
+            : await this.options.graph.sendChatAttachment(
+                graphContext,
+                thread.chatId,
+                file,
+                index === 0 ? text.trim() || undefined : undefined,
+              );
+        this.markSelfPosted(sent.id);
+        messageId ??= sent.id;
+        sentAttachments.push({
+          id: sent.id,
+          fileId: attachment.fileId,
+          name: stored.name,
+          mimeType: stored.mimeType,
+          sizeBytes: stored.sizeBytes,
+          downloadUrl: `/api/files/${encodeURIComponent(attachment.fileId)}`,
+        });
+      }
+      thread.messages = appendMessage(thread.messages, {
+        id: messageId ?? crypto.randomUUID(),
+        role: "assistant",
+        content: text.trim() || attachmentOnlyMessage(sentAttachments),
+        attachments: sentAttachments,
+        createdAt: this.now().toISOString(),
+      });
+      thread.updatedAt = this.now().toISOString();
+      await this.options.store.setThread(thread);
+      return thread;
+    });
   }
 
   listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {

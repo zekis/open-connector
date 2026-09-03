@@ -4,11 +4,12 @@ import type { OAuthProviderContext } from "../provider-runtime.ts";
 import { Buffer } from "node:buffer";
 import { compactObject, optionalString, requiredRecord } from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError } from "../provider-runtime.ts";
+import { defineOAuthProviderExecutors, ProviderRequestError, readTransitFileInput } from "../provider-runtime.ts";
 
 const outlookGraphBaseUrl = "https://graph.microsoft.com/v1.0";
 const graphHost = "graph.microsoft.com";
 const maximumOutlookAttachmentBytes = 20 * 1024 * 1024;
+const maximumSimpleOutlookAttachmentBytes = 3 * 1024 * 1024;
 
 type OutlookRuntimeDeps = OAuthProviderContext;
 
@@ -52,6 +53,9 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   download_attachment(input, deps) {
     return downloadAttachment(input, deps);
   },
+  add_attachment(input, deps) {
+    return addAttachment(input, deps);
+  },
   create_draft(input, deps) {
     return createDraft(input, deps);
   },
@@ -60,6 +64,9 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   },
   update_draft(input, deps) {
     return updateDraft(input, deps);
+  },
+  set_message_read(input, deps) {
+    return setMessageRead(input, deps);
   },
   delete_message(input, deps) {
     return deleteMessage(input, deps);
@@ -439,6 +446,29 @@ async function downloadAttachment(input: Record<string, unknown>, deps: OutlookR
   };
 }
 
+async function addAttachment(input: Record<string, unknown>, deps: OutlookRuntimeDeps) {
+  const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
+  const file = await readTransitFileInput(input.file, deps);
+  if (file.sizeBytes > maximumSimpleOutlookAttachmentBytes) {
+    throw new ProviderRequestError(
+      413,
+      "Outlook reply attachments are limited to 3 MB until upload-session attachments are supported.",
+    );
+  }
+  const bytes = new Uint8Array(await file.file.arrayBuffer());
+  return outlookJsonRequest(`me/messages/${messageId}/attachments`, {
+    accessToken: deps.accessToken,
+    fetcher: deps.fetcher,
+    method: "POST",
+    body: {
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: file.name,
+      contentType: file.mimeType,
+      contentBytes: Buffer.from(bytes).toString("base64"),
+    },
+  });
+}
+
 async function createDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
   return outlookJsonRequest("me/messages", {
     accessToken,
@@ -478,6 +508,15 @@ async function updateDraft(input: Record<string, unknown>, { accessToken, fetche
       requireSubject: false,
       requireBody: false,
     }),
+  });
+}
+
+async function setMessageRead(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
+  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+    accessToken,
+    fetcher,
+    method: "PATCH",
+    body: { isRead: input.isRead },
   });
 }
 

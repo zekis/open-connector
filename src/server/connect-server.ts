@@ -17,6 +17,7 @@ import type { ITransitFileService } from "./files/transit-file-store.ts";
 import type { FlowRunner } from "./flows/flow-runner.ts";
 import type { FlowService } from "./flows/flow-service.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
+import type { InboxService } from "./inbox/inbox-service.ts";
 import type { KanbanService } from "./kanban/kanban-service.ts";
 import type { Logger } from "./logger.ts";
 import type { ProviderPreviewContent } from "./previews/provider-preview.ts";
@@ -80,6 +81,7 @@ import { AgentChatError } from "./chat/agent-chat-service.ts";
 import { FeedError } from "./feed/feed-service.ts";
 import { createTransitFileResponse, TransitFileError } from "./files/transit-file-store.ts";
 import { FlowError } from "./flows/flow-service.ts";
+import { InboxError } from "./inbox/inbox-service.ts";
 import { KanbanGenerationError } from "./kanban/kanban-generator.ts";
 import { kanbanPresets } from "./kanban/kanban-presets.ts";
 import { KanbanError } from "./kanban/kanban-service.ts";
@@ -106,6 +108,7 @@ export interface IConnectServerOptions {
   runtimeTokens: RuntimeTokenService;
   mobileAuth?: MobileAuthService;
   teamsGateway?: TeamsGatewayService;
+  inbox?: InboxService;
   actions: ActionRunner;
   flows?: FlowService;
   flowRunner?: FlowRunner;
@@ -303,6 +306,19 @@ export class ConnectServer {
         this.sendTeamsGatewayMessage(context, context.req.param("id")),
       );
     }
+    if (this.options.inbox) {
+      app.get("/api/inbox", (context) => this.listInbox(context));
+      app.get("/api/inbox/conversations/:id", (context) => this.getInboxConversation(context, context.req.param("id")));
+      app.post("/api/inbox/conversations/:id/replies", (context) =>
+        this.replyToInboxConversation(context, context.req.param("id")),
+      );
+      app.post("/api/inbox/conversations/:id/read", (context) =>
+        this.markInboxConversationRead(context, context.req.param("id")),
+      );
+      app.get("/api/inbox/attachments/:reference", (context) =>
+        this.downloadInboxAttachment(context, context.req.param("reference")),
+      );
+    }
     if (this.options.feed) {
       app.get("/api/feed", (context) => this.listFeed(context));
       app.get("/api/feed/:id/previews/:previewId", (context) =>
@@ -426,6 +442,9 @@ export class ConnectServer {
         return jsonError(context, error.status, error.code, error.message);
       }
       if (error instanceof TeamsGatewayError) {
+        return jsonError(context, error.status, error.code, error.message);
+      }
+      if (error instanceof InboxError) {
         return jsonError(context, error.status, error.code, error.message);
       }
       this.options.logger?.error(
@@ -1371,6 +1390,35 @@ export class ConnectServer {
     );
     const text = requiredString(body.text, "text", (message) => new TeamsGatewayError("invalid_input", message));
     return context.json(await this.options.teamsGateway!.sendProactiveMessage(id, recipientEmail, text));
+  }
+
+  private async listInbox(context: Context): Promise<Response> {
+    return context.json(
+      await this.options.inbox!.list({
+        query: optionalString(context.req.query("query")),
+        sourceId: optionalString(context.req.query("sourceId")),
+      }),
+    );
+  }
+
+  private async getInboxConversation(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.get(id));
+  }
+
+  private async replyToInboxConversation(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.reply(id, await readJsonBody(context)));
+  }
+
+  private async markInboxConversationRead(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.markRead(id));
+  }
+
+  private async downloadInboxAttachment(context: Context, reference: string): Promise<Response> {
+    const downloadUrl = await this.options.inbox!.downloadOutlookAttachment(reference);
+    if (!downloadUrl.startsWith("/api/files/")) {
+      throw new InboxError("attachment_unavailable", "Inbox attachment returned an invalid download URL.", 503);
+    }
+    return context.redirect(downloadUrl, 302);
   }
 
   private async listFlows(context: Context): Promise<Response> {

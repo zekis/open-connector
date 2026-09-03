@@ -40,6 +40,7 @@
   "nav": {
     "overview": "Vue d’ensemble",
     "feed": "Fil",
+    "inbox": "Boîte de réception",
     "providers": "Fournisseurs",
     "actions": "Actions",
     "agents": "Agents",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "Fil",
         "subtitle": "Activité déclenchée, mises à jour de l’agent et approbations."
+      },
+      "inbox": {
+        "title": "Boîte de réception",
+        "subtitle": "Conversations Microsoft Teams et Outlook au même endroit."
       },
       "providers": {
         "title": "Fournisseurs",

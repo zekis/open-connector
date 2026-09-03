@@ -40,6 +40,7 @@
   "nav": {
     "overview": "Обзор",
     "feed": "Лента",
+    "inbox": "Входящие",
     "providers": "Провайдеры",
     "actions": "Действия",
     "agents": "Агенты",
@@ -76,6 +77,10 @@
       "feed": {
         "title": "Лента",
         "subtitle": "События триггеров, обновления агента и согласования."
+      },
+      "inbox": {
+        "title": "Входящие",
+        "subtitle": "Диалоги Microsoft Teams и Outlook в одном месте."
       },
       "providers": {
         "title": "Провайдеры",
