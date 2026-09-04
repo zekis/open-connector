@@ -522,6 +522,9 @@ function createService(
       async sendOperatorReply() {
         return teamsThread;
       },
+      async approveOperatorPlan() {
+        return teamsThread;
+      },
     },
     async getPolicySnapshot() {
       return new ActionPolicyService().createSnapshot();

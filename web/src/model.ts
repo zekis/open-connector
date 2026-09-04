@@ -501,6 +501,7 @@ export interface InboxConversationSummary {
   noteCount: number;
   messageCount: number;
   contextLabel?: string;
+  pendingPlanMessageId?: string;
 }
 
 export interface InboxConversation extends InboxConversationSummary {

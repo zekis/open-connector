@@ -243,6 +243,39 @@ export class TeamsGatewayService {
     });
   }
 
+  /** Approve the current plan from the authenticated unified inbox operator. */
+  async approveOperatorPlan(threadIdValue: string, messageIdValue: string): Promise<TeamsGatewayThread> {
+    const messageId = messageIdValue.trim();
+    if (!messageId) throw new TeamsGatewayError("invalid_input", "The Teams plan message ID is required.");
+    const candidate = (await this.options.store.listThreads(undefined, 500)).find(
+      (thread) => thread.id === threadIdValue,
+    );
+    if (!candidate) {
+      throw new TeamsGatewayError("thread_not_found", `Teams gateway thread not found: ${threadIdValue}.`, 404);
+    }
+    const agent = await this.options.store.getAgent(candidate.agentId);
+    if (!agent?.enabled) {
+      throw new TeamsGatewayError("agent_disabled", "The Teams gateway agent for this conversation is disabled.", 409);
+    }
+    if (!(await this.isConversationEnabled(agent.id, descriptorFromThread(candidate)))) {
+      throw new TeamsGatewayError("conversation_disabled", "This Teams group is disabled in the gateway.", 403);
+    }
+    const graphContext = await this.options.graph.context(agent.teamsConnectionId);
+    return this.withOperationLock(candidate.id, async () => {
+      const thread = await this.options.store.getThread(agent.id, candidate.chatId);
+      if (!thread?.pendingPlan) {
+        throw new TeamsGatewayError("plan_not_pending", "This Teams conversation does not have a pending plan.", 409);
+      }
+      const planMessageId =
+        thread.pendingPlan.messageId ?? thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
+      if (planMessageId !== messageId) {
+        throw new TeamsGatewayError("plan_message_mismatch", "Only the current Teams plan can be approved.", 409);
+      }
+      await this.continueApprovedPlan(agent, graphContext, thread);
+      return thread;
+    });
+  }
+
   listGroups(agentId?: string): Promise<TeamsGatewayGroup[]> {
     return this.options.store.listGroups(agentId);
   }
@@ -1571,17 +1604,26 @@ export class TeamsGatewayService {
       const messageId =
         thread.pendingPlan.messageId ?? thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
       if (!messageId || !(await this.hasAuthorizedPlanLike(agent, graphContext, thread, messageId))) return false;
-      const approvedPlan = thread.pendingPlan;
-      thread.pendingPlan = undefined;
-      thread.messages = appendMessage(thread.messages, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: approvedPlanContinuation(approvedPlan),
-        createdAt: this.now().toISOString(),
-      });
-      await this.runAgentTurn(agent, graphContext, thread, false);
+      await this.continueApprovedPlan(agent, graphContext, thread);
       return true;
     });
+  }
+
+  private async continueApprovedPlan(
+    agent: TeamsGatewayAgent,
+    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
+  ): Promise<void> {
+    const approvedPlan = thread.pendingPlan;
+    if (!approvedPlan) throw new TeamsGatewayError("plan_not_pending", "This Teams plan is no longer pending.", 409);
+    thread.pendingPlan = undefined;
+    thread.messages = appendMessage(thread.messages, {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: approvedPlanContinuation(approvedPlan),
+      createdAt: this.now().toISOString(),
+    });
+    await this.runAgentTurn(agent, graphContext, thread, false);
   }
 
   private async hasAuthorizedPlanLike(
@@ -1656,15 +1698,16 @@ export class TeamsGatewayService {
   ): Promise<{ id?: string }> {
     const sent = await this.sendThreadMessage(graphContext, thread, text);
     this.markSelfPosted(sent.id);
+    const messageId = sent.id ?? crypto.randomUUID();
     thread.messages = appendMessage(thread.messages, {
-      id: sent.id ?? crypto.randomUUID(),
+      id: messageId,
       role: "assistant",
       content: text,
       createdAt: this.now().toISOString(),
     });
     thread.updatedAt = this.now().toISOString();
     await this.options.store.setThread(thread);
-    return sent;
+    return { id: messageId };
   }
 
   private sendThreadMessage(

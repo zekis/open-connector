@@ -36,7 +36,7 @@ export interface InboxServiceOptions {
   connections: Pick<ConnectionService, "listConnections">;
   actions: IActionRunner;
   agentChat: Pick<AgentChatService, "respondWithExtension">;
-  teamsGateway: Pick<TeamsGatewayService, "listAgents" | "listThreads" | "sendOperatorReply">;
+  teamsGateway: Pick<TeamsGatewayService, "approveOperatorPlan" | "listAgents" | "listThreads" | "sendOperatorReply">;
   store: IInboxStore;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
 }
@@ -185,6 +185,19 @@ export class InboxService {
       notes: [...current.notes, { id: randomUUID(), content, createdAt }].slice(-100),
       updatedAt: createdAt,
     });
+    return this.get(conversationId);
+  }
+
+  /** Approves the current Teams plan from the authenticated inbox. */
+  async approveTeamsPlan(conversationId: string, input: unknown): Promise<InboxConversation> {
+    const reference = decodeReference(conversationId);
+    if (reference.provider !== "microsoft_teams") {
+      throw new InboxError("unsupported_provider", "Plan approval is only available for Teams conversations.", 409);
+    }
+    const value = requiredRecord(input, "Teams plan approval", invalidInput);
+    const messageId = optionalString(value.messageId);
+    if (!messageId) throw invalidInput("messageId is required.");
+    await this.options.teamsGateway.approveOperatorPlan(reference.threadId, messageId);
     return this.get(conversationId);
   }
 
@@ -424,6 +437,7 @@ export class InboxService {
       ...metadataSummary(metadata, Boolean(thread.pendingPlan || thread.pendingApprovalIds?.length)),
       messageCount: thread.messages.length,
       contextLabel: teamsContextLabel(thread, agents),
+      pendingPlanMessageId: thread.pendingPlan?.messageId,
     };
   }
 

@@ -369,6 +369,35 @@ describe("TeamsGatewayService", () => {
     expect(chat.respondExtensions[1]?.systemPrompt).toContain("confirmed the current plan");
   });
 
+  it("continues a pending plan when an authenticated inbox operator clicks thumbs up", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent()]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Check tomorrow's calendar."),
+    ]);
+    const chat = new FakeAgentChat([
+      async (extension) => {
+        const activity = await extension.runTool("propose_teams_plan", {
+          summary: "Check tomorrow's calendar",
+          steps: ["Read tomorrow's events", "Summarize the schedule"],
+        });
+        return completedResponse("Waiting for confirmation.", activity ? [activity] : []);
+      },
+      completedResponse("Tomorrow has two meetings."),
+    ]);
+    const service = createService(store, graph, chat);
+
+    await service.pollNow();
+    const pendingThread = await store.getThread("agent-1", "chat-1");
+    await service.approveOperatorPlan(pendingThread!.id, pendingThread!.pendingPlan!.messageId!);
+
+    expect(graph.sent.at(-1)?.text).toBe("Tomorrow has two meetings.");
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toBeUndefined();
+    expect((chat.inputs[1] as { messages: Array<{ role: string; content: string }> }).messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("approved this plan with a thumbs-up reaction"),
+    });
+  });
+
   it("keeps the plan pending when a follow-up question arrives before the thumbs-up", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent()]);
     const graph = new FakeTeamsGraph([

@@ -42,6 +42,7 @@ import {
   Sparkles,
   StickyNote,
   Tag,
+  ThumbsUp,
   Users,
   X,
 } from "lucide-react";
@@ -107,6 +108,11 @@ interface InboxChannelExpansion {
   outlook: boolean;
 }
 
+interface InboxChannelContactGroup {
+  label: "Pinned" | "Unread" | "A–Z";
+  contacts: InboxChannelContact[];
+}
+
 const defaultInboxPanelWidths: InboxPanelWidths = {
   sources: 224,
   conversations: 340,
@@ -164,6 +170,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [sendingHandoff, setSendingHandoff] = useState(false);
   const [synapseMessageId, setSynapseMessageId] = useState<string>();
+  const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string>();
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
@@ -320,6 +327,23 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   function openConversation(id: string): void {
     setSelectedId(id);
     setMobilePane("thread");
+  }
+
+  async function approveTeamsPlan(messageId: string): Promise<void> {
+    if (!selectedId || approvingPlanMessageId) return;
+    setApprovingPlanMessageId(messageId);
+    try {
+      const next = await apiPost<InboxConversation>(
+        `/api/inbox/conversations/${encodeURIComponent(selectedId)}/teams-plan-approval`,
+        { messageId },
+      );
+      adoptConversation(next, selectedId);
+      await loadPage(true);
+    } catch (approvalError) {
+      setError(messageForError(approvalError, "Could not approve this Teams plan."));
+    } finally {
+      setApprovingPlanMessageId(undefined);
+    }
   }
 
   function selectSource(id: string): void {
@@ -718,7 +742,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 <optgroup label="Teams people">
                   {channelContacts.microsoft_teams.map((contact) => (
                     <option key={contact.id} value={`contact:${contact.id}`}>
-                      {contact.unreadCount ? "Unread · " : contact.pinned ? "Pinned · " : ""}
+                      {contact.pinned ? "Pinned · " : contact.unreadCount ? "Unread · " : ""}
                       {contact.name}
                     </option>
                   ))}
@@ -728,7 +752,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 <optgroup label="Outlook people">
                   {channelContacts.outlook.map((contact) => (
                     <option key={contact.id} value={`contact:${contact.id}`}>
-                      {contact.unreadCount ? "Unread · " : contact.pinned ? "Pinned · " : ""}
+                      {contact.pinned ? "Pinned · " : contact.unreadCount ? "Unread · " : ""}
                       {contact.name}
                     </option>
                   ))}
@@ -885,6 +909,22 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                   <div className="inbox-message-heading">
                     {message.kind === "message" ? (
                       <div className="inbox-message-toolbar" aria-label="Message actions">
+                        {conversation.pendingPlanMessageId === message.id ? (
+                          <button
+                            type="button"
+                            className="inbox-plan-approve"
+                            disabled={Boolean(approvingPlanMessageId)}
+                            onClick={() => void approveTeamsPlan(message.id)}
+                            title="Approve this Teams plan"
+                          >
+                            {approvingPlanMessageId === message.id ? (
+                              <Loader2 className="spin" size={12} />
+                            ) : (
+                              <ThumbsUp size={12} />
+                            )}
+                            Approve plan
+                          </button>
+                        ) : null}
                         <button type="button" onClick={() => beginReply(message)}>
                           <ReplyIcon size={12} /> Reply
                         </button>
@@ -1413,6 +1453,7 @@ interface ChannelTreeProps {
 }
 
 function ChannelTree(props: ChannelTreeProps): ReactNode {
+  const groups = channelContactGroups(props.contacts);
   return (
     <section className={`inbox-channel-tree ${props.provider}`}>
       <div className="inbox-channel-header">
@@ -1440,42 +1481,47 @@ function ChannelTree(props: ChannelTreeProps): ReactNode {
       </div>
       {props.expanded ? (
         <div className="inbox-channel-contacts" role="tree" aria-label={`${props.label} people`}>
-          {props.contacts.map((contact) => (
-            <div
-              className={`inbox-channel-contact${props.activeContactId === contact.id ? " active" : ""}`}
-              role="treeitem"
-              aria-selected={props.activeContactId === contact.id}
-              key={contact.id}
-            >
-              <button
-                type="button"
-                className="inbox-channel-contact-select"
-                onClick={() => props.onSelectContact(contact)}
-              >
-                <ContactAvatar label={contact.name} size="small" />
-                <span>
-                  <strong>{contact.name}</strong>
-                  {contact.email && contact.email.toLowerCase() !== contact.name.toLowerCase() ? (
-                    <small>{contact.email}</small>
-                  ) : null}
-                </span>
-                {contact.unreadCount ? (
-                  <span className="inbox-channel-unread" title={`${contact.unreadCount} unread conversations`}>
-                    {contact.unreadCount}
-                  </span>
-                ) : contact.conversationCount > 1 ? (
-                  <span className="inbox-channel-conversation-count">{contact.conversationCount}</span>
-                ) : null}
-              </button>
-              <button
-                type="button"
-                className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
-                onClick={() => props.onTogglePin(contact.id)}
-                aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-                title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-              >
-                <Pin size={11} />
-              </button>
+          {groups.map((group) => (
+            <div className="inbox-channel-contact-group" role="group" aria-label={group.label} key={group.label}>
+              <span className="inbox-channel-contact-group-title">{group.label}</span>
+              {group.contacts.map((contact) => (
+                <div
+                  className={`inbox-channel-contact${props.activeContactId === contact.id ? " active" : ""}`}
+                  role="treeitem"
+                  aria-selected={props.activeContactId === contact.id}
+                  key={contact.id}
+                >
+                  <button
+                    type="button"
+                    className="inbox-channel-contact-select"
+                    onClick={() => props.onSelectContact(contact)}
+                  >
+                    <ContactAvatar label={contact.name} size="small" />
+                    <span>
+                      <strong>{contact.name}</strong>
+                      {contact.email && contact.email.toLowerCase() !== contact.name.toLowerCase() ? (
+                        <small>{contact.email}</small>
+                      ) : null}
+                    </span>
+                    {contact.unreadCount ? (
+                      <span className="inbox-channel-unread" title={`${contact.unreadCount} unread conversations`}>
+                        {contact.unreadCount}
+                      </span>
+                    ) : contact.conversationCount > 1 ? (
+                      <span className="inbox-channel-conversation-count">{contact.conversationCount}</span>
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
+                    onClick={() => props.onTogglePin(contact.id)}
+                    aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                    title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                  >
+                    <Pin size={11} />
+                  </button>
+                </div>
+              ))}
             </div>
           ))}
           {props.contacts.length === 0 ? <small className="inbox-channel-empty">No people yet</small> : null}
@@ -1657,10 +1703,19 @@ function buildChannelContacts(
     }
   }
   return [...contacts.values()].sort((left, right) => {
-    if (Boolean(left.unreadCount) !== Boolean(right.unreadCount)) return left.unreadCount ? -1 : 1;
     if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+    if (Boolean(left.unreadCount) !== Boolean(right.unreadCount)) return left.unreadCount ? -1 : 1;
     return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
   });
+}
+
+function channelContactGroups(contacts: InboxChannelContact[]): InboxChannelContactGroup[] {
+  const groups: InboxChannelContactGroup[] = [
+    { label: "Pinned", contacts: contacts.filter((contact) => contact.pinned) },
+    { label: "Unread", contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount > 0) },
+    { label: "A–Z", contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount === 0) },
+  ];
+  return groups.filter((group) => group.contacts.length > 0);
 }
 
 function conversationHasContact(conversation: InboxConversationSummary, key: string): boolean {

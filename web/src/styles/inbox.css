@@ -276,6 +276,24 @@
   border-left: 1px solid var(--border);
 }
 
+.inbox-channel-contact-group {
+  display: grid;
+  gap: 1px;
+}
+
+.inbox-channel-contact-group + .inbox-channel-contact-group {
+  margin-top: 5px;
+}
+
+.inbox-channel-contact-group-title {
+  padding: 4px 6px 2px;
+  color: var(--muted-foreground);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .inbox-channel-contact {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
@@ -818,6 +836,16 @@
 }
 .inbox-message-toolbar button:last-child {
   color: var(--brand);
+}
+.inbox-message-toolbar .inbox-plan-approve {
+  border-color: color-mix(in oklab, var(--success) 28%, var(--border));
+  background: color-mix(in oklab, var(--success) 8%, transparent);
+  color: var(--success);
+}
+.inbox-message-toolbar .inbox-plan-approve:hover {
+  border-color: color-mix(in oklab, var(--success) 55%, var(--border));
+  background: color-mix(in oklab, var(--success) 14%, transparent);
+  color: var(--success);
 }
 .inbox-message-toolbar button:disabled {
   cursor: wait;
