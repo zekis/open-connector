@@ -18,12 +18,14 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowDownUp,
+  Ban,
   Bot,
   BrainCircuit,
   Cable,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   ExternalLink,
   FileText,
   Loader2,
@@ -101,6 +103,7 @@ interface InboxChannelContact extends InboxContactFilter {
   conversationCount: number;
   unreadCount: number;
   pinned: boolean;
+  junk: boolean;
 }
 
 interface InboxChannelExpansion {
@@ -109,7 +112,7 @@ interface InboxChannelExpansion {
 }
 
 interface InboxChannelContactGroup {
-  label: "Pinned" | "Unread" | "A–Z";
+  label: "Pinned" | "Unread" | "A–Z" | "Junk";
   contacts: InboxChannelContact[];
 }
 
@@ -120,6 +123,7 @@ const defaultInboxPanelWidths: InboxPanelWidths = {
 };
 const inboxPanelWidthsStorageKey = "oomol.inbox.panel-widths";
 const inboxPinnedContactsStorageKey = "oomol.inbox.pinned-contacts";
+const inboxJunkContactsStorageKey = "oomol.inbox.junk-contacts";
 
 interface AiHandoffTarget {
   scope: InboxAiActionScope;
@@ -142,6 +146,8 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [sourceId, setSourceId] = useState("all");
   const [contactFilter, setContactFilter] = useState<InboxContactFilter>();
   const [pinnedContactIds, setPinnedContactIds] = useState<Set<string>>(readPinnedContactIds);
+  const [junkContactIds, setJunkContactIds] = useState<Set<string>>(readJunkContactIds);
+  const [junkGroupExpanded, setJunkGroupExpanded] = useState(false);
   const [expandedChannels, setExpandedChannels] = useState<InboxChannelExpansion>({
     microsoft_teams: true,
     outlook: true,
@@ -171,30 +177,49 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [sendingHandoff, setSendingHandoff] = useState(false);
   const [synapseMessageId, setSynapseMessageId] = useState<string>();
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string>();
+  const [expandedEmailMessageIds, setExpandedEmailMessageIds] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
+  const lastMessageElement = useRef<HTMLElement>(null);
   const resizeState = useRef<InboxResizeState | undefined>(undefined);
+  const contactFilterRef = useRef<InboxContactFilter | undefined>(undefined);
   const providersByService = useMemo(
     () => new Map(props.providers.map((provider) => [provider.service, provider])),
     [props.providers],
   );
 
-  const loadPage = useCallback(async (silent = false): Promise<void> => {
-    if (!silent) setLoading(true);
-    try {
-      const next = await apiGet<InboxPage>("/api/inbox");
-      setPage(next);
-      setSelectedId((current) =>
-        current && next.conversations.some((item) => item.id === current) ? current : next.conversations[0]?.id,
-      );
-      setError(undefined);
-    } catch (loadError) {
-      setError(messageForError(loadError, "Could not load the inbox."));
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, []);
+  const loadPage = useCallback(
+    async (silent = false): Promise<void> => {
+      if (!silent) setLoading(true);
+      try {
+        const next = await apiGet<InboxPage>("/api/inbox");
+        setPage(next);
+        setSelectedId((current) => {
+          const visible = next.conversations.filter((item) => !isJunkConversation(item, junkContactIds));
+          const selectedJunkContact =
+            contactFilterRef.current && junkContactIds.has(contactFilterRef.current.id)
+              ? contactFilterRef.current
+              : undefined;
+          const canKeepCurrent = next.conversations.some(
+            (item) =>
+              item.id === current &&
+              (visible.includes(item) ||
+                (selectedJunkContact &&
+                  item.provider === selectedJunkContact.provider &&
+                  conversationHasContact(item, selectedJunkContact.key))),
+          );
+          return current && canKeepCurrent ? current : visible[0]?.id;
+        });
+        setError(undefined);
+      } catch (loadError) {
+        setError(messageForError(loadError, "Could not load the inbox."));
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [junkContactIds],
+  );
 
   const loadConversation = useCallback(async (id: string, silent = false): Promise<void> => {
     if (!silent) setLoadingConversation(true);
@@ -220,6 +245,10 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   }, []);
 
   useEffect(() => {
+    contactFilterRef.current = contactFilter;
+  }, [contactFilter]);
+
+  useEffect(() => {
     void loadPage();
     const timer = window.setInterval(() => void loadPage(true), 30_000);
     return () => window.clearInterval(timer);
@@ -232,6 +261,10 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   useEffect(() => {
     window.localStorage.setItem(inboxPinnedContactsStorageKey, JSON.stringify([...pinnedContactIds]));
   }, [pinnedContactIds]);
+
+  useEffect(() => {
+    window.localStorage.setItem(inboxJunkContactsStorageKey, JSON.stringify([...junkContactIds]));
+  }, [junkContactIds]);
 
   useEffect(
     () => () => {
@@ -247,6 +280,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       return;
     }
     setReplyingTo(undefined);
+    setExpandedEmailMessageIds(new Set());
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
 
@@ -256,9 +290,12 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     : undefined;
   useEffect(() => {
     const element = messageList.current;
-    if (!element || !lastMessageSignature) return;
+    const target = lastMessageElement.current;
+    if (!element || !target || !lastMessageSignature) return;
     const frame = window.requestAnimationFrame(() => {
-      element.scrollTop = element.scrollHeight;
+      const elementTop = element.getBoundingClientRect().top;
+      const targetTop = target.getBoundingClientRect().top;
+      element.scrollTop += targetTop - elementTop;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [conversation?.id, lastMessageSignature]);
@@ -285,25 +322,31 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
 
   const channelContacts = useMemo(
     () => ({
-      microsoft_teams: buildChannelContacts(page.conversations, "microsoft_teams", pinnedContactIds),
-      outlook: buildChannelContacts(page.conversations, "outlook", pinnedContactIds),
+      microsoft_teams: buildChannelContacts(page.conversations, "microsoft_teams", pinnedContactIds, junkContactIds),
+      outlook: buildChannelContacts(page.conversations, "outlook", pinnedContactIds, junkContactIds),
     }),
-    [page.conversations, pinnedContactIds],
+    [junkContactIds, page.conversations, pinnedContactIds],
+  );
+  const nonJunkConversations = useMemo(
+    () => page.conversations.filter((item) => !isJunkConversation(item, junkContactIds)),
+    [junkContactIds, page.conversations],
   );
   const selectedChannelContact = contactFilter
     ? [...channelContacts.microsoft_teams, ...channelContacts.outlook].find((item) => item.id === contactFilter.id)
     : undefined;
 
   const sourceConversations = useMemo(() => {
+    const includeJunk = Boolean(contactFilter && junkContactIds.has(contactFilter.id));
     const inSource = page.conversations.filter(
       (item) => sourceId === "all" || item.sourceId === sourceId || item.provider === sourceId,
     );
+    const visibleSource = includeJunk ? inSource : inSource.filter((item) => !isJunkConversation(item, junkContactIds));
     return contactFilter
-      ? inSource.filter(
+      ? visibleSource.filter(
           (item) => item.provider === contactFilter.provider && conversationHasContact(item, contactFilter.key),
         )
-      : inSource;
-  }, [contactFilter, page.conversations, sourceId]);
+      : visibleSource;
+  }, [contactFilter, junkContactIds, page.conversations, sourceId]);
 
   const visibleConversations = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -365,11 +408,40 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     });
   }
 
+  function toggleJunkContact(id: string): void {
+    const movingToJunk = !junkContactIds.has(id);
+    setJunkContactIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    if (!movingToJunk) return;
+    setPinnedContactIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+    const nextJunkContactIds = new Set(junkContactIds);
+    nextJunkContactIds.add(id);
+    setSelectedId((current) => {
+      if (!current) return current;
+      const selected = page.conversations.find((item) => item.id === current);
+      return selected && isJunkConversation(selected, nextJunkContactIds) ? undefined : current;
+    });
+    setContactFilter((current) => (current?.id === id ? undefined : current));
+  }
+
   function toggleChannel(provider: InboxProvider): void {
     setExpandedChannels((current) => ({ ...current, [provider]: !current[provider] }));
   }
 
   function selectMobileSource(value: string): void {
+    if (value === "junk-toggle") {
+      setJunkGroupExpanded((current) => !current);
+      return;
+    }
     if (!value.startsWith("contact:")) {
       selectSource(value);
       return;
@@ -580,6 +652,15 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     window.requestAnimationFrame(() => composerInput.current?.focus());
   }
 
+  function toggleEmailMessage(messageId: string): void {
+    setExpandedEmailMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }
+
   async function sendToSynapse(message: InboxMessage): Promise<void> {
     if (!conversation || synapseMessageId) return;
     setSynapseMessageId(message.id);
@@ -648,7 +729,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         <SourceButton
           active={sourceId === "all"}
           label="All conversations"
-          count={page.conversations.length}
+          count={nonJunkConversations.length}
           icon={<Users size={15} />}
           onClick={() => selectSource("all")}
         />
@@ -656,7 +737,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         <ChannelTree
           provider="microsoft_teams"
           label="Microsoft Teams"
-          count={page.conversations.filter((item) => item.provider === "microsoft_teams").length}
+          count={nonJunkConversations.filter((item) => item.provider === "microsoft_teams").length}
           unreadCount={page.conversations.filter((item) => item.provider === "microsoft_teams" && item.unread).length}
           icon={<MessageSquare size={15} />}
           contacts={channelContacts.microsoft_teams}
@@ -671,17 +752,20 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         <ChannelTree
           provider="outlook"
           label="Outlook"
-          count={page.conversations.filter((item) => item.provider === "outlook").length}
-          unreadCount={page.conversations.filter((item) => item.provider === "outlook" && item.unread).length}
+          count={nonJunkConversations.filter((item) => item.provider === "outlook").length}
+          unreadCount={nonJunkConversations.filter((item) => item.provider === "outlook" && item.unread).length}
           icon={<Mail size={15} />}
           contacts={channelContacts.outlook}
           expanded={expandedChannels.outlook}
+          junkExpanded={junkGroupExpanded}
           active={sourceId === "outlook" && !contactFilter}
           activeContactId={contactFilter?.provider === "outlook" ? contactFilter.id : undefined}
           onToggle={() => toggleChannel("outlook")}
           onSelect={() => selectSource("outlook")}
           onSelectContact={selectContact}
           onTogglePin={toggleContactPin}
+          onToggleJunk={toggleJunkContact}
+          onToggleJunkGroup={() => setJunkGroupExpanded((current) => !current)}
         />
         {page.sources.length ? <div className="inbox-source-heading">Accounts</div> : null}
         {page.sources.map((source) => (
@@ -690,7 +774,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
             active={sourceId === source.id}
             label={source.displayName}
             detail={source.accountLabel}
-            count={page.conversations.filter((item) => item.sourceId === source.id).length}
+            count={nonJunkConversations.filter((item) => item.sourceId === source.id).length}
             icon={<ProviderIcon provider={source.provider} />}
             disabled={!source.enabled}
             onClick={() => selectSource(source.id)}
@@ -748,32 +832,64 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                   ))}
                 </optgroup>
               ) : null}
-              {channelContacts.outlook.length ? (
+              {channelContacts.outlook.some((contact) => !contact.junk) ? (
                 <optgroup label="Outlook people">
-                  {channelContacts.outlook.map((contact) => (
-                    <option key={contact.id} value={`contact:${contact.id}`}>
-                      {contact.pinned ? "Pinned · " : contact.unreadCount ? "Unread · " : ""}
-                      {contact.name}
-                    </option>
-                  ))}
+                  {channelContacts.outlook
+                    .filter((contact) => !contact.junk)
+                    .map((contact) => (
+                      <option key={contact.id} value={`contact:${contact.id}`}>
+                        {contact.pinned ? "Pinned · " : contact.unreadCount ? "Unread · " : ""}
+                        {contact.name}
+                      </option>
+                    ))}
+                </optgroup>
+              ) : null}
+              {channelContacts.outlook.some((contact) => contact.junk) ? (
+                <option value="junk-toggle">
+                  {junkGroupExpanded ? "Hide" : "Show"} Junk (
+                  {channelContacts.outlook.filter((contact) => contact.junk).length})
+                </option>
+              ) : null}
+              {junkGroupExpanded ? (
+                <optgroup label="Outlook junk">
+                  {channelContacts.outlook
+                    .filter((contact) => contact.junk)
+                    .map((contact) => (
+                      <option key={contact.id} value={`contact:${contact.id}`}>
+                        Junk · {contact.name}
+                      </option>
+                    ))}
                 </optgroup>
               ) : null}
             </select>
           </label>
-          {selectedChannelContact ? (
-            <Button
-              className={`inbox-mobile-pin${selectedChannelContact.pinned ? " pinned" : ""}`}
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => toggleContactPin(selectedChannelContact.id)}
-              aria-label={`${selectedChannelContact.pinned ? "Unpin" : "Pin"} ${selectedChannelContact.name}`}
-            >
-              <Pin size={14} />
+          <div className="inbox-mobile-actions">
+            {selectedChannelContact && !selectedChannelContact.junk ? (
+              <Button
+                className={`inbox-mobile-pin${selectedChannelContact.pinned ? " pinned" : ""}`}
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => toggleContactPin(selectedChannelContact.id)}
+                aria-label={`${selectedChannelContact.pinned ? "Unpin" : "Pin"} ${selectedChannelContact.name}`}
+              >
+                <Pin size={14} />
+              </Button>
+            ) : null}
+            {selectedChannelContact?.provider === "outlook" ? (
+              <Button
+                className={`inbox-mobile-junk${selectedChannelContact.junk ? " junk" : ""}`}
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => toggleJunkContact(selectedChannelContact.id)}
+                aria-label={`${selectedChannelContact.junk ? "Restore" : "Move"} ${selectedChannelContact.name} ${selectedChannelContact.junk ? "from" : "to"} junk`}
+              >
+                <Ban size={14} />
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="icon-sm" onClick={() => void loadPage()} aria-label="Refresh inbox">
+              {loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
             </Button>
-          ) : null}
-          <Button variant="ghost" size="icon-sm" onClick={() => void loadPage()} aria-label="Refresh inbox">
-            {loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-          </Button>
+          </div>
         </div>
         <div className="inbox-search">
           <Search size={15} />
@@ -904,140 +1020,162 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                   <Loader2 className="spin" size={18} /> Loading conversation…
                 </div>
               ) : null}
-              {conversation.messages.map((message) => (
-                <article className={`inbox-message ${message.direction} ${message.kind}`} key={message.id}>
-                  <div className="inbox-message-heading">
-                    {message.kind === "message" ? (
-                      <div className="inbox-message-toolbar" aria-label="Message actions">
-                        {conversation.pendingPlanMessageId === message.id ? (
+              {conversation.messages.map((message, index) => {
+                const longEmail =
+                  conversation.provider === "outlook" &&
+                  message.kind === "message" &&
+                  isLongEmailMessage(message.content);
+                const expandedEmail = expandedEmailMessageIds.has(message.id);
+                return (
+                  <article
+                    ref={index === conversation.messages.length - 1 ? lastMessageElement : undefined}
+                    className={`inbox-message ${message.direction} ${message.kind}`}
+                    key={message.id}
+                  >
+                    <div className="inbox-message-heading">
+                      {message.kind === "message" ? (
+                        <div className="inbox-message-toolbar" aria-label="Message actions">
+                          {conversation.pendingPlanMessageId === message.id ? (
+                            <button
+                              type="button"
+                              className="inbox-plan-approve"
+                              disabled={Boolean(approvingPlanMessageId)}
+                              onClick={() => void approveTeamsPlan(message.id)}
+                              title="Approve this Teams plan"
+                            >
+                              {approvingPlanMessageId === message.id ? (
+                                <Loader2 className="spin" size={12} />
+                              ) : (
+                                <ThumbsUp size={12} />
+                              )}
+                              Approve plan
+                            </button>
+                          ) : null}
+                          <button type="button" onClick={() => beginReply(message)}>
+                            <ReplyIcon size={12} /> Reply
+                          </button>
                           <button
                             type="button"
-                            className="inbox-plan-approve"
-                            disabled={Boolean(approvingPlanMessageId)}
-                            onClick={() => void approveTeamsPlan(message.id)}
-                            title="Approve this Teams plan"
+                            onClick={() =>
+                              openAiHandoff({
+                                scope: "message",
+                                targetId: message.id,
+                                label: messagePreview(message.content),
+                                instruction: "Forward this message to ",
+                                preferredConnectionId: selectedSource?.connectionId,
+                              })
+                            }
                           >
-                            {approvingPlanMessageId === message.id ? (
+                            <ForwardIcon size={12} /> Forward
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(synapseMessageId)}
+                            onClick={() => void sendToSynapse(message)}
+                          >
+                            {synapseMessageId === message.id ? (
                               <Loader2 className="spin" size={12} />
                             ) : (
-                              <ThumbsUp size={12} />
+                              <BrainCircuit size={12} />
                             )}
-                            Approve plan
+                            Synapse
                           </button>
-                        ) : null}
-                        <button type="button" onClick={() => beginReply(message)}>
-                          <ReplyIcon size={12} /> Reply
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openAiHandoff({
-                              scope: "message",
-                              targetId: message.id,
-                              label: messagePreview(message.content),
-                              instruction: "Forward this message to ",
-                              preferredConnectionId: selectedSource?.connectionId,
-                            })
-                          }
-                        >
-                          <ForwardIcon size={12} /> Forward
-                        </button>
-                        <button
-                          type="button"
-                          disabled={Boolean(synapseMessageId)}
-                          onClick={() => void sendToSynapse(message)}
-                        >
-                          {synapseMessageId === message.id ? (
-                            <Loader2 className="spin" size={12} />
-                          ) : (
-                            <BrainCircuit size={12} />
-                          )}
-                          Synapse
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openAiHandoff({
-                              scope: "message",
-                              targetId: message.id,
-                              label: messagePreview(message.content),
-                              instruction:
-                                "Create a task from this message. Preserve the source message ID in the task details.",
-                              preferredService: "microsoft_todo",
-                            })
-                          }
-                        >
-                          <ListTodo size={12} /> Task
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openAiHandoff({
-                              scope: "message",
-                              targetId: message.id,
-                              label: messagePreview(message.content),
-                            })
-                          }
-                        >
-                          <Sparkles size={12} /> AI
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openAiHandoff({
+                                scope: "message",
+                                targetId: message.id,
+                                label: messagePreview(message.content),
+                                instruction:
+                                  "Create a task from this message. Preserve the source message ID in the task details.",
+                                preferredService: "microsoft_todo",
+                              })
+                            }
+                          >
+                            <ListTodo size={12} /> Task
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openAiHandoff({
+                                scope: "message",
+                                targetId: message.id,
+                                label: messagePreview(message.content),
+                              })
+                            }
+                          >
+                            <Sparkles size={12} /> AI
+                          </button>
+                        </div>
+                      ) : null}
+                      <div className="inbox-message-meta">
+                        {message.kind === "note" ? (
+                          <StickyNote size={13} />
+                        ) : message.kind === "action" ? (
+                          <Bot size={13} />
+                        ) : message.direction === "inbound" ? (
+                          <ContactAvatar label={message.sender.name} size="small" />
+                        ) : (
+                          <ContactAvatar label={message.sender.name} size="small" outgoing />
+                        )}
+                        <strong>{message.sender.name}</strong>
+                        <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+                      </div>
+                    </div>
+                    {message.action ? (
+                      <div className={`inbox-ai-action-heading ${message.action.status}`}>
+                        <span>
+                          <Sparkles size={12} /> {capitalize(message.action.scope)} sent to{" "}
+                          {message.action.connectionName}
+                        </span>
+                        <small>{message.action.instruction}</small>
                       </div>
                     ) : null}
-                    <div className="inbox-message-meta">
-                      {message.kind === "note" ? (
-                        <StickyNote size={13} />
-                      ) : message.kind === "action" ? (
-                        <Bot size={13} />
-                      ) : message.direction === "inbound" ? (
-                        <ContactAvatar label={message.sender.name} size="small" />
-                      ) : (
-                        <ContactAvatar label={message.sender.name} size="small" outgoing />
-                      )}
-                      <strong>{message.sender.name}</strong>
-                      <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+                    <div className={`inbox-message-body${longEmail && !expandedEmail ? " collapsed" : ""}`}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
                     </div>
-                  </div>
-                  {message.action ? (
-                    <div className={`inbox-ai-action-heading ${message.action.status}`}>
-                      <span>
-                        <Sparkles size={12} /> {capitalize(message.action.scope)} sent to{" "}
-                        {message.action.connectionName}
-                      </span>
-                      <small>{message.action.instruction}</small>
-                    </div>
-                  ) : null}
-                  <div className="inbox-message-body">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                  </div>
-                  {message.attachments.length ? (
-                    <div className="inbox-message-files">
-                      {message.attachments.map((attachment) =>
-                        attachment.downloadUrl ? (
-                          <a key={attachment.id} href={attachment.downloadUrl} target="_blank" rel="noreferrer">
-                            <FileText size={14} />
-                            <span>{attachment.name}</span>
-                            <small>{formatBytes(attachment.sizeBytes)}</small>
-                          </a>
-                        ) : (
-                          <span className="inbox-file-error" key={attachment.id} title={attachment.error}>
-                            <AlertCircle size={14} /> {attachment.name}
+                    {longEmail ? (
+                      <button
+                        type="button"
+                        className="inbox-message-more"
+                        onClick={() => toggleEmailMessage(message.id)}
+                        aria-expanded={expandedEmail}
+                      >
+                        {expandedEmail ? "Show less" : "More"}
+                        {expandedEmail ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+                    ) : null}
+                    {message.attachments.length ? (
+                      <div className="inbox-message-files">
+                        {message.attachments.map((attachment) =>
+                          attachment.downloadUrl ? (
+                            <a key={attachment.id} href={attachment.downloadUrl} target="_blank" rel="noreferrer">
+                              <FileText size={14} />
+                              <span>{attachment.name}</span>
+                              <small>{formatBytes(attachment.sizeBytes)}</small>
+                            </a>
+                          ) : (
+                            <span className="inbox-file-error" key={attachment.id} title={attachment.error}>
+                              <AlertCircle size={14} /> {attachment.name}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    ) : null}
+                    {message.action?.activities.length ? (
+                      <div className="inbox-ai-activities">
+                        {message.action.activities.map((activity, index) => (
+                          <span className={activity.ok ? "success" : "failed"} key={`${activity.label}-${index}`}>
+                            {activity.ok ? <CheckCircle2 size={11} /> : <AlertCircle size={11} />}
+                            {activity.label}
                           </span>
-                        ),
-                      )}
-                    </div>
-                  ) : null}
-                  {message.action?.activities.length ? (
-                    <div className="inbox-ai-activities">
-                      {message.action.activities.map((activity, index) => (
-                        <span className={activity.ok ? "success" : "failed"} key={`${activity.label}-${index}`}>
-                          {activity.ok ? <CheckCircle2 size={11} /> : <AlertCircle size={11} />}
-                          {activity.label}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
             </div>
             <form className={`inbox-composer ${composerMode}`} onSubmit={(event) => void submitComposer(event)}>
               <div className="inbox-composer-tabs">
@@ -1446,10 +1584,13 @@ interface ChannelTreeProps {
   expanded: boolean;
   active: boolean;
   activeContactId?: string;
+  junkExpanded?: boolean;
   onToggle(): void;
   onSelect(): void;
   onSelectContact(contact: InboxChannelContact): void;
   onTogglePin(id: string): void;
+  onToggleJunk?(id: string): void;
+  onToggleJunkGroup?(): void;
 }
 
 function ChannelTree(props: ChannelTreeProps): ReactNode {
@@ -1483,10 +1624,24 @@ function ChannelTree(props: ChannelTreeProps): ReactNode {
         <div className="inbox-channel-contacts" role="tree" aria-label={`${props.label} people`}>
           {groups.map((group) => (
             <div className="inbox-channel-contact-group" role="group" aria-label={group.label} key={group.label}>
-              <span className="inbox-channel-contact-group-title">{group.label}</span>
-              {group.contacts.map((contact) => (
+              {group.label === "Junk" ? (
+                <button
+                  type="button"
+                  className="inbox-channel-junk-group"
+                  onClick={props.onToggleJunkGroup}
+                  aria-expanded={props.junkExpanded}
+                >
+                  {props.junkExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                  <Ban size={11} />
+                  <span>Junk</span>
+                  <small>{group.contacts.length}</small>
+                </button>
+              ) : (
+                <span className="inbox-channel-contact-group-title">{group.label}</span>
+              )}
+              {(group.label !== "Junk" || props.junkExpanded ? group.contacts : []).map((contact) => (
                 <div
-                  className={`inbox-channel-contact${props.activeContactId === contact.id ? " active" : ""}`}
+                  className={`inbox-channel-contact${contact.junk ? " junk" : ""}${props.activeContactId === contact.id ? " active" : ""}`}
                   role="treeitem"
                   aria-selected={props.activeContactId === contact.id}
                   key={contact.id}
@@ -1511,15 +1666,30 @@ function ChannelTree(props: ChannelTreeProps): ReactNode {
                       <span className="inbox-channel-conversation-count">{contact.conversationCount}</span>
                     ) : null}
                   </button>
-                  <button
-                    type="button"
-                    className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
-                    onClick={() => props.onTogglePin(contact.id)}
-                    aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-                    title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-                  >
-                    <Pin size={11} />
-                  </button>
+                  <span className="inbox-channel-contact-actions">
+                    {!contact.junk ? (
+                      <button
+                        type="button"
+                        className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
+                        onClick={() => props.onTogglePin(contact.id)}
+                        aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                        title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                      >
+                        <Pin size={11} />
+                      </button>
+                    ) : null}
+                    {props.provider === "outlook" ? (
+                      <button
+                        type="button"
+                        className={`inbox-channel-junk${contact.junk ? " junk" : ""}`}
+                        onClick={() => props.onToggleJunk?.(contact.id)}
+                        aria-label={`${contact.junk ? "Restore emails from" : "Hide emails from"} ${contact.name}`}
+                        title={`${contact.junk ? "Restore emails from" : "Hide emails from"} ${contact.name}`}
+                      >
+                        <Ban size={11} />
+                      </button>
+                    ) : null}
+                  </span>
                 </div>
               ))}
             </div>
@@ -1669,10 +1839,20 @@ function readPinnedContactIds(): Set<string> {
   }
 }
 
+function readJunkContactIds(): Set<string> {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(inboxJunkContactsStorageKey) ?? "[]") as unknown;
+    return new Set(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 function buildChannelContacts(
   conversations: InboxConversationSummary[],
   provider: InboxProvider,
   pinnedContactIds: Set<string>,
+  junkContactIds: Set<string>,
 ): InboxChannelContact[] {
   const contacts = new Map<string, InboxChannelContact>();
   for (const conversation of conversations) {
@@ -1699,10 +1879,12 @@ function buildChannelContacts(
         conversationCount: 1,
         unreadCount: conversation.unread ? 1 : 0,
         pinned: pinnedContactIds.has(id),
+        junk: provider === "outlook" && junkContactIds.has(id),
       });
     }
   }
   return [...contacts.values()].sort((left, right) => {
+    if (left.junk !== right.junk) return left.junk ? 1 : -1;
     if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
     if (Boolean(left.unreadCount) !== Boolean(right.unreadCount)) return left.unreadCount ? -1 : 1;
     return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
@@ -1711,9 +1893,16 @@ function buildChannelContacts(
 
 function channelContactGroups(contacts: InboxChannelContact[]): InboxChannelContactGroup[] {
   const groups: InboxChannelContactGroup[] = [
-    { label: "Pinned", contacts: contacts.filter((contact) => contact.pinned) },
-    { label: "Unread", contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount > 0) },
-    { label: "A–Z", contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount === 0) },
+    { label: "Pinned", contacts: contacts.filter((contact) => contact.pinned && !contact.junk) },
+    {
+      label: "Unread",
+      contacts: contacts.filter((contact) => !contact.pinned && !contact.junk && contact.unreadCount > 0),
+    },
+    {
+      label: "A–Z",
+      contacts: contacts.filter((contact) => !contact.pinned && !contact.junk && contact.unreadCount === 0),
+    },
+    { label: "Junk", contacts: contacts.filter((contact) => contact.junk) },
   ];
   return groups.filter((group) => group.contacts.length > 0);
 }
@@ -1721,6 +1910,14 @@ function channelContactGroups(contacts: InboxChannelContact[]): InboxChannelCont
 function conversationHasContact(conversation: InboxConversationSummary, key: string): boolean {
   const participants = conversation.participants.length ? conversation.participants : [{ name: conversation.title }];
   return participants.some((participant) => inboxContactKey(participant) === key);
+}
+
+function isJunkConversation(conversation: InboxConversationSummary, junkContactIds: Set<string>): boolean {
+  if (conversation.provider !== "outlook") return false;
+  const participants = conversation.participants.length ? conversation.participants : [{ name: conversation.title }];
+  return participants.some((participant) =>
+    junkContactIds.has(inboxContactId("outlook", inboxContactKey(participant))),
+  );
 }
 
 function inboxContactKey(participant: InboxParticipant): string {
@@ -1864,6 +2061,10 @@ function chooseHandoffConnection(
 function messagePreview(content: string): string {
   const compact = content.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact || "Selected message";
+}
+
+function isLongEmailMessage(content: string): boolean {
+  return content.length > 900 || content.split(/\r?\n/).length > 14;
 }
 
 function initials(name: string): string {
