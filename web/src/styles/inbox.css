@@ -211,7 +211,7 @@
 .inbox-channel-contact-select,
 .inbox-channel-pin,
 .inbox-channel-junk,
-.inbox-channel-junk-group {
+.inbox-channel-contact-group-toggle {
   border: 0;
   background: transparent;
   color: var(--foreground);
@@ -287,18 +287,9 @@
   margin-top: 5px;
 }
 
-.inbox-channel-contact-group-title {
-  padding: 4px 6px 2px;
-  color: var(--muted-foreground);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.inbox-channel-junk-group {
+.inbox-channel-contact-group-toggle {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
   min-height: 26px;
@@ -309,20 +300,27 @@
   text-align: left;
 }
 
-.inbox-channel-junk-group:hover {
+.inbox-channel-contact-group-toggle:hover {
   background: var(--accent);
   color: var(--foreground);
 }
 
-.inbox-channel-junk-group span {
+.inbox-channel-contact-group-toggle span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.inbox-channel-junk-group small {
+.inbox-channel-contact-group-toggle small {
   font-size: 8px;
+}
+
+.inbox-channel-contact-group-toggle.junk span {
+  color: var(--destructive);
 }
 
 .inbox-channel-contact {
@@ -367,6 +365,28 @@
   font-size: 8px;
 }
 
+.inbox-channel-contact-select .inbox-channel-contact-providers {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.inbox-channel-contact-providers > span {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--brand) 10%, var(--background));
+  color: var(--brand);
+}
+
+.inbox-channel-contact-providers svg {
+  width: 9px;
+  height: 9px;
+}
+
 .inbox-channel-contact-actions {
   display: flex;
   align-items: center;
@@ -406,8 +426,7 @@
 }
 
 .inbox-channel-junk:hover,
-.inbox-channel-junk.junk,
-.inbox-mobile-junk.junk {
+.inbox-channel-junk.junk {
   color: var(--destructive);
   opacity: 1;
 }
@@ -565,6 +584,73 @@
   overflow-y: auto;
 }
 
+.inbox-person-conversations {
+  border-bottom: 1px solid var(--border);
+}
+
+.inbox-person-conversations > header {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 7px;
+  background: color-mix(in oklab, var(--muted) 38%, var(--background));
+}
+
+.inbox-person-conversations > header > .inbox-contact-avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 9px;
+}
+
+.inbox-person-conversations > header > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.inbox-person-conversations > header strong,
+.inbox-person-conversations > header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-person-conversations > header strong {
+  font-size: 11px;
+}
+
+.inbox-person-conversations > header small {
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.inbox-person-providers {
+  display: flex;
+  gap: 3px;
+}
+
+.inbox-person-providers > span {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--brand) 11%, var(--background));
+  color: var(--brand);
+}
+
+.inbox-person-providers svg {
+  width: 10px;
+  height: 10px;
+}
+
+.inbox-person-pinned,
+.inbox-list-pinned {
+  color: var(--brand);
+  fill: currentColor;
+}
+
 .inbox-list-item {
   position: relative;
   display: grid;
@@ -578,6 +664,19 @@
   color: var(--foreground);
   text-align: left;
   cursor: pointer;
+}
+
+.inbox-list-item.grouped {
+  grid-template-columns: 28px minmax(0, 1fr);
+  padding: 9px 12px 9px 22px;
+  border-bottom-color: color-mix(in oklab, var(--border) 65%, transparent);
+}
+
+.inbox-list-item.grouped > .inbox-contact-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  font-size: 8px;
 }
 
 .inbox-list-item:hover,
@@ -687,6 +786,9 @@
   gap: 10px;
 }
 .inbox-list-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1802,15 +1904,14 @@
   }
   .inbox-mobile-bar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(110px, auto) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     min-height: 56px;
     gap: 8px;
     padding: 8px 10px;
     border-bottom: 1px solid var(--border);
   }
-  .inbox-mobile-bar > div,
-  .inbox-mobile-bar label {
+  .inbox-mobile-bar > div {
     display: grid;
     min-width: 0;
     gap: 1px;
@@ -1818,34 +1919,42 @@
   .inbox-mobile-bar strong {
     font-size: 14px;
   }
-  .inbox-mobile-bar small,
-  .inbox-mobile-bar label span {
+  .inbox-mobile-bar small {
     overflow: hidden;
     color: var(--muted-foreground);
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 9px;
   }
-  .inbox-mobile-bar select {
-    width: 100%;
-    min-width: 0;
-    padding: 5px 7px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--background);
-    color: var(--foreground);
-    font-size: 10px;
+  .inbox-list-item {
+    grid-template-columns: 42px minmax(0, 1fr);
+    min-height: 92px;
+    gap: 11px;
+    padding: 14px 12px;
   }
-  .inbox-mobile-pin.pinned {
-    color: var(--brand);
+  .inbox-list-item > .inbox-contact-avatar {
+    width: 42px;
+    height: 42px;
+    font-size: 12px;
   }
-  .inbox-mobile-pin.pinned svg {
-    fill: currentColor;
+  .inbox-list-item.grouped {
+    grid-template-columns: 32px minmax(0, 1fr);
+    min-height: 72px;
+    padding: 10px 12px 10px 22px;
   }
-  .inbox-mobile-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
+  .inbox-list-item.grouped > .inbox-contact-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 9px;
+  }
+  .inbox-list-copy {
+    gap: 3px;
+  }
+  .inbox-list-copy strong {
+    font-size: 13px;
+  }
+  .inbox-list-copy p {
+    font-size: 12px;
   }
   .inbox-mobile-back {
     display: inline-flex;
