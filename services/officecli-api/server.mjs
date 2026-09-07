@@ -490,11 +490,28 @@ async function runOfficeCli(args) {
 }
 
 async function saveOfficeCliDocument(target) {
-  return runOfficeCli(["save", target, "--json"]);
+  return runOfficeCliResidentCommand("save", target);
 }
 
 async function closeOfficeCliDocument(target) {
-  return runOfficeCli(["close", target, "--json"]);
+  return runOfficeCliResidentCommand("close", target);
+}
+
+async function runOfficeCliResidentCommand(command, target) {
+  try {
+    return await runOfficeCli([command, target, "--json"]);
+  } catch (error) {
+    if (isNoResidentError(error)) return { stdout: "", stderr: "" };
+    throw error;
+  }
+}
+
+function isNoResidentError(error) {
+  return (
+    error instanceof HttpError &&
+    error.code === "officecli_error" &&
+    error.message.startsWith("No resident running for ")
+  );
 }
 
 async function fileExists(target) {
@@ -554,7 +571,10 @@ function readCliErrorMessage(output) {
   if (!output || typeof output !== "object" || Array.isArray(output)) return undefined;
   const error = output.error;
   if (typeof error === "string") return error;
-  if (error && typeof error === "object" && typeof error.message === "string") return error.message;
+  if (error && typeof error === "object") {
+    if (typeof error.message === "string") return error.message;
+    if (typeof error.error === "string") return error.error;
+  }
   return typeof output.message === "string" ? output.message : undefined;
 }
 
