@@ -155,6 +155,10 @@ Docker includes Sayna voice input and spoken Chat replies in the Open Connector 
 choose **Set up voice**, and save an ElevenLabs API key in the server credential store. See
 [`docs/configuration.md`](docs/configuration.md#sayna-voice-chat) for details.
 
+To give agents a private Word, Excel, and PowerPoint workspace, run the optional OfficeCLI API
+companion beside Open Connector and connect the built-in `officecli` provider. See
+[`docs/officecli.md`](docs/officecli.md).
+
 Open the local console and generated API reference:
 
 ```text
@@ -255,6 +259,7 @@ Issues and pull requests are welcome.
 - [Credentials and OAuth](docs/credentials.md)
 - [Microsoft Teams gateway](docs/teams-gateway.md)
 - [Microsoft Graph Admin](docs/microsoft-graph-admin.md)
+- [OfficeCLI companion API](docs/officecli.md)
 - [Catalog format](docs/catalog-format.md)
 - [Verification language](docs/verification.md)
 - [Contributing](CONTRIBUTING.md)
