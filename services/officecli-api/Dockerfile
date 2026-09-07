@@ -6,7 +6,11 @@ LABEL org.opencontainers.image.title="Open Connector OfficeCLI API" \
       org.opencontainers.image.description="Authenticated HTTP facade for OfficeCLI" \
       org.opencontainers.image.source="https://github.com/oomol-lab/open-connector"
 
-RUN npm install --global --omit=dev "@officecli/officecli@${OFFICECLI_VERSION}" \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libicu72 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install --global --omit=dev --allow-scripts=@officecli/officecli "@officecli/officecli@${OFFICECLI_VERSION}" \
     && OFFICECLI_SKIP_UPDATE=1 officecli --version \
     && npm cache clean --force \
     && mkdir -p /app /documents \
