@@ -91,9 +91,14 @@ async function routeRequest(request, response) {
     const command = requiredString(input.command, "command").toLowerCase();
     const args = await buildOfficeCliArguments(command, input);
     const result = await runOfficeCli(args);
+    const warnings = parseWarnings(result.stderr);
+    if (command === "batch") {
+      const flushResult = await saveOfficeCliDocument(args[1]);
+      warnings.push(...parseWarnings(flushResult.stderr));
+    }
     return sendJson(response, 200, {
       result: parseOfficeCliOutput(result.stdout),
-      warnings: parseWarnings(result.stderr),
+      warnings,
     });
   }
 
@@ -156,6 +161,7 @@ async function uploadDocument(request, response, document) {
   const bytes = await readRequestBytes(request, maxRequestBytes);
   await mkdir(dirname(target), { recursive: true });
   await assertNoSymbolicLinkSegments(target, true);
+  if (await fileExists(target)) await closeOfficeCliDocument(target);
   const temporaryPath = `${target}.upload-${process.pid}-${Date.now()}`;
   try {
     await writeFile(temporaryPath, bytes, { flag: "wx" });
@@ -168,6 +174,7 @@ async function uploadDocument(request, response, document) {
 
 async function downloadDocument(response, document) {
   const target = await resolveManagedPath(document, { requireDocument: true, mustExist: true });
+  await saveOfficeCliDocument(target);
   const fileStats = await stat(target).catch((error) => {
     if (error?.code === "ENOENT") throw new HttpError(404, "Document not found", "not_found");
     throw error;
@@ -190,6 +197,7 @@ async function deleteDocument(response, document) {
     throw error;
   });
   if (!fileStats.isFile()) throw new HttpError(404, "Document not found", "not_found");
+  await closeOfficeCliDocument(target);
   await rm(target);
   sendJson(response, 200, { deleted: true, document });
 }
@@ -233,7 +241,11 @@ async function buildOfficeCliArguments(command, input) {
     await mkdir(dirname(output), { recursive: true });
     await assertNoSymbolicLinkSegments(output, true);
     const args = ["merge", template, output, "--data", JSON.stringify(input.data)];
-    if (optionalBoolean(input.force, "force")) args.push("--force");
+    const force = optionalBoolean(input.force, "force");
+    if (force) {
+      if (await fileExists(output)) await closeOfficeCliDocument(output);
+      args.push("--force");
+    }
     args.push("--json");
     return args;
   }
@@ -249,7 +261,11 @@ async function buildOfficeCliArguments(command, input) {
       await mkdir(dirname(target), { recursive: true });
       await assertNoSymbolicLinkSegments(target, true);
       const args = ["create", target];
-      if (optionalBoolean(input.force, "force")) args.push("--force");
+      const force = optionalBoolean(input.force, "force");
+      if (force) {
+        if (await fileExists(target)) await closeOfficeCliDocument(target);
+        args.push("--force");
+      }
       args.push("--json");
       return args;
     }
@@ -410,7 +426,11 @@ async function runOfficeCli(args) {
   const release = await acquireCommandSlot();
   try {
     return await new Promise((resolvePromise, rejectPromise) => {
-      const childEnvironment = { ...process.env, OFFICECLI_SKIP_UPDATE: "1" };
+      const childEnvironment = {
+        ...process.env,
+        OFFICECLI_RESIDENT_FLUSH: "each",
+        OFFICECLI_SKIP_UPDATE: "1",
+      };
       delete childEnvironment.OFFICECLI_API_TOKEN;
       const child = spawn(officeCliBinary, args, {
         cwd: resolvedDocumentRoot,
@@ -467,6 +487,24 @@ async function runOfficeCli(args) {
   } finally {
     release();
   }
+}
+
+async function saveOfficeCliDocument(target) {
+  return runOfficeCli(["save", target, "--json"]);
+}
+
+async function closeOfficeCliDocument(target) {
+  return runOfficeCli(["close", target, "--json"]);
+}
+
+async function fileExists(target) {
+  return lstat(target).then(
+    () => true,
+    (error) => {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    },
+  );
 }
 
 async function detectOfficeCliVersion() {

@@ -64,6 +64,9 @@ The provider includes Actions to:
 
 Uploads and downloads use Open Connector transit files, so an agent can move documents between
 OfficeCLI and other connected providers without direct access to either container's filesystem.
+Structured edits are flushed to disk before the Action returns, and downloads perform another save
+barrier before streaming the file. This ensures a file exported to SharePoint or another connector
+contains the latest OfficeCLI changes even when OfficeCLI is using a resident document process.
 
 ## HTTP API
 
