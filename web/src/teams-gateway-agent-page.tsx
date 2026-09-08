@@ -182,7 +182,7 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
               >
                 {teamsConnections.map((connection) => (
                   <option key={connection.id} value={connection.id}>
-                    {connectionLabel(connection)}
+                    {connectionSelectLabel(connection)}
                   </option>
                 ))}
               </select>
@@ -265,8 +265,8 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
                     onChange={() => toggleToolConnection(connection.id)}
                   />
                   <span>
-                    <strong>{connectionLabel(connection)}</strong>
-                    <small>{connection.service}</small>
+                    <strong>{connectionConfiguredName(connection)}</strong>
+                    <small>{connectionDetails(connection)}</small>
                   </span>
                 </label>
               ))}
@@ -373,12 +373,24 @@ function usableConnections(connections: ConnectionRecord[]): Array<ConnectionRec
   );
 }
 
-function connectionLabel(connection: ConnectionRecord): string {
-  const displayName =
-    connection.profile && typeof connection.profile.displayName === "string"
-      ? connection.profile.displayName
-      : undefined;
-  return displayName ?? connection.connectionName ?? connection.service;
+function connectionConfiguredName(connection: ConnectionRecord): string {
+  return connection.connectionName?.trim() || connectionProfileName(connection) || connection.service;
+}
+
+function connectionDetails(connection: ConnectionRecord): string {
+  const profileName = connectionProfileName(connection);
+  return profileName && profileName !== connectionConfiguredName(connection)
+    ? `${profileName} · ${connection.service}`
+    : connection.service;
+}
+
+function connectionSelectLabel(connection: ConnectionRecord): string {
+  return `${connectionConfiguredName(connection)} — ${connectionDetails(connection)}`;
+}
+
+function connectionProfileName(connection: ConnectionRecord): string | undefined {
+  const displayName = connection.profile?.displayName;
+  return typeof displayName === "string" && displayName.trim() ? displayName.trim() : undefined;
 }
 
 function csv(value: string): string[] {

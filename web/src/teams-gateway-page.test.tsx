@@ -13,10 +13,19 @@ const data: AppData = {
     {
       id: "teams-connection",
       service: "microsoft_teams",
-      connectionName: "default",
+      connectionName: "project-manager-agent",
       authType: "oauth2",
       configured: true,
       profile: { displayName: "agent@company.test" },
+      metadata: {},
+    },
+    {
+      id: "outlook-connection",
+      service: "outlook",
+      connectionName: "operations-shared-mailbox",
+      authType: "oauth2",
+      configured: true,
+      profile: { displayName: "helpdesk@company.test" },
       metadata: {},
     },
   ],
@@ -57,6 +66,9 @@ describe("Teams gateway routes", () => {
     expect(html).toContain("Create a Teams agent");
     expect(html).toContain('href="/teams-gateway"');
     expect(html).toContain("Save agent");
+    expect(html).toContain("operations-shared-mailbox");
+    expect(html).toContain("helpdesk@company.test · outlook");
+    expect(html).toContain("project-manager-agent — agent@company.test · microsoft_teams");
     expect(html).not.toContain('data-slot="dialog-content"');
   });
 });
