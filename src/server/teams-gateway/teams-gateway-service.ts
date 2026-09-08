@@ -1305,7 +1305,7 @@ export class TeamsGatewayService {
       },
       connectorGrants: agent.toolGrants.map((grant) => ({
         connectionId: grant.connectionId,
-        actionIds: new Set(grant.actionIds),
+        actionIds: new Set(this.currentToolActionIds(grant)),
       })),
       connectorApprovalPolicy: "enforce",
       includeFlowTools: false,
@@ -1936,13 +1936,7 @@ export class TeamsGatewayService {
       const requested = Array.isArray(grant.actionIds)
         ? readTextArray(grant.actionIds, `toolGrants[${index}].actionIds`, 0, 5_000, 300)
         : [];
-      const available = this.options.catalog.actions.filter(
-        (action) =>
-          action.service === connection.service &&
-          action.execution.locallyExecutable &&
-          action.inputSchema.type === "object" &&
-          action.id !== sendChatActionId,
-      );
+      const available = this.availableToolActions(connection.service);
       const allowed = requested.length ? new Set(requested) : new Set(available.map((action) => action.id));
       const actionIds = available.filter((action) => allowed.has(action.id)).map((action) => action.id);
       if (requested.some((actionId) => !actionIds.includes(actionId))) {
@@ -1953,6 +1947,27 @@ export class TeamsGatewayService {
       }
       return { connectionId, actionIds };
     });
+  }
+
+  private currentToolActionIds(grant: TeamsGatewayToolGrant): string[] {
+    const services = new Set(
+      grant.actionIds.flatMap((actionId) => {
+        const action = this.options.catalog.actionsById.get(actionId);
+        return action ? [action.service] : [];
+      }),
+    );
+    if (services.size !== 1) return grant.actionIds;
+    return this.availableToolActions([...services][0]!).map((action) => action.id);
+  }
+
+  private availableToolActions(service: string): CatalogStore["actions"] {
+    return this.options.catalog.actions.filter(
+      (action) =>
+        action.service === service &&
+        action.execution.locallyExecutable &&
+        action.inputSchema.type === "object" &&
+        action.id !== sendChatActionId,
+    );
   }
 
   private withOperationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {

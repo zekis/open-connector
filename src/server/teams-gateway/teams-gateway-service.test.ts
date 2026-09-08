@@ -23,6 +23,7 @@ import type {
 
 import { describe, expect, it, vi } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
+import { provider as officeCliProvider } from "../../providers/officecli/definition.ts";
 import { providerFetch } from "../../providers/provider-runtime.ts";
 import { TeamsGatewayService } from "./teams-gateway-service.ts";
 
@@ -50,6 +51,21 @@ const teamsConnection: ConnectionSummary = {
       "Files.ReadWrite.All",
       "Sites.ReadWrite.All",
     ],
+  },
+};
+
+const officeCliConnection: ConnectionSummary = {
+  id: "officecli-connection",
+  service: "officecli",
+  connectionName: "default",
+  authType: "api_key",
+  configured: true,
+  virtual: false,
+  default: true,
+  profile: {
+    accountId: "officecli-api",
+    displayName: "OfficeCLI production",
+    grantedScopes: [],
   },
 };
 
@@ -211,6 +227,38 @@ describe("TeamsGatewayService", () => {
       chatId: "chat-1",
       firstInboundAt: "2026-09-01T01:00:00.000Z",
     });
+  });
+
+  it("adds newly catalogued actions to an enabled provider connection", async () => {
+    const previousActionIds = officeCliProvider.actions
+      .filter((action) => action.id !== "officecli.duplicate_worksheet")
+      .map((action) => action.id);
+    const store = new MemoryTeamsGatewayStore([
+      createAgent({
+        confirmBeforeTools: false,
+        toolGrants: [{ connectionId: officeCliConnection.id, actionIds: previousActionIds }],
+      }),
+    ]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Duplicate the July worksheet."),
+    ]);
+    const chat = new FakeAgentChat([completedResponse("The worksheet was duplicated.")]);
+    const catalog = createCatalogStore([officeCliProvider], {
+      executableActionIds: officeCliProvider.actions.map((action) => action.id),
+    });
+    const service = createService(store, graph, chat, undefined, undefined, {
+      catalog,
+      connections: [teamsConnection, officeCliConnection],
+    });
+
+    await service.pollNow();
+
+    expect(chat.respondExtensions[0]?.connectorGrants).toEqual([
+      {
+        connectionId: officeCliConnection.id,
+        actionIds: new Set(officeCliProvider.actions.map((action) => action.id)),
+      },
+    ]);
   });
 
   it("suppresses its own message when Graph reports a different sender ID", async () => {
@@ -907,16 +955,22 @@ function createService(
   agentChat: FakeAgentChat,
   approvals = new FakeApprovals(),
   files = new MemoryTransitFiles(),
-  options: { publicOrigin?: string; now?: () => Date } = {},
+  options: {
+    publicOrigin?: string;
+    now?: () => Date;
+    catalog?: CatalogStore;
+    connections?: ConnectionSummary[];
+  } = {},
 ): TeamsGatewayService {
+  const connections = options.connections ?? [teamsConnection];
   return new TeamsGatewayService({
-    catalog: createCatalogStore([], { executableActionIds: [] }) as CatalogStore,
+    catalog: options.catalog ?? (createCatalogStore([], { executableActionIds: [] }) as CatalogStore),
     connections: {
       async getConnectionSummaryById(id) {
-        return id === teamsConnection.id ? teamsConnection : undefined;
+        return connections.find((connection) => connection.id === id);
       },
       async listConnections() {
-        return [teamsConnection];
+        return connections;
       },
     },
     agents: {
