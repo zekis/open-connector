@@ -56,6 +56,8 @@ The provider includes Actions to:
 
 - List, upload, download, and delete documents.
 - Create blank Word, Excel, and PowerPoint files.
+- Duplicate an Excel worksheet while preserving its cells, formulas, layout, styles, hidden rows, and print settings.
+  Worksheets containing images, charts, tables, or pivots are rejected instead of silently producing a lossy copy.
 - Read a DOM path, query elements, or view text, outlines, statistics, issues, forms, HTML, and SVG.
 - Apply atomic structured batch edits.
 - Merge `{{key}}` templates into new documents.
@@ -101,7 +103,8 @@ The API endpoints are:
 | `DELETE` | `/v1/documents/{path}` | Delete an Office document                           |
 | `POST`   | `/v1/commands`         | Run a structured, allow-listed OfficeCLI operation  |
 
-`/v1/commands` accepts `create`, `get`, `query`, `view`, `batch`, `merge`, `validate`, `dump`, and `help`.
+`/v1/commands` accepts `create`, `duplicate_worksheet`, `get`, `query`, `view`, `batch`, `merge`, `validate`,
+`dump`, and `help`.
 It does not accept shell text or arbitrary command-line arguments.
 
 ## Security Boundary

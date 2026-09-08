@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.title="Open Connector OfficeCLI API" \
       org.opencontainers.image.source="https://github.com/oomol-lab/open-connector"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libicu72 \
+    && apt-get install -y --no-install-recommends ca-certificates libicu72 python3 python3-openpyxl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install --global --omit=dev --allow-scripts=@officecli/officecli "@officecli/officecli@${OFFICECLI_VERSION}" \
@@ -17,6 +17,7 @@ RUN npm install --global --omit=dev --allow-scripts=@officecli/officecli "@offic
     && chown -R node:node /app /documents
 
 COPY --chown=node:node services/officecli-api/server.mjs /app/server.mjs
+COPY --chown=node:node services/officecli-api/duplicate-worksheet.py /app/duplicate-worksheet.py
 
 ENV NODE_ENV=production \
     HOME=/tmp/officecli-home \

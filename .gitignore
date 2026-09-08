@@ -13,4 +13,6 @@ src/providers/registry*.generated.ts
 .DS_Store
 *.log
 *.tsbuildinfo
+*.pyc
+__pycache__/
 data/

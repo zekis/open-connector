@@ -79,6 +79,17 @@ export const officeCliActionHandlers: Record<string, OfficeCliActionHandler> = {
       context,
     );
   },
+  duplicate_worksheet(input, context) {
+    return runOfficeCliCommand(
+      {
+        command: "duplicate_worksheet",
+        document: readDocumentPath(input.document),
+        sourceWorksheet: requiredInputString(input.sourceWorksheet, "sourceWorksheet"),
+        destinationWorksheet: requiredInputString(input.destinationWorksheet, "destinationWorksheet"),
+      },
+      context,
+    );
+  },
   get_document_element(input, context) {
     return runOfficeCliCommand(
       {

@@ -9,6 +9,7 @@ const port = readIntegerEnvironment("OFFICECLI_API_PORT", 3030, 1, 65_535);
 const documentRoot = resolve(process.env.OFFICECLI_DOCUMENT_ROOT || "/documents");
 const apiToken = requiredEnvironment("OFFICECLI_API_TOKEN");
 const officeCliBinary = process.env.OFFICECLI_BINARY || "officecli";
+const duplicateWorksheetScript = process.env.OFFICECLI_DUPLICATE_WORKSHEET_SCRIPT || "/app/duplicate-worksheet.py";
 const maxRequestBytes = readIntegerEnvironment("OFFICECLI_MAX_REQUEST_BYTES", 100 * 1024 * 1024, 1, 1024 * 1024 * 1024);
 const maxOutputBytes = readIntegerEnvironment("OFFICECLI_MAX_OUTPUT_BYTES", 20 * 1024 * 1024, 1, 256 * 1024 * 1024);
 const commandTimeoutMs = readIntegerEnvironment("OFFICECLI_COMMAND_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
@@ -89,6 +90,9 @@ async function routeRequest(request, response) {
   if (method === "POST" && requestUrl.pathname === "/v1/commands") {
     const input = await readJsonBody(request);
     const command = requiredString(input.command, "command").toLowerCase();
+    if (command === "duplicate_worksheet") {
+      return sendJson(response, 200, await duplicateWorksheet(input));
+    }
     const args = await buildOfficeCliArguments(command, input);
     const result = await runOfficeCli(args);
     const warnings = parseWarnings(result.stderr);
@@ -210,6 +214,24 @@ async function describeDocument(target) {
     extension: extname(target).toLowerCase(),
     sizeBytes: fileStats.size,
     modifiedAt: fileStats.mtime.toISOString(),
+  };
+}
+
+async function duplicateWorksheet(input) {
+  const target = await resolveManagedPath(requiredString(input.document, "document"), {
+    requireDocument: true,
+    mustExist: true,
+  });
+  if (extname(target).toLowerCase() !== ".xlsx") {
+    throw new HttpError(400, "duplicate_worksheet requires an .xlsx document", "unsupported_format");
+  }
+  const sourceWorksheet = requiredString(input.sourceWorksheet, "sourceWorksheet");
+  const destinationWorksheet = requiredString(input.destinationWorksheet, "destinationWorksheet");
+  await closeOfficeCliDocument(target);
+  const result = await runWorksheetDuplicator([target, sourceWorksheet, destinationWorksheet]);
+  return {
+    result: parseOfficeCliOutput(result.stdout),
+    warnings: parseWarnings(result.stderr),
   };
 }
 
@@ -423,17 +445,27 @@ async function assertNoSymbolicLinkSegments(target, includeLeaf) {
 }
 
 async function runOfficeCli(args) {
+  const childEnvironment = {
+    ...process.env,
+    OFFICECLI_BATCH_ALLOW_STDIN_REDIRECT: "1",
+    OFFICECLI_RESIDENT_FLUSH: "each",
+    OFFICECLI_SKIP_UPDATE: "1",
+  };
+  delete childEnvironment.OFFICECLI_API_TOKEN;
+  return runManagedCommand(officeCliBinary, args, childEnvironment, "OfficeCLI");
+}
+
+async function runWorksheetDuplicator(args) {
+  const childEnvironment = { ...process.env, PYTHONDONTWRITEBYTECODE: "1" };
+  delete childEnvironment.OFFICECLI_API_TOKEN;
+  return runManagedCommand("python3", [duplicateWorksheetScript, ...args], childEnvironment, "Worksheet duplicator");
+}
+
+async function runManagedCommand(binary, args, childEnvironment, label) {
   const release = await acquireCommandSlot();
   try {
     return await new Promise((resolvePromise, rejectPromise) => {
-      const childEnvironment = {
-        ...process.env,
-        OFFICECLI_BATCH_ALLOW_STDIN_REDIRECT: "1",
-        OFFICECLI_RESIDENT_FLUSH: "each",
-        OFFICECLI_SKIP_UPDATE: "1",
-      };
-      delete childEnvironment.OFFICECLI_API_TOKEN;
-      const child = spawn(officeCliBinary, args, {
+      const child = spawn(binary, args, {
         cwd: resolvedDocumentRoot,
         env: childEnvironment,
         shell: false,
@@ -465,21 +497,19 @@ async function runOfficeCli(args) {
       });
       child.on("error", (error) => {
         clearTimeout(timeout);
-        rejectPromise(new HttpError(502, `Could not start OfficeCLI: ${error.message}`, "command_start_failed"));
+        rejectPromise(new HttpError(502, `Could not start ${label}: ${error.message}`, "command_start_failed"));
       });
       child.on("close", (exitCode, signal) => {
         clearTimeout(timeout);
         const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
         const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
         if (outputExceeded) {
-          rejectPromise(
-            new HttpError(413, "OfficeCLI command output exceeded the configured limit", "output_too_large"),
-          );
+          rejectPromise(new HttpError(413, `${label} output exceeded the configured limit`, "output_too_large"));
         } else if (signal === "SIGKILL") {
-          rejectPromise(new HttpError(504, "OfficeCLI command timed out", "command_timeout"));
+          rejectPromise(new HttpError(504, `${label} timed out`, "command_timeout"));
         } else if (exitCode !== 0) {
           const parsed = parseOfficeCliOutput(stdout);
-          const message = readCliErrorMessage(parsed) || stderr || `OfficeCLI exited with code ${exitCode}`;
+          const message = readCliErrorMessage(parsed) || stderr || `${label} exited with code ${exitCode}`;
           rejectPromise(new HttpError(422, boundedMessage(message), "officecli_error", { exitCode, output: parsed }));
         } else {
           resolvePromise({ stdout, stderr });

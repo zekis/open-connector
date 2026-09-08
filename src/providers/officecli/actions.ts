@@ -141,6 +141,20 @@ export const officeCliActions: ProviderActionDefinition[] = [
     outputSchema: commandResultOutputSchema,
   }),
   defineProviderAction(service, {
+    name: "duplicate_worksheet",
+    description:
+      "Duplicate an Excel worksheet in the same workbook, preserving its cells, formulas, styles, merged ranges, dimensions, hidden rows, validation, conditional formatting, and print settings. The new worksheet is inserted immediately after the source. Worksheets containing images, charts, tables, or pivots are rejected instead of producing a lossy copy.",
+    inputSchema: s.actionInput(
+      {
+        document: documentPathSchema,
+        sourceWorksheet: s.nonEmptyString("The existing worksheet name to duplicate."),
+        destinationWorksheet: s.nonEmptyString("The unique name for the duplicated worksheet."),
+      },
+      ["document", "sourceWorksheet", "destinationWorksheet"],
+    ),
+    outputSchema: commandResultOutputSchema,
+  }),
+  defineProviderAction(service, {
     name: "get_document_element",
     description: "Read an OfficeCLI document DOM element and a bounded number of child levels.",
     inputSchema: s.actionInput(
