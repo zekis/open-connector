@@ -16,7 +16,7 @@ const maximumConcurrentCommands = readIntegerEnvironment("OFFICECLI_MAX_CONCURRE
 const supportedDocumentExtensions = new Set([".docx", ".xlsx", ".pptx"]);
 const viewModes = new Set(["text", "annotated", "outline", "stats", "issues", "forms", "html", "svg"]);
 const helpFormats = new Set(["docx", "xlsx", "pptx"]);
-const batchCommands = new Set(["add", "set", "remove", "move", "copy", "swap", "get", "query"]);
+const batchCommands = new Set(["add", "set", "remove", "move", "swap", "get", "query"]);
 const mimeTypes = new Map([
   [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
   [".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
@@ -428,6 +428,7 @@ async function runOfficeCli(args) {
     return await new Promise((resolvePromise, rejectPromise) => {
       const childEnvironment = {
         ...process.env,
+        OFFICECLI_BATCH_ALLOW_STDIN_REDIRECT: "1",
         OFFICECLI_RESIDENT_FLUSH: "each",
         OFFICECLI_SKIP_UPDATE: "1",
       };
@@ -436,6 +437,7 @@ async function runOfficeCli(args) {
         cwd: resolvedDocumentRoot,
         env: childEnvironment,
         shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
       const stdoutChunks = [];
@@ -574,6 +576,14 @@ function readCliErrorMessage(output) {
   if (error && typeof error === "object") {
     if (typeof error.message === "string") return error.message;
     if (typeof error.error === "string") return error.error;
+  }
+  const data = output.data;
+  if (data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.results)) {
+    for (const result of data.results) {
+      if (result && typeof result === "object" && !Array.isArray(result) && typeof result.error === "string") {
+        return result.error;
+      }
+    }
   }
   return typeof output.message === "string" ? output.message : undefined;
 }

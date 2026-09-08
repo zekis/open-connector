@@ -43,23 +43,24 @@ const batchPropertyValueSchema = s.nullable(
 );
 
 const batchItemSchema = s.object(
-  "One OfficeCLI batch command. Use parent and type for add; path and props for set; path for remove; and path plus to, before, or after for move.",
+  "One OfficeCLI batch command. Use parent and type for add; parent and from to copy a supported element; path and props for set; path for remove; and path plus to, before, or after for move.",
   {
     command: s.stringEnum("The OfficeCLI operation to perform.", [
       "add",
       "set",
       "remove",
       "move",
-      "copy",
       "swap",
       "get",
       "query",
     ]),
-    path: s.nonEmptyString("The DOM path targeted by set, remove, move, copy, swap, or get."),
+    path: s.nonEmptyString("The DOM path targeted by set, remove, move, swap, or get."),
     parent: s.nonEmptyString("The parent DOM path targeted by add."),
     type: s.nonEmptyString("The element type to add."),
-    from: s.nonEmptyString("The source path accepted by some move and copy operations."),
-    to: s.nonEmptyString("The destination parent or path for move, copy, or swap."),
+    from: s.nonEmptyString(
+      "The source element path for an add operation. OfficeCLI cannot copy an entire Excel worksheet.",
+    ),
+    to: s.nonEmptyString("The destination parent or path for move or swap."),
     path2: s.nonEmptyString("The second DOM path for swap."),
     before: s.nonEmptyString("Insert before this DOM path."),
     after: s.nonEmptyString("Insert after this DOM path."),
