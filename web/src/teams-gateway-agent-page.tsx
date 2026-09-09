@@ -1,4 +1,11 @@
-import type { AgentProvider, AppData, ConnectionRecord, TeamsGatewayAgent } from "./model";
+import type {
+  ActionDefinition,
+  AgentProvider,
+  AppData,
+  ConnectionRecord,
+  TeamsGatewayAgent,
+  TeamsGatewayToolGrant,
+} from "./model";
 import type { FormEvent, ReactNode } from "react";
 
 import { ArrowLeft, Loader2, Save, Trash2 } from "lucide-react";
@@ -30,6 +37,12 @@ interface AgentDraft {
   toolConnectionIds: string[];
 }
 
+export interface TeamsGatewayToolGrantSelection {
+  connectionIds: string[];
+  connections: ConnectionRecord[];
+  actionsByService: ReadonlyMap<string, ActionDefinition[]>;
+}
+
 export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): ReactNode {
   const { agentId } = useParams();
   const navigate = useNavigate();
@@ -47,6 +60,9 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
     () => new Map(data.providers.map((provider) => [provider.service, provider.actions])),
     [data.providers],
   );
+  const unavailableToolConnectionCount = draft.toolConnectionIds.filter(
+    (connectionId) => !toolConnections.some((connection) => connection.id === connectionId),
+  ).length;
 
   useEffect(() => {
     if (!agentId) return;
@@ -76,26 +92,24 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
     event.preventDefault();
     setBusy("save");
     setError(null);
-    const body = {
-      name: draft.name.trim(),
-      enabled: draft.enabled,
-      teamsConnectionId: draft.teamsConnectionId,
-      agentProvider: draft.agentProvider,
-      instructions: draft.instructions.trim(),
-      allowedDomains: csv(draft.allowedDomains),
-      allowedExternalUsers: csv(draft.allowedExternalUsers),
-      proactiveDmUsers: csv(draft.proactiveDmUsers),
-      confirmBeforeTools: draft.confirmBeforeTools,
-      threadWindowHours: Number(draft.threadWindowHours),
-      toolGrants: draft.toolConnectionIds.map((connectionId) => {
-        const connection = toolConnections.find((item) => item.id === connectionId)!;
-        const actionIds = (actionsByService.get(connection.service) ?? [])
-          .filter((action) => action.execution.locallyExecutable && action.id !== "microsoft_teams.send_chat_message")
-          .map((action) => action.id);
-        return { connectionId, actionIds };
-      }),
-    };
     try {
+      const body = {
+        name: draft.name.trim(),
+        enabled: draft.enabled,
+        teamsConnectionId: draft.teamsConnectionId,
+        agentProvider: draft.agentProvider,
+        instructions: draft.instructions.trim(),
+        allowedDomains: csv(draft.allowedDomains),
+        allowedExternalUsers: csv(draft.allowedExternalUsers),
+        proactiveDmUsers: csv(draft.proactiveDmUsers),
+        confirmBeforeTools: draft.confirmBeforeTools,
+        threadWindowHours: Number(draft.threadWindowHours),
+        toolGrants: buildTeamsGatewayToolGrants({
+          connectionIds: draft.toolConnectionIds,
+          connections: toolConnections,
+          actionsByService,
+        }),
+      };
       if (draft.id) await apiPut(`/api/teams-gateway/agents/${encodeURIComponent(draft.id)}`, body);
       else await apiPost("/api/teams-gateway/agents", body);
       navigate("/teams-gateway");
@@ -256,6 +270,13 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
               The exact available actions are captured when saved. Chat sending is excluded so the DM guard stays
               intact.
             </p>
+            {unavailableToolConnectionCount ? (
+              <p role="alert">
+                {unavailableToolConnectionCount} previously enabled connection
+                {unavailableToolConnectionCount === 1 ? " is" : "s are"} no longer available and will be removed when
+                you save.
+              </p>
+            ) : null}
             <div>
               {toolConnections.map((connection) => (
                 <label key={connection.id} className="teams-tool-option">
@@ -319,6 +340,18 @@ export function TeamsGatewayAgentPage({ data }: TeamsGatewayAgentPageProps): Rea
       </section>
     </div>
   );
+}
+
+/** Resolves saved connection IDs against the live connection list, dropping stale selections safely. */
+export function buildTeamsGatewayToolGrants(input: TeamsGatewayToolGrantSelection): TeamsGatewayToolGrant[] {
+  return input.connectionIds.flatMap((connectionId) => {
+    const connection = input.connections.find((item) => item.id === connectionId);
+    if (!connection) return [];
+    const actionIds = (input.actionsByService.get(connection.service) ?? [])
+      .filter((action) => action.execution.locallyExecutable && action.id !== "microsoft_teams.send_chat_message")
+      .map((action) => action.id);
+    return [{ connectionId, actionIds }];
+  });
 }
 
 function BackButton(): ReactNode {

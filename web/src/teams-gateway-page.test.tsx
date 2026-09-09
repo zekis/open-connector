@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
 import { emptyData } from "./model";
-import { TeamsGatewayAgentPage } from "./teams-gateway-agent-page";
+import { buildTeamsGatewayToolGrants, TeamsGatewayAgentPage } from "./teams-gateway-agent-page";
 import { TeamsGatewayPage } from "./teams-gateway-page";
 
 const data: AppData = {
@@ -51,7 +51,7 @@ describe("Teams gateway routes", () => {
     );
 
     expect(html).toContain('href="/teams-gateway/new"');
-    expect(html).toContain('href="/inbox?source=microsoft_teams"');
+    expect(html).toContain('href="/inbox"');
     expect(html).not.toContain('data-slot="dialog-content"');
   });
 
@@ -71,5 +71,15 @@ describe("Teams gateway routes", () => {
     expect(html).toContain("helpdesk@company.test · outlook");
     expect(html).toContain("project-manager-agent — agent@company.test · microsoft_teams");
     expect(html).not.toContain('data-slot="dialog-content"');
+  });
+
+  it("drops provider grants whose connection no longer exists", () => {
+    expect(
+      buildTeamsGatewayToolGrants({
+        connectionIds: ["outlook-connection", "deleted-connection"],
+        connections: data.connections,
+        actionsByService: new Map(),
+      }),
+    ).toEqual([{ connectionId: "outlook-connection", actionIds: [] }]);
   });
 });

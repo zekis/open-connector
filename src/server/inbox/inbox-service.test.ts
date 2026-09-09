@@ -1,39 +1,42 @@
 import type { ConnectionSummary } from "../../connection-service.ts";
 import type { ProviderDefinition } from "../../core/types.ts";
-import type { IActionRunner, RunActionInput } from "../actions/action-runner.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
 import type { TeamsGatewayAgent, TeamsGatewayThread } from "../teams-gateway/teams-gateway-types.ts";
 import type { InboxConversationMetadata, IInboxStore } from "./inbox-types.ts";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createCatalogStore } from "../../catalog-store.ts";
-import { ActionPolicyService } from "../../core/action-policy.ts";
 import { InboxService } from "./inbox-service.ts";
 
-const outlookConnection: ConnectionSummary = {
-  id: "outlook-connection-1",
-  service: "outlook",
-  connectionName: "work",
+const teamsConnection: ConnectionSummary = {
+  id: "teams-connection-1",
+  service: "microsoft_teams",
+  connectionName: "support",
   authType: "oauth2",
   configured: true,
   virtual: false,
   default: true,
   profile: {
-    accountId: "outlook-user-1",
-    displayName: "operator@example.com",
-    grantedScopes: ["Mail.ReadWrite", "Mail.Send"],
+    accountId: "agent-user-1",
+    displayName: "support@example.com",
+    grantedScopes: ["Chat.ReadWrite"],
   },
 };
 
-const todoConnection: ConnectionSummary = {
-  ...outlookConnection,
-  id: "todo-connection-1",
-  service: "microsoft_todo",
-  connectionName: "work-tasks",
+const personalOutlookConnection: ConnectionSummary = {
+  ...teamsConnection,
+  id: "outlook-connection-1",
+  service: "outlook",
+  connectionName: "personal",
+  profile: {
+    accountId: "operator-user-1",
+    displayName: "operator@example.com",
+    grantedScopes: ["Mail.ReadWrite"],
+  },
 };
 
 const devopsConnection: ConnectionSummary = {
-  ...outlookConnection,
+  ...teamsConnection,
   id: "devops-connection-1",
   service: "azure_devops",
   connectionName: "engineering",
@@ -104,48 +107,23 @@ const teamsThread: TeamsGatewayThread = {
 };
 
 describe("InboxService", () => {
-  it("combines Teams gateway threads and Outlook conversations newest first", async () => {
-    const run = vi.fn(async (input: RunActionInput) =>
-      actionResult(
-        input.actionId === "outlook.list_messages"
-          ? {
-              messages: [
-                {
-                  id: "outlook-message-1",
-                  conversationId: "conversation-1",
-                  subject: "Quarterly report",
-                  bodyPreview: "The report is ready.",
-                  receivedDateTime: "2026-09-03T01:00:00.000Z",
-                  from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-                  toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-                  isRead: false,
-                  hasAttachments: false,
-                },
-              ],
-              nextLink: null,
-            }
-          : {},
-      ),
-    );
-    const service = createService(run);
+  it("lists only Teams gateway agent conversations", async () => {
+    const service = createService(new MemoryInboxStore(), [teamsConnection, personalOutlookConnection]);
 
     const page = await service.list();
 
-    expect(page.sources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ provider: "microsoft_teams", displayName: "Project agent" }),
-        expect.objectContaining({ provider: "outlook", accountLabel: "operator@example.com" }),
-      ]),
-    );
-    expect(page.conversations.map((conversation) => conversation.provider)).toEqual(["outlook", "microsoft_teams"]);
-    expect(page.conversations[0]).toMatchObject({ title: "Quarterly report", unread: true });
-    expect(page.conversations[1]?.updatedAt).toBe("2026-09-02T01:00:00.000Z");
+    expect(page.sources).toEqual([
+      expect.objectContaining({ provider: "microsoft_teams", displayName: "Project agent" }),
+    ]);
+    expect(page.conversations).toEqual([
+      expect.objectContaining({ provider: "microsoft_teams", title: "Alex", unread: true }),
+    ]);
+    expect(page.errors).toEqual([]);
   });
 
   it("tracks unread Teams conversations until the operator opens them", async () => {
     const store = new MemoryInboxStore();
-    const run = vi.fn(async () => actionResult({ messages: [], nextLink: null }));
-    const service = createService(run, store);
+    const service = createService(store);
 
     const initial = await service.list();
     const teamsConversation = initial.conversations.find((item) => item.provider === "microsoft_teams")!;
@@ -157,156 +135,9 @@ describe("InboxService", () => {
     expect(refreshed.conversations.find((item) => item.provider === "microsoft_teams")?.unread).toBe(false);
   });
 
-  it("sends an Outlook attachment reply through a draft before sending", async () => {
-    const actions: string[] = [];
-    const run = vi.fn(async (input: RunActionInput) => {
-      actions.push(input.actionId);
-      if (input.actionId === "outlook.create_reply_draft") return actionResult({ id: "draft-1" });
-      if (input.actionId === "outlook.list_messages") {
-        return actionResult({
-          messages: [
-            {
-              id: "outlook-message-1",
-              conversationId: "conversation-1",
-              subject: "Quarterly report",
-              body: { contentType: "text", content: "The report is ready." },
-              bodyPreview: "The report is ready.",
-              receivedDateTime: "2026-09-03T01:00:00.000Z",
-              from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-              toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-              isRead: true,
-              hasAttachments: false,
-            },
-          ],
-          nextLink: null,
-        });
-      }
-      return actionResult({ success: true });
-    });
-    const service = createService(run);
-    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
-    actions.length = 0;
-
-    await service.reply(conversationId, {
-      text: "Thanks, attached.",
-      attachments: [{ fileId: "transit-1", name: "notes.txt" }],
-    });
-
-    expect(actions).toEqual([
-      "outlook.create_reply_draft",
-      "outlook.add_attachment",
-      "outlook.send_draft",
-      "outlook.list_messages",
-    ]);
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionId: "outlook.add_attachment",
-        approvalPolicy: "bypass",
-        input: { messageId: "draft-1", file: { fileId: "transit-1", name: "notes.txt" } },
-      }),
-    );
-  });
-
-  it("replies to the specific Outlook message selected from the timeline", async () => {
-    const run = vi.fn(async (input: RunActionInput) => {
-      if (input.actionId !== "outlook.list_messages") return actionResult({ success: true });
-      return actionResult({
-        messages: [
-          {
-            id: "outlook-message-older",
-            conversationId: "conversation-1",
-            subject: "Quarterly report",
-            bodyPreview: "Can you review this?",
-            receivedDateTime: "2026-09-02T01:00:00.000Z",
-            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-            isRead: true,
-            hasAttachments: false,
-          },
-          {
-            id: "outlook-message-latest",
-            conversationId: "conversation-1",
-            subject: "Quarterly report",
-            bodyPreview: "One more detail.",
-            receivedDateTime: "2026-09-03T01:00:00.000Z",
-            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-            isRead: true,
-            hasAttachments: false,
-          },
-        ],
-        nextLink: null,
-      });
-    });
-    const service = createService(run);
-    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
-
-    await service.reply(conversationId, {
-      text: "Reviewed.",
-      targetMessageId: "outlook-message-older",
-    });
-
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionId: "outlook.reply_email",
-        input: { messageId: "outlook-message-older", comment: "Reviewed." },
-      }),
-    );
-  });
-
-  it("preserves useful formatting from an Outlook HTML unique body", async () => {
-    const calls: RunActionInput[] = [];
-    const run = vi.fn(async (input: RunActionInput) => {
-      calls.push(input);
-      return actionResult({
-        messages: [
-          {
-            id: "outlook-message-1",
-            conversationId: "conversation-1",
-            subject: "Formatted update",
-            body: { contentType: "html", content: "<p>Quoted thread that should not be repeated.</p>" },
-            uniqueBody: {
-              contentType: "html",
-              content:
-                '<table><tr><td></td><td></td></tr></table><h2>Update</h2><p>Hello <strong>team</strong>.</p><ul><li>First item</li><li>Second item</li></ul><p><a href="https://example.com/report">Open report</a></p><p>[&lt;!--unsubscribe%20url--&gt;]Unsubscribe from this digest</p><p>Disclaimer: This message may contain confidential information.</p>',
-            },
-            bodyPreview: "Update Hello team.",
-            receivedDateTime: "2026-09-03T01:00:00.000Z",
-            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-            isRead: true,
-            hasAttachments: false,
-          },
-        ],
-        nextLink: null,
-      });
-    });
-    const service = createService(run);
-    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
-
-    const conversation = await service.get(conversationId);
-
-    expect(conversation.messages[0]?.content).toContain("## Update");
-    expect(conversation.messages[0]?.content).toContain("Hello **team**.");
-    expect(conversation.messages[0]?.content).toContain("- First item");
-    expect(conversation.messages[0]?.content).toContain("[Open report](https://example.com/report)");
-    expect(conversation.messages[0]?.content).toContain("Unsubscribe from this digest");
-    expect(conversation.messages[0]?.content).toContain(
-      "> **Disclaimer:** This message may contain confidential information.",
-    );
-    expect(conversation.messages[0]?.content).not.toMatch(/^\s*\|/mu);
-    expect(conversation.messages[0]?.content).not.toContain("<!--unsubscribe");
-    expect(conversation.messages[0]?.content).not.toContain("Quoted thread");
-    expect(calls.at(-1)?.input).toMatchObject({
-      bodyContentType: "html",
-      select: expect.arrayContaining(["body", "uniqueBody"]),
-    });
-  });
-
   it("keeps workflow state and private notes separate from provider messages", async () => {
     const store = new MemoryInboxStore();
-    const run = vi.fn(async () => actionResult({ messages: [] }));
-    const service = createService(run, store);
+    const service = createService(store);
     const conversationId = (await service.list()).conversations.find((item) => item.provider === "microsoft_teams")!.id;
 
     await service.update(conversationId, { status: "resolved", priority: "high", labels: ["Customer", "urgent"] });
@@ -324,105 +155,36 @@ describe("InboxService", () => {
       content: "Check the contract before replying.",
       sender: { name: "Private note" },
     });
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("finds Microsoft To Do tasks that reference an Outlook email ID", async () => {
-    const run = vi.fn(async (input: RunActionInput) => {
-      if (input.actionId === "microsoft_todo.list_task_lists") {
-        return actionResult({ taskLists: [{ id: "list-1", displayName: "Tasks" }], nextLink: null });
-      }
-      if (input.actionId === "microsoft_todo.list_tasks") {
-        return actionResult({
-          tasks: [
-            {
-              id: "task-1",
-              title: "Reply to Morgan",
-              body: { content: "Source email: &lt;internet-message-1@example.com&gt;" },
-              status: "notStarted",
-              importance: "high",
-              linkedResources: [
-                {
-                  externalId: "outlook-message-1",
-                  webUrl: "https://outlook.office.com/mail/inbox/id/outlook-message-1",
-                },
-              ],
-            },
-            { id: "task-2", title: "Unrelated", body: { content: "Another email" }, status: "completed" },
-          ],
-          nextLink: null,
-        });
-      }
-      return actionResult({
-        messages: [
-          {
-            id: "outlook-message-1",
-            conversationId: "conversation-1",
-            internetMessageId: "<internet-message-1@example.com>",
-            subject: "Quarterly report",
-            bodyPreview: "The report is ready.",
-            receivedDateTime: "2026-09-03T01:00:00.000Z",
-            from: { emailAddress: { name: "Morgan", address: "morgan@example.com" } },
-            toRecipients: [{ emailAddress: { name: "Operator", address: "operator@example.com" } }],
-            isRead: true,
-            hasAttachments: false,
-          },
-        ],
-        nextLink: null,
-      });
-    });
-    const service = createService(run, new MemoryInboxStore(), [outlookConnection, todoConnection]);
-    const conversationId = (await service.list()).conversations.find((item) => item.provider === "outlook")!.id;
-
-    const result = await service.listLinkedTasks(conversationId);
-
-    expect(result).toEqual({
-      available: true,
-      errors: [],
-      tasks: [
-        expect.objectContaining({
-          id: "task-1",
-          taskListName: "Tasks",
-          title: "Reply to Morgan",
-          sourceUrl: "https://outlook.office.com/mail/inbox/id/outlook-message-1",
-        }),
-      ],
-    });
   });
 
   it("runs a message handoff with one exact connection and stores the AI result inline", async () => {
     const handoffs: HandoffCall[] = [];
-    const service = createService(
-      vi.fn(async () => actionResult({ messages: [] })),
-      new MemoryInboxStore(),
-      [outlookConnection, devopsConnection],
-      {
-        async respondWithExtension(request, extension) {
-          handoffs.push({ request, extension });
-          return {
-            status: "completed",
-            message: {
-              id: "agent-message-1",
-              role: "assistant",
-              content: "Ticket AB#123 created.",
-              createdAt: "2026-09-03T02:00:00.000Z",
+    const service = createService(new MemoryInboxStore(), [teamsConnection, devopsConnection], {
+      async respondWithExtension(request, extension) {
+        handoffs.push({ request, extension });
+        return {
+          status: "completed",
+          message: {
+            id: "agent-message-1",
+            role: "assistant",
+            content: "Ticket AB#123 created.",
+            createdAt: "2026-09-03T02:00:00.000Z",
+          },
+          toolActivity: [
+            {
+              id: "tool-1",
+              type: "action",
+              label: "Create work item",
+              ok: true,
+              actionId: "azure_devops.create_work_item",
+              connectionId: devopsConnection.id,
+              input: {},
+              output: { id: 123 },
             },
-            toolActivity: [
-              {
-                id: "tool-1",
-                type: "action",
-                label: "Create work item",
-                ok: true,
-                actionId: "azure_devops.create_work_item",
-                connectionId: devopsConnection.id,
-                input: {},
-                output: { id: 123 },
-              },
-            ],
-          };
-        },
+          ],
+        };
       },
-    );
+    });
     const conversationId = (await service.list()).conversations.find((item) => item.provider === "microsoft_teams")!.id;
 
     const conversation = await service.runAiAction(conversationId, {
@@ -522,7 +284,7 @@ describe("InboxService", () => {
         return thread;
       },
     };
-    const service = createService(vi.fn(), new MemoryInboxStore(), [], undefined, teamsGateway);
+    const service = createService(new MemoryInboxStore(), [], undefined, teamsGateway);
     const summary = (await service.list()).conversations[0]!;
 
     expect(summary).toMatchObject({
@@ -544,9 +306,8 @@ interface HandoffCall {
 }
 
 function createService(
-  run: IActionRunner["run"],
   store: IInboxStore = new MemoryInboxStore(),
-  connections: ConnectionSummary[] = [outlookConnection],
+  connections: ConnectionSummary[] = [teamsConnection],
   agentChat: ConstructorParameters<typeof InboxService>[0]["agentChat"] = {
     async respondWithExtension() {
       throw new Error("Unexpected AI handoff.");
@@ -577,12 +338,8 @@ function createService(
         return connections;
       },
     },
-    actions: { run },
     agentChat,
     teamsGateway,
-    async getPolicySnapshot() {
-      return new ActionPolicyService().createSnapshot();
-    },
     store,
   });
 }
@@ -602,13 +359,4 @@ class MemoryInboxStore implements IInboxStore {
   async listConversations(): Promise<InboxConversationMetadata[]> {
     return [...this.conversations.values()].map((metadata) => structuredClone(metadata));
   }
-}
-
-function actionResult(output: unknown) {
-  return {
-    executionId: "execution-1",
-    auditPersisted: true,
-    result: { ok: true, output },
-    connection: outlookConnection,
-  };
 }

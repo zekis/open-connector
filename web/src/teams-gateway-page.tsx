@@ -122,7 +122,7 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
         </div>
         <div className="button-row">
           <Button variant="outline" asChild>
-            <Link to="/inbox?source=microsoft_teams">
+            <Link to="/inbox">
               <MessagesSquare size={14} /> Conversations
             </Link>
           </Button>

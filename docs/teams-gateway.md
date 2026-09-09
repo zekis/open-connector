@@ -24,7 +24,8 @@ and a second credential store are not required.
    availability, and discovers its group chats, joined Teams, and visible channels.
 6. Review **Detected groups** on the gateway page and disable any group chat or Team where the agent
    should not communicate. Disabled groups remain visible so they can be enabled later.
-7. Open **Conversations** to review the Teams transcript in the unified Inbox. Use **Take over** to
+7. Open **Conversations** to review support-agent Teams transcripts in the Inbox. Personal Outlook
+   mail and non-agent Teams chats are not included. Use **Take over** to
    pause the agent for one conversation, reply as the Teams identity, then choose **Return to AI**
    when automated handling should resume.
 

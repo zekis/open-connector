@@ -425,7 +425,7 @@ export interface TeamsGatewayAgentMetrics {
   operatorTakeoverCount: number;
 }
 
-export type InboxProvider = "microsoft_teams" | "outlook";
+export type InboxProvider = "microsoft_teams";
 export type InboxConversationStatus = "open" | "waiting" | "resolved";
 export type InboxPriority = "none" | "low" | "medium" | "high";
 
@@ -516,24 +516,6 @@ export interface InboxPage {
   sources: InboxSource[];
   conversations: InboxConversationSummary[];
   errors: Array<{ sourceId: string; message: string }>;
-}
-
-export interface InboxLinkedTask {
-  id: string;
-  connectionId: string;
-  taskListId: string;
-  taskListName: string;
-  title: string;
-  status: string;
-  importance: string;
-  dueAt?: string;
-  sourceUrl?: string;
-}
-
-export interface InboxLinkedTasks {
-  available: boolean;
-  tasks: InboxLinkedTask[];
-  errors: string[];
 }
 
 export interface FlowRun {

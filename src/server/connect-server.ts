@@ -327,14 +327,8 @@ export class ConnectServer {
       app.post("/api/inbox/conversations/:id/ai-actions", (context) =>
         this.runInboxAiAction(context, context.req.param("id")),
       );
-      app.get("/api/inbox/conversations/:id/linked-tasks", (context) =>
-        this.listInboxLinkedTasks(context, context.req.param("id")),
-      );
       app.post("/api/inbox/conversations/:id/read", (context) =>
         this.markInboxConversationRead(context, context.req.param("id")),
-      );
-      app.get("/api/inbox/attachments/:reference", (context) =>
-        this.downloadInboxAttachment(context, context.req.param("reference")),
       );
     }
     if (this.options.feed) {
@@ -1447,20 +1441,8 @@ export class ConnectServer {
     return context.json(await this.options.inbox!.runAiAction(id, await readJsonBody(context)));
   }
 
-  private async listInboxLinkedTasks(context: Context, id: string): Promise<Response> {
-    return context.json(await this.options.inbox!.listLinkedTasks(id));
-  }
-
   private async markInboxConversationRead(context: Context, id: string): Promise<Response> {
     return context.json(await this.options.inbox!.markRead(id));
-  }
-
-  private async downloadInboxAttachment(context: Context, reference: string): Promise<Response> {
-    const downloadUrl = await this.options.inbox!.downloadOutlookAttachment(reference);
-    if (!downloadUrl.startsWith("/api/files/")) {
-      throw new InboxError("attachment_unavailable", "Inbox attachment returned an invalid download URL.", 503);
-    }
-    return context.redirect(downloadUrl, 302);
   }
 
   private async listFlows(context: Context): Promise<Response> {

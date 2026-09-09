@@ -157,10 +157,8 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
   const inbox = new InboxService({
     catalog: options.catalog,
     connections,
-    actions,
     agentChat,
     teamsGateway,
-    getPolicySnapshot,
     store: options.runtimeDatabase.inboxStore,
   });
   const feed = new FeedService({

@@ -3,7 +3,6 @@ import type {
   InboxAiActionScope,
   InboxConversation,
   InboxConversationSummary,
-  InboxLinkedTasks,
   InboxMessage,
   InboxPage,
   InboxParticipant,
@@ -18,20 +17,16 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowDownUp,
-  Ban,
   Bot,
   BrainCircuit,
   Cable,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
-  ExternalLink,
   FileText,
   Headphones,
   Loader2,
   ListTodo,
-  Mail,
   MessageSquare,
   Paperclip,
   PanelRightClose,
@@ -51,7 +46,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate } from "react-router";
 import remarkGfm from "remark-gfm";
 import { ApiError, apiGet, apiPost, apiPut, apiUpload } from "./api";
 import { ProviderIcon as CatalogProviderIcon } from "./shared-ui";
@@ -95,7 +90,6 @@ interface InboxResizeState {
 interface InboxContactFilter {
   id: string;
   key: string;
-  includeJunk: boolean;
 }
 
 interface InboxChannelContact extends InboxContactFilter {
@@ -105,12 +99,10 @@ interface InboxChannelContact extends InboxContactFilter {
   conversationCount: number;
   unreadCount: number;
   pinned: boolean;
-  junk: boolean;
-  outlookJunk: boolean;
 }
 
 interface InboxChannelContactGroup {
-  label: "Pinned" | "Unread" | "A–Z" | "Junk";
+  label: "Pinned" | "Unread" | "A–Z";
   contacts: InboxChannelContact[];
 }
 
@@ -130,7 +122,6 @@ const defaultInboxPanelWidths: InboxPanelWidths = {
 };
 const inboxPanelWidthsStorageKey = "oomol.inbox.panel-widths";
 const inboxPinnedContactsStorageKey = "oomol.inbox.pinned-contacts";
-const inboxJunkContactsStorageKey = "oomol.inbox.junk-contacts";
 
 interface AiHandoffTarget {
   scope: InboxAiActionScope;
@@ -147,16 +138,12 @@ interface InboxPageProps {
 
 export function InboxPageView(props: InboxPageProps): ReactNode {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [page, setPage] = useState<InboxPage>({ sources: [], conversations: [], errors: [] });
   const [selectedId, setSelectedId] = useState<string>();
   const [conversation, setConversation] = useState<InboxConversation>();
-  const [sourceId, setSourceId] = useState(() =>
-    searchParams.get("source") === "microsoft_teams" ? "microsoft_teams" : "all",
-  );
+  const [sourceId, setSourceId] = useState("all");
   const [contactFilter, setContactFilter] = useState<InboxContactFilter>();
   const [pinnedContactIds, setPinnedContactIds] = useState<Set<string>>(readPinnedContactIds);
-  const [junkContactIds, setJunkContactIds] = useState<Set<string>>(readJunkContactIds);
   const [peopleExpanded, setPeopleExpanded] = useState(true);
   const [view, setView] = useState<InboxView>("open");
   const [sort, setSort] = useState<InboxSort>("newest");
@@ -173,8 +160,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [mobilePane, setMobilePane] = useState<InboxMobilePane>("list");
   const [panelWidths, setPanelWidths] = useState<InboxPanelWidths>(readInboxPanelWidths);
   const [labelDraft, setLabelDraft] = useState("");
-  const [linkedTasks, setLinkedTasks] = useState<InboxLinkedTasks>();
-  const [loadingLinkedTasks, setLoadingLinkedTasks] = useState(false);
   const [handoffTarget, setHandoffTarget] = useState<AiHandoffTarget>();
   const [connections, setConnections] = useState<ConnectionRecord[]>([]);
   const [loadingConnections, setLoadingConnections] = useState(false);
@@ -184,7 +169,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [synapseMessageId, setSynapseMessageId] = useState<string>();
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string>();
   const [changingTakeover, setChangingTakeover] = useState(false);
-  const [expandedEmailMessageIds, setExpandedEmailMessageIds] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
@@ -203,18 +187,8 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         const next = await apiGet<InboxPage>("/api/inbox");
         setPage(next);
         setSelectedId((current) => {
-          const visible = next.conversations.filter(
-            (item) =>
-              !isJunkConversation(item, junkContactIds) &&
-              (sourceId === "all" || item.sourceId === sourceId || item.provider === sourceId),
-          );
-          const selectedJunkContact = contactFilterRef.current?.includeJunk ? contactFilterRef.current : undefined;
-          const canKeepCurrent = next.conversations.some(
-            (item) =>
-              item.id === current &&
-              (visible.includes(item) ||
-                (selectedJunkContact && conversationHasContact(item, selectedJunkContact.key))),
-          );
+          const visible = next.conversations.filter((item) => sourceId === "all" || item.sourceId === sourceId);
+          const canKeepCurrent = next.conversations.some((item) => item.id === current && visible.includes(item));
           return current && canKeepCurrent ? current : visible[0]?.id;
         });
         setError(undefined);
@@ -224,7 +198,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         if (!silent) setLoading(false);
       }
     },
-    [junkContactIds, sourceId],
+    [sourceId],
   );
 
   const loadConversation = useCallback(async (id: string, silent = false): Promise<void> => {
@@ -271,10 +245,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     window.localStorage.setItem(inboxPinnedContactsStorageKey, JSON.stringify([...pinnedContactIds]));
   }, [pinnedContactIds]);
 
-  useEffect(() => {
-    window.localStorage.setItem(inboxJunkContactsStorageKey, JSON.stringify([...junkContactIds]));
-  }, [junkContactIds]);
-
   useEffect(
     () => () => {
       document.body.style.cursor = "";
@@ -289,7 +259,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       return;
     }
     setReplyingTo(undefined);
-    setExpandedEmailMessageIds(new Set());
     void loadConversation(selectedId);
   }, [loadConversation, selectedId]);
 
@@ -309,44 +278,16 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     return () => window.cancelAnimationFrame(frame);
   }, [conversation?.id, lastMessageSignature]);
 
-  useEffect(() => {
-    setLinkedTasks(undefined);
-    if (!selectedId) return;
-    const controller = new AbortController();
-    setLoadingLinkedTasks(true);
-    void apiGet<InboxLinkedTasks>(`/api/inbox/conversations/${encodeURIComponent(selectedId)}/linked-tasks`, {
-      signal: controller.signal,
-    })
-      .then(setLinkedTasks)
-      .catch((loadError) => {
-        if (!controller.signal.aborted) {
-          setLinkedTasks({ available: true, tasks: [], errors: [messageForError(loadError, "Could not load tasks.")] });
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoadingLinkedTasks(false);
-      });
-    return () => controller.abort();
-  }, [selectedId]);
-
   const inboxContacts = useMemo(
-    () => buildInboxContacts(page.conversations, pinnedContactIds, junkContactIds),
-    [junkContactIds, page.conversations, pinnedContactIds],
-  );
-  const nonJunkConversations = useMemo(
-    () => page.conversations.filter((item) => !isJunkConversation(item, junkContactIds)),
-    [junkContactIds, page.conversations],
+    () => buildInboxContacts(page.conversations, pinnedContactIds),
+    [page.conversations, pinnedContactIds],
   );
   const sourceConversations = useMemo(() => {
-    const includeJunk = contactFilter?.includeJunk === true;
-    const inSource = page.conversations.filter(
-      (item) => sourceId === "all" || item.sourceId === sourceId || item.provider === sourceId,
-    );
-    const visibleSource = includeJunk ? inSource : inSource.filter((item) => !isJunkConversation(item, junkContactIds));
+    const visibleSource = page.conversations.filter((item) => sourceId === "all" || item.sourceId === sourceId);
     return contactFilter
       ? visibleSource.filter((item) => conversationHasContact(item, contactFilter.key))
       : visibleSource;
-  }, [contactFilter, junkContactIds, page.conversations, sourceId]);
+  }, [contactFilter, page.conversations, sourceId]);
 
   const visibleConversations = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -413,17 +354,12 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   function selectSource(id: string): void {
     setSourceId(id);
     setContactFilter(undefined);
-    setSelectedId(
-      page.conversations.find(
-        (item) =>
-          !isJunkConversation(item, junkContactIds) && (id === "all" || item.sourceId === id || item.provider === id),
-      )?.id,
-    );
+    setSelectedId(page.conversations.find((item) => id === "all" || item.sourceId === id)?.id);
   }
 
   function selectContact(contact: InboxChannelContact): void {
     setSourceId("all");
-    setContactFilter({ id: contact.id, key: contact.key, includeJunk: contact.junk });
+    setContactFilter({ id: contact.id, key: contact.key });
     setSelectedId(page.conversations.find((item) => conversationHasContact(item, contact.key))?.id);
   }
 
@@ -434,34 +370,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       else next.add(id);
       return next;
     });
-  }
-
-  function toggleJunkContact(contact: InboxChannelContact): void {
-    const outlookContactId = inboxProviderContactId("outlook", contact.key);
-    const movingToJunk = !junkContactIds.has(outlookContactId);
-    setJunkContactIds((current) => {
-      const next = new Set(current);
-      if (next.has(outlookContactId)) next.delete(outlookContactId);
-      else next.add(outlookContactId);
-      return next;
-    });
-    if (!movingToJunk) return;
-    setPinnedContactIds((current) => {
-      if (!current.has(contact.id)) return current;
-      const next = new Set(current);
-      next.delete(contact.id);
-      return next;
-    });
-    const nextJunkContactIds = new Set(junkContactIds);
-    nextJunkContactIds.add(outlookContactId);
-    setSelectedId((current) => {
-      if (!current) return current;
-      const selected = page.conversations.find((item) => item.id === current);
-      return selected && isJunkConversation(selected, nextJunkContactIds) ? undefined : current;
-    });
-    if (contact.providers.length === 1 && contact.providers[0] === "outlook") {
-      setContactFilter((current) => (current?.id === contact.id ? undefined : current));
-    }
   }
 
   function beginPanelResize(panel: InboxPanel, event: ReactPointerEvent<HTMLButtonElement>): void {
@@ -665,15 +573,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     window.requestAnimationFrame(() => composerInput.current?.focus());
   }
 
-  function toggleEmailMessage(messageId: string): void {
-    setExpandedEmailMessageIds((current) => {
-      const next = new Set(current);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
-      return next;
-    });
-  }
-
   async function sendToSynapse(message: InboxMessage): Promise<void> {
     if (!conversation || synapseMessageId) return;
     setSynapseMessageId(message.id);
@@ -683,7 +582,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       });
       await apiPost<SynapseWorkspace>(`/api/synapses/${encodeURIComponent(workspace.id)}/nodes`, {
         kind: "artifact",
-        artifactKind: conversation.provider === "outlook" ? "email" : "note",
+        artifactKind: "note",
         title: `${conversation.title} · ${message.sender.name}`.slice(0, 240),
         summary: `${message.sender.name} · ${formatMessageTime(message.createdAt)}`,
         content: message.content.slice(0, 40_000),
@@ -727,13 +626,13 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     <section
       className={`unified-inbox${detailsOpen ? "" : " details-collapsed"} mobile-${mobilePane}-open`}
       style={inboxStyle}
-      aria-label="Unified inbox"
+      aria-label="Teams agent inbox"
     >
       <aside className="inbox-sources">
         <div className="inbox-pane-title">
           <div>
-            <strong>Inbox</strong>
-            <small>All channels</small>
+            <strong>Agent inbox</strong>
+            <small>Teams support conversations</small>
           </div>
           <Button variant="ghost" size="icon-sm" onClick={() => void loadPage()} aria-label="Refresh inbox">
             {loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
@@ -741,16 +640,16 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         </div>
         <SourceButton
           active={sourceId === "all"}
-          label="All conversations"
-          count={nonJunkConversations.length}
-          icon={<Users size={15} />}
+          label="All agents"
+          count={page.conversations.length}
+          icon={<Bot size={15} />}
           onClick={() => selectSource("all")}
         />
         <div className="inbox-source-heading">People</div>
         <ChannelTree
-          label="All contacts"
-          count={inboxContacts.filter((contact) => !contact.junk).length}
-          unreadCount={inboxContacts.filter((contact) => !contact.junk && contact.unreadCount > 0).length}
+          label="Contacts"
+          count={inboxContacts.length}
+          unreadCount={inboxContacts.filter((contact) => contact.unreadCount > 0).length}
           icon={<Users size={15} />}
           contacts={inboxContacts}
           expanded={peopleExpanded}
@@ -760,16 +659,15 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
           onSelect={() => selectSource("all")}
           onSelectContact={selectContact}
           onTogglePin={toggleContactPin}
-          onToggleJunk={toggleJunkContact}
         />
-        {page.sources.length ? <div className="inbox-source-heading">Accounts</div> : null}
+        {page.sources.length ? <div className="inbox-source-heading">Support agents</div> : null}
         {page.sources.map((source) => (
           <SourceButton
             key={source.id}
             active={sourceId === source.id}
             label={source.displayName}
             detail={source.accountLabel}
-            count={nonJunkConversations.filter((item) => item.sourceId === source.id).length}
+            count={page.conversations.filter((item) => item.sourceId === source.id).length}
             icon={<ProviderIcon provider={source.provider} />}
             disabled={!source.enabled}
             onClick={() => selectSource(source.id)}
@@ -777,8 +675,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         ))}
         {page.sources.length === 0 && !loading ? (
           <div className="inbox-connect-empty">
-            <p>Connect Outlook or set up a Teams gateway agent to start.</p>
-            <Link to="/providers/outlook">Connect Outlook</Link>
+            <p>Set up a Teams gateway agent to start managing its conversations.</p>
             <Link to="/teams-gateway">Set up Teams</Link>
           </div>
         ) : null}
@@ -800,8 +697,8 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
       <aside className="inbox-conversations">
         <div className="inbox-mobile-bar">
           <div>
-            <strong>Inbox</strong>
-            <small>{nonJunkConversations.length} conversations</small>
+            <strong>Agent inbox</strong>
+            <small>{page.conversations.length} conversations</small>
           </div>
           <Button variant="ghost" size="icon-sm" onClick={() => void loadPage()} aria-label="Refresh inbox">
             {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
@@ -909,7 +806,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         onKeyDown={(event) => resizePanelWithKeyboard("conversations", event.key)}
       />
 
-      <main className={`inbox-thread${conversation?.provider === "outlook" ? " outlook" : ""}`}>
+      <main className="inbox-thread">
         {conversation ? (
           <>
             <header className="inbox-thread-header">
@@ -993,11 +890,6 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 </div>
               ) : null}
               {conversation.messages.map((message, index) => {
-                const longEmail =
-                  conversation.provider === "outlook" &&
-                  message.kind === "message" &&
-                  isLongEmailMessage(message.content);
-                const expandedEmail = expandedEmailMessageIds.has(message.id);
                 return (
                   <article
                     ref={index === conversation.messages.length - 1 ? lastMessageElement : undefined}
@@ -1104,20 +996,9 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                         <small>{message.action.instruction}</small>
                       </div>
                     ) : null}
-                    <div className={`inbox-message-body${longEmail && !expandedEmail ? " collapsed" : ""}`}>
+                    <div className="inbox-message-body">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
                     </div>
-                    {longEmail ? (
-                      <button
-                        type="button"
-                        className="inbox-message-more"
-                        onClick={() => toggleEmailMessage(message.id)}
-                        aria-expanded={expandedEmail}
-                      >
-                        {expandedEmail ? "Show less" : "More"}
-                        {expandedEmail ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                      </button>
-                    ) : null}
                     {message.attachments.length ? (
                       <div className="inbox-message-files">
                         {message.attachments.map((attachment) =>
@@ -1202,9 +1083,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 value={reply}
                 onChange={(event) => setReply(event.target.value)}
                 placeholder={
-                  composerMode === "note"
-                    ? "Add a private note (not sent to the contact)…"
-                    : `Reply via ${conversation.provider === "outlook" ? "Outlook" : "Teams"}…`
+                  composerMode === "note" ? "Add a private note (not sent to the contact)…" : "Reply via Teams…"
                 }
                 rows={3}
                 onKeyDown={(event) => {
@@ -1251,7 +1130,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
           <div className="inbox-thread-empty">
             <MessageSquare size={28} />
             <strong>{selectedSummary ? "Loading conversation…" : "Choose a conversation"}</strong>
-            <span>Teams and Outlook messages appear together here.</span>
+            <span>Support-agent Teams conversations appear here.</span>
           </div>
         )}
       </main>
@@ -1276,26 +1155,24 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
             <DetailBlock label="Channel">
               <span className="inbox-provider-line">
                 <ProviderIcon provider={conversation.provider} />
-                {conversation.provider === "outlook" ? "Outlook" : "Microsoft Teams"}
+                Microsoft Teams
               </span>
             </DetailBlock>
-            <DetailBlock label="Account">
+            <DetailBlock label="Support agent">
               <strong>{selectedSource?.displayName ?? conversation.contextLabel}</strong>
               {selectedSource?.accountLabel && selectedSource.accountLabel !== selectedSource.displayName ? (
                 <small>{selectedSource.accountLabel}</small>
               ) : null}
             </DetailBlock>
-            {conversation.provider === "microsoft_teams" ? (
-              <DetailBlock label="Handling">
-                <span className={`inbox-handling-state${conversation.operatorTakeover ? " operator" : ""}`}>
-                  {conversation.operatorTakeover ? <Headphones size={13} /> : <Bot size={13} />}
-                  {conversation.operatorTakeover ? "Human operator" : "Support agent"}
-                </span>
-                {conversation.operatorTakeoverAt ? (
-                  <small>Taken over {formatRelativeTime(conversation.operatorTakeoverAt)}</small>
-                ) : null}
-              </DetailBlock>
-            ) : null}
+            <DetailBlock label="Handling">
+              <span className={`inbox-handling-state${conversation.operatorTakeover ? " operator" : ""}`}>
+                {conversation.operatorTakeover ? <Headphones size={13} /> : <Bot size={13} />}
+                {conversation.operatorTakeover ? "Human operator" : "Support agent"}
+              </span>
+              {conversation.operatorTakeoverAt ? (
+                <small>Taken over {formatRelativeTime(conversation.operatorTakeoverAt)}</small>
+              ) : null}
+            </DetailBlock>
             <DetailBlock label="Priority">
               <select
                 className={`inbox-priority-select ${conversation.priority}`}
@@ -1368,57 +1245,8 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 </span>
               ))}
             </DetailBlock>
-            {conversation.provider === "outlook" ? (
-              <DetailBlock label="Linked tasks">
-                {loadingLinkedTasks ? (
-                  <span className="inbox-linked-tasks-state">
-                    <Loader2 className="spin" size={13} /> Finding related tasks…
-                  </span>
-                ) : linkedTasks?.available === false ? (
-                  <span className="inbox-linked-tasks-state">Connect Microsoft To Do to find AI-created tasks.</span>
-                ) : linkedTasks?.tasks.length ? (
-                  <div className="inbox-linked-tasks">
-                    {linkedTasks.tasks.map((task) => (
-                      <div className={`inbox-linked-task ${task.status}`} key={`${task.connectionId}:${task.id}`}>
-                        <span className="inbox-linked-task-icon">
-                          {task.status === "completed" ? <CheckCircle2 size={14} /> : <ListTodo size={14} />}
-                        </span>
-                        <span>
-                          <a href="https://to-do.office.com/tasks/" target="_blank" rel="noreferrer">
-                            {task.title}
-                          </a>
-                          <small>
-                            {task.taskListName} · {formatTaskStatus(task.status)}
-                            {task.dueAt ? ` · Due ${formatTaskDate(task.dueAt)}` : ""}
-                          </small>
-                        </span>
-                        {task.sourceUrl ? (
-                          <a
-                            className="inbox-linked-task-source"
-                            href={task.sourceUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            aria-label="Open task source"
-                            title="Open source email"
-                          >
-                            <ExternalLink size={12} />
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="inbox-linked-tasks-state">No Microsoft To Do tasks reference this email yet.</span>
-                )}
-                {linkedTasks?.errors.map((message) => (
-                  <small className="inbox-linked-task-error" key={message}>
-                    {message}
-                  </small>
-                ))}
-              </DetailBlock>
-            ) : null}
             <DetailBlock label="Activity">
-              <span>{conversation.messageCount} recent messages</span>
+              <span>{conversation.messageCount} logged messages</span>
               <span>{conversation.noteCount} private notes</span>
               <span>Updated {formatRelativeTime(conversation.updatedAt)}</span>
             </DetailBlock>
@@ -1570,12 +1398,11 @@ interface ChannelTreeProps {
   onSelect(): void;
   onSelectContact(contact: InboxChannelContact): void;
   onTogglePin(id: string): void;
-  onToggleJunk?(contact: InboxChannelContact): void;
 }
 
 function ChannelTree(props: ChannelTreeProps): ReactNode {
   const groups = channelContactGroups(props.contacts);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<InboxChannelContactGroup["label"]>>(new Set(["Junk"]));
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<InboxChannelContactGroup["label"]>>(new Set());
 
   function toggleGroup(label: InboxChannelContactGroup["label"]): void {
     setCollapsedGroups((current) => {
@@ -1617,20 +1444,17 @@ function ChannelTree(props: ChannelTreeProps): ReactNode {
             <div className="inbox-channel-contact-group" role="group" aria-label={group.label} key={group.label}>
               <button
                 type="button"
-                className={`inbox-channel-contact-group-toggle${group.label === "Junk" ? " junk" : ""}`}
+                className="inbox-channel-contact-group-toggle"
                 onClick={() => toggleGroup(group.label)}
                 aria-expanded={!collapsedGroups.has(group.label)}
               >
                 {collapsedGroups.has(group.label) ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-                <span>
-                  {group.label === "Junk" ? <Ban size={10} /> : null}
-                  {group.label}
-                </span>
+                <span>{group.label}</span>
                 <small>{group.contacts.length}</small>
               </button>
               {(collapsedGroups.has(group.label) ? [] : group.contacts).map((contact) => (
                 <div
-                  className={`inbox-channel-contact${contact.junk ? " junk" : ""}${props.activeContactId === contact.id ? " active" : ""}`}
+                  className={`inbox-channel-contact${props.activeContactId === contact.id ? " active" : ""}`}
                   role="treeitem"
                   aria-selected={props.activeContactId === contact.id}
                   key={contact.id}
@@ -1663,28 +1487,15 @@ function ChannelTree(props: ChannelTreeProps): ReactNode {
                     ) : null}
                   </button>
                   <span className="inbox-channel-contact-actions">
-                    {!contact.junk ? (
-                      <button
-                        type="button"
-                        className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
-                        onClick={() => props.onTogglePin(contact.id)}
-                        aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-                        title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
-                      >
-                        <Pin size={11} />
-                      </button>
-                    ) : null}
-                    {contact.providers.includes("outlook") ? (
-                      <button
-                        type="button"
-                        className={`inbox-channel-junk${contact.outlookJunk ? " junk" : ""}`}
-                        onClick={() => props.onToggleJunk?.(contact)}
-                        aria-label={`${contact.outlookJunk ? "Restore emails from" : "Hide emails from"} ${contact.name}`}
-                        title={`${contact.outlookJunk ? "Restore emails from" : "Hide emails from"} ${contact.name}`}
-                      >
-                        <Ban size={11} />
-                      </button>
-                    ) : null}
+                    <button
+                      type="button"
+                      className={`inbox-channel-pin${contact.pinned ? " pinned" : ""}`}
+                      onClick={() => props.onTogglePin(contact.id)}
+                      aria-label={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                      title={`${contact.pinned ? "Unpin" : "Pin"} ${contact.name}`}
+                    >
+                      <Pin size={11} />
+                    </button>
                   </span>
                 </div>
               ))}
@@ -1818,8 +1629,8 @@ function ContactAvatar(props: {
   );
 }
 
-function ProviderIcon(props: { provider: InboxProvider }): ReactNode {
-  return props.provider === "outlook" ? <Mail size={15} /> : <MessageSquare size={15} />;
+function ProviderIcon(_props: { provider: InboxProvider }): ReactNode {
+  return <MessageSquare size={15} />;
 }
 
 function DetailBlock(props: { label: string; children: ReactNode }): ReactNode {
@@ -1854,7 +1665,7 @@ function readPinnedContactIds(): Set<string> {
     return new Set(
       stored.flatMap((item) => {
         if (typeof item !== "string") return [];
-        if (item.startsWith("microsoft_teams:") || item.startsWith("outlook:")) {
+        if (item.startsWith("microsoft_teams:")) {
           return [`person:${item.slice(item.indexOf(":") + 1)}`];
         }
         return [item];
@@ -1865,23 +1676,12 @@ function readPinnedContactIds(): Set<string> {
   }
 }
 
-function readJunkContactIds(): Set<string> {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(inboxJunkContactsStorageKey) ?? "[]") as unknown;
-    return new Set(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
-
 function buildInboxContacts(
   conversations: InboxConversationSummary[],
   pinnedContactIds: Set<string>,
-  junkContactIds: Set<string>,
 ): InboxChannelContact[] {
   const contacts = new Map<string, InboxChannelContact>();
   for (const conversation of conversations) {
-    const conversationJunk = isJunkConversation(conversation, junkContactIds);
     const participants = conversation.participants.length ? conversation.participants : [{ name: conversation.title }];
     const conversationContacts = new Set<string>();
     for (const participant of participants) {
@@ -1892,30 +1692,23 @@ function buildInboxContacts(
       const existing = contacts.get(id);
       if (existing) {
         existing.conversationCount += 1;
-        if (conversation.unread && !conversationJunk) existing.unreadCount += 1;
+        if (conversation.unread) existing.unreadCount += 1;
         if (!existing.providers.includes(conversation.provider)) existing.providers.push(conversation.provider);
-        existing.junk &&= conversationJunk;
-        existing.outlookJunk ||=
-          conversation.provider === "outlook" && junkContactIds.has(inboxProviderContactId("outlook", key));
         continue;
       }
       contacts.set(id, {
         id,
         key,
-        includeJunk: conversationJunk,
         name: participant.name.trim() || participant.email?.trim() || conversation.title,
         email: participant.email?.trim(),
         providers: [conversation.provider],
         conversationCount: 1,
-        unreadCount: conversation.unread && !conversationJunk ? 1 : 0,
+        unreadCount: conversation.unread ? 1 : 0,
         pinned: pinnedContactIds.has(id),
-        junk: conversationJunk,
-        outlookJunk: conversation.provider === "outlook" && junkContactIds.has(inboxProviderContactId("outlook", key)),
       });
     }
   }
   return [...contacts.values()].sort((left, right) => {
-    if (left.junk !== right.junk) return left.junk ? 1 : -1;
     if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
     if (Boolean(left.unreadCount) !== Boolean(right.unreadCount)) return left.unreadCount ? -1 : 1;
     return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
@@ -1924,16 +1717,15 @@ function buildInboxContacts(
 
 function channelContactGroups(contacts: InboxChannelContact[]): InboxChannelContactGroup[] {
   const groups: InboxChannelContactGroup[] = [
-    { label: "Pinned", contacts: contacts.filter((contact) => contact.pinned && !contact.junk) },
+    { label: "Pinned", contacts: contacts.filter((contact) => contact.pinned) },
     {
       label: "Unread",
-      contacts: contacts.filter((contact) => !contact.pinned && !contact.junk && contact.unreadCount > 0),
+      contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount > 0),
     },
     {
       label: "A–Z",
-      contacts: contacts.filter((contact) => !contact.pinned && !contact.junk && contact.unreadCount === 0),
+      contacts: contacts.filter((contact) => !contact.pinned && contact.unreadCount === 0),
     },
-    { label: "Junk", contacts: contacts.filter((contact) => contact.junk) },
   ];
   return groups.filter((group) => group.contacts.length > 0);
 }
@@ -1943,14 +1735,6 @@ function conversationHasContact(conversation: InboxConversationSummary, key: str
   return participants.some((participant) => inboxContactKey(participant, conversation.provider) === key);
 }
 
-function isJunkConversation(conversation: InboxConversationSummary, junkContactIds: Set<string>): boolean {
-  if (conversation.provider !== "outlook") return false;
-  const participants = conversation.participants.length ? conversation.participants : [{ name: conversation.title }];
-  return participants.some((participant) =>
-    junkContactIds.has(inboxProviderContactId("outlook", inboxContactKey(participant, "outlook"))),
-  );
-}
-
 function inboxContactKey(participant: InboxParticipant, provider: InboxProvider): string {
   const email = participant.email?.trim().toLowerCase();
   return email || `${provider}:${participant.name.trim().toLowerCase()}`;
@@ -1958,10 +1742,6 @@ function inboxContactKey(participant: InboxParticipant, provider: InboxProvider)
 
 function inboxContactId(key: string): string {
   return `person:${encodeURIComponent(key)}`;
-}
-
-function inboxProviderContactId(provider: InboxProvider, key: string): string {
-  return `${provider}:${encodeURIComponent(key)}`;
 }
 
 function groupConversationsByPerson(
@@ -2046,16 +1826,6 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatTaskStatus(value: string): string {
-  return value.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
-}
-
-function formatTaskDate(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
-}
-
 function formatRelativeTime(value: string): string {
   const elapsed = Date.now() - new Date(value).getTime();
   if (!Number.isFinite(elapsed)) return "";
@@ -2126,10 +1896,6 @@ function chooseHandoffConnection(
 function messagePreview(content: string): string {
   const compact = content.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 69)}…` : compact || "Selected message";
-}
-
-function isLongEmailMessage(content: string): boolean {
-  return content.length > 900 || content.split(/\r?\n/).length > 14;
 }
 
 function initials(name: string): string {
