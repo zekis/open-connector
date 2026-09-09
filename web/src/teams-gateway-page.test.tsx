@@ -51,6 +51,7 @@ describe("Teams gateway routes", () => {
     );
 
     expect(html).toContain('href="/teams-gateway/new"');
+    expect(html).toContain('href="/inbox?source=microsoft_teams"');
     expect(html).not.toContain('data-slot="dialog-content"');
   });
 

@@ -121,6 +121,11 @@ export function TeamsGatewayPage(props: TeamsGatewayPageProps): ReactNode {
           <p>See where each agent is present, what it has handled, and which Teams groups it can respond in.</p>
         </div>
         <div className="button-row">
+          <Button variant="outline" asChild>
+            <Link to="/inbox?source=microsoft_teams">
+              <MessagesSquare size={14} /> Conversations
+            </Link>
+          </Button>
           <Button variant="outline" onClick={() => void poll()} disabled={polling}>
             {polling ? <Loader2 className="spin" size={14} /> : <Play size={14} />} Poll now
           </Button>
@@ -215,6 +220,7 @@ function AgentCard({ agent, groups, metrics, updatingGroupId, onSetGroupEnabled 
         <Metric value={metrics?.replyCount ?? 0} label="Replies" />
         <Metric value={metrics?.activeThreadCount ?? 0} label="Threads" />
         <Metric value={(metrics?.pendingPlanCount ?? 0) + (metrics?.pendingApprovalCount ?? 0)} label="Waiting" />
+        <Metric value={metrics?.operatorTakeoverCount ?? 0} label="Human" />
       </div>
 
       <div className="teams-group-area">

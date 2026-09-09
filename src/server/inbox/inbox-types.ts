@@ -77,6 +77,8 @@ export interface InboxConversationSummary {
   messageCount: number;
   contextLabel?: string;
   pendingPlanMessageId?: string;
+  operatorTakeover: boolean;
+  operatorTakeoverAt?: string;
 }
 
 export interface InboxConversation extends InboxConversationSummary {

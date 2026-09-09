@@ -36,7 +36,10 @@ export interface InboxServiceOptions {
   connections: Pick<ConnectionService, "listConnections">;
   actions: IActionRunner;
   agentChat: Pick<AgentChatService, "respondWithExtension">;
-  teamsGateway: Pick<TeamsGatewayService, "approveOperatorPlan" | "listAgents" | "listThreads" | "sendOperatorReply">;
+  teamsGateway: Pick<
+    TeamsGatewayService,
+    "approveOperatorPlan" | "listAgents" | "listThreads" | "sendOperatorReply" | "setOperatorTakeover"
+  >;
   store: IInboxStore;
   getPolicySnapshot(): Promise<ActionPolicySnapshot>;
 }
@@ -130,7 +133,7 @@ export class InboxService {
         )
       : conversations;
     filtered.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    return { sources, conversations: filtered.slice(0, 100), errors };
+    return { sources, conversations: filtered.slice(0, 500), errors };
   }
 
   async get(conversationId: string): Promise<InboxConversation> {
@@ -198,6 +201,18 @@ export class InboxService {
     const messageId = optionalString(value.messageId);
     if (!messageId) throw invalidInput("messageId is required.");
     await this.options.teamsGateway.approveOperatorPlan(reference.threadId, messageId);
+    return this.get(conversationId);
+  }
+
+  /** Switches a Teams conversation between automated handling and a human operator. */
+  async setTeamsTakeover(conversationId: string, input: unknown): Promise<InboxConversation> {
+    const reference = decodeReference(conversationId);
+    if (reference.provider !== "microsoft_teams") {
+      throw new InboxError("unsupported_provider", "Takeover is only available for Teams conversations.", 409);
+    }
+    const value = requiredRecord(input, "Teams takeover", invalidInput);
+    if (typeof value.active !== "boolean") throw invalidInput("active must be a boolean.");
+    await this.options.teamsGateway.setOperatorTakeover(reference.threadId, value.active);
     return this.get(conversationId);
   }
 
@@ -438,6 +453,8 @@ export class InboxService {
       messageCount: thread.messages.length,
       contextLabel: teamsContextLabel(thread, agents),
       pendingPlanMessageId: thread.pendingPlan?.messageId,
+      operatorTakeover: Boolean(thread.operatorTakeover),
+      operatorTakeoverAt: thread.operatorTakeover?.startedAt,
     };
   }
 
@@ -506,6 +523,7 @@ export class InboxService {
         ...metadataSummary(metadata.get(outlookMetadataId(connection.id, latest.conversationId)), false),
         messageCount: messages.length,
         contextLabel: connection.profile.displayName,
+        operatorTakeover: false,
       };
     });
   }
@@ -562,6 +580,7 @@ export class InboxService {
       ...metadataSummary(metadata, false),
       messageCount: mappedMessages.length,
       contextLabel: connection.profile.displayName,
+      operatorTakeover: false,
       messages: mergeTimelineItems(mappedMessages, metadata),
     };
   }
@@ -990,13 +1009,17 @@ function mapTeamsMessage(
   agents: TeamsGatewayAgent[],
 ): InboxMessage {
   const outbound = message.role === "assistant";
+  const agentName = agents.find((agent) => agent.id === thread.agentId)?.name ?? "Agent";
   return {
     id: message.id,
     kind: "message",
     direction: outbound ? "outbound" : "inbound",
     sender: outbound
-      ? { name: agents.find((agent) => agent.id === thread.agentId)?.name ?? "Agent" }
-      : { name: thread.participantName || thread.participantEmail, email: thread.participantEmail },
+      ? { name: message.sentBy === "operator" ? `You · via ${agentName}` : agentName }
+      : {
+          name: message.sender?.displayName ?? thread.participantName ?? thread.participantEmail,
+          email: message.sender?.email ?? thread.participantEmail,
+        },
     content: message.content,
     createdAt: message.createdAt,
     attachments: (message.attachments ?? []).map((attachment) => ({

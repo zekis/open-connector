@@ -321,6 +321,9 @@ export class ConnectServer {
       app.post("/api/inbox/conversations/:id/teams-plan-approval", (context) =>
         this.approveInboxTeamsPlan(context, context.req.param("id")),
       );
+      app.put("/api/inbox/conversations/:id/teams-takeover", (context) =>
+        this.setInboxTeamsTakeover(context, context.req.param("id")),
+      );
       app.post("/api/inbox/conversations/:id/ai-actions", (context) =>
         this.runInboxAiAction(context, context.req.param("id")),
       );
@@ -1434,6 +1437,10 @@ export class ConnectServer {
 
   private async approveInboxTeamsPlan(context: Context, id: string): Promise<Response> {
     return context.json(await this.options.inbox!.approveTeamsPlan(id, await readJsonBody(context)));
+  }
+
+  private async setInboxTeamsTakeover(context: Context, id: string): Promise<Response> {
+    return context.json(await this.options.inbox!.setTeamsTakeover(id, await readJsonBody(context)));
   }
 
   private async runInboxAiAction(context: Context, id: string): Promise<Response> {

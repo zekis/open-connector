@@ -486,6 +486,56 @@ describe("InboxService", () => {
       messages: [{ id: "teams-message-1" }],
     });
   });
+
+  it("shows and changes Teams operator takeover state", async () => {
+    let thread: TeamsGatewayThread = {
+      ...teamsThread,
+      operatorTakeover: { startedAt: "2026-09-04T02:00:00.000Z" },
+      messages: [
+        ...teamsThread.messages,
+        {
+          id: "operator-message-1",
+          role: "assistant",
+          content: "I am looking into this for you.",
+          sentBy: "operator",
+          createdAt: "2026-09-04T02:01:00.000Z",
+        },
+      ],
+    };
+    const takeoverCalls: boolean[] = [];
+    const teamsGateway: ConstructorParameters<typeof InboxService>[0]["teamsGateway"] = {
+      async listAgents() {
+        return [teamsAgent];
+      },
+      async listThreads() {
+        return [thread];
+      },
+      async sendOperatorReply() {
+        return thread;
+      },
+      async approveOperatorPlan() {
+        return thread;
+      },
+      async setOperatorTakeover(_threadId, active) {
+        takeoverCalls.push(active);
+        thread = { ...thread, operatorTakeover: active ? thread.operatorTakeover : undefined };
+        return thread;
+      },
+    };
+    const service = createService(vi.fn(), new MemoryInboxStore(), [], undefined, teamsGateway);
+    const summary = (await service.list()).conversations[0]!;
+
+    expect(summary).toMatchObject({
+      operatorTakeover: true,
+      operatorTakeoverAt: "2026-09-04T02:00:00.000Z",
+    });
+    expect((await service.get(summary.id)).messages.at(-1)?.sender.name).toBe("You · via Project agent");
+
+    const released = await service.setTeamsTakeover(summary.id, { active: false });
+
+    expect(takeoverCalls).toEqual([false]);
+    expect(released.operatorTakeover).toBe(false);
+  });
 });
 
 interface HandoffCall {
@@ -502,6 +552,23 @@ function createService(
       throw new Error("Unexpected AI handoff.");
     },
   },
+  teamsGateway: ConstructorParameters<typeof InboxService>[0]["teamsGateway"] = {
+    async listAgents() {
+      return [teamsAgent];
+    },
+    async listThreads() {
+      return [teamsThread];
+    },
+    async sendOperatorReply() {
+      return teamsThread;
+    },
+    async approveOperatorPlan() {
+      return teamsThread;
+    },
+    async setOperatorTakeover() {
+      return teamsThread;
+    },
+  },
 ): InboxService {
   return new InboxService({
     catalog: createCatalogStore([devopsProvider], { executableActionIds: ["azure_devops.create_work_item"] }),
@@ -512,20 +579,7 @@ function createService(
     },
     actions: { run },
     agentChat,
-    teamsGateway: {
-      async listAgents() {
-        return [teamsAgent];
-      },
-      async listThreads() {
-        return [teamsThread];
-      },
-      async sendOperatorReply() {
-        return teamsThread;
-      },
-      async approveOperatorPlan() {
-        return teamsThread;
-      },
-    },
+    teamsGateway,
     async getPolicySnapshot() {
       return new ActionPolicyService().createSnapshot();
     },

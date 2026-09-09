@@ -381,6 +381,7 @@ export interface TeamsGatewayThread {
   participantName: string;
   pendingPlan?: { summary: string };
   pendingApprovalIds?: string[];
+  operatorTakeover?: { startedAt: string };
   updatedAt: string;
 }
 
@@ -421,6 +422,7 @@ export interface TeamsGatewayAgentMetrics {
   replyCount: number;
   pendingPlanCount: number;
   pendingApprovalCount: number;
+  operatorTakeoverCount: number;
 }
 
 export type InboxProvider = "microsoft_teams" | "outlook";
@@ -502,6 +504,8 @@ export interface InboxConversationSummary {
   messageCount: number;
   contextLabel?: string;
   pendingPlanMessageId?: string;
+  operatorTakeover: boolean;
+  operatorTakeoverAt?: string;
 }
 
 export interface InboxConversation extends InboxConversationSummary {

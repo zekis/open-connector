@@ -859,6 +859,14 @@
   background: color-mix(in oklab, var(--brand) 9%, var(--background));
   color: var(--brand);
 }
+.inbox-list-tags .inbox-takeover-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid color-mix(in oklab, var(--warning) 30%, var(--border));
+  background: color-mix(in oklab, var(--warning) 9%, var(--background));
+  color: var(--warning);
+}
 .inbox-unread {
   position: absolute;
   top: 18px;
@@ -923,6 +931,11 @@
   border-color: color-mix(in oklab, var(--warning) 35%, var(--border));
   color: var(--warning);
 }
+.inbox-takeover-action.active {
+  border-color: color-mix(in oklab, var(--warning) 42%, var(--border));
+  background: color-mix(in oklab, var(--warning) 10%, transparent);
+  color: var(--warning);
+}
 
 .inbox-messages {
   display: flex;
@@ -931,6 +944,56 @@
   min-height: 0;
   padding: 24px clamp(18px, 4vw, 52px);
   overflow-y: auto;
+}
+
+.inbox-takeover-banner {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--warning) 35%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--warning) 9%, var(--background));
+  color: var(--warning);
+  box-shadow: var(--console-shadow-sm);
+}
+.inbox-takeover-banner > span {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  color: var(--foreground);
+}
+.inbox-takeover-banner strong {
+  font-size: 11px;
+}
+.inbox-takeover-banner small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+.inbox-takeover-banner button {
+  border: 0;
+  background: transparent;
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.inbox-takeover-banner button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+.inbox-handling-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.inbox-handling-state.operator {
+  color: var(--warning);
 }
 
 .inbox-loading {

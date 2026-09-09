@@ -77,7 +77,13 @@ export interface TeamsGatewayPlan {
 export interface TeamsGatewayMessage extends AgentChatMessage {
   id: string;
   createdAt: string;
+  sender?: TeamsGatewayGroupMember;
+  sentBy?: "agent" | "operator";
   toolActivity?: AgentChatToolActivity[];
+}
+
+export interface TeamsGatewayOperatorTakeover {
+  startedAt: string;
 }
 
 export interface TeamsGatewayThread {
@@ -102,6 +108,7 @@ export interface TeamsGatewayThread {
   pendingPlan?: TeamsGatewayPlan;
   pendingApprovalIds?: string[];
   pendingApprovalMessageId?: string;
+  operatorTakeover?: TeamsGatewayOperatorTakeover;
   createdAt: string;
   updatedAt: string;
 }
@@ -118,6 +125,7 @@ export interface TeamsGatewayAgentMetrics {
   replyCount: number;
   pendingPlanCount: number;
   pendingApprovalCount: number;
+  operatorTakeoverCount: number;
 }
 
 export interface TeamsGatewayContact {

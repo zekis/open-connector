@@ -24,6 +24,9 @@ and a second credential store are not required.
    availability, and discovers its group chats, joined Teams, and visible channels.
 6. Review **Detected groups** on the gateway page and disable any group chat or Team where the agent
    should not communicate. Disabled groups remain visible so they can be enabled later.
+7. Open **Conversations** to review the Teams transcript in the unified Inbox. Use **Take over** to
+   pause the agent for one conversation, reply as the Teams identity, then choose **Return to AI**
+   when automated handling should resume.
 
 When `OOMOL_CONNECT_ORIGIN` is a public HTTPS origin, OpenConnector creates Microsoft Graph change
 notification subscriptions for the agent's chats, joined-team channel lists, and visible channel
@@ -48,7 +51,9 @@ after upgrading to attachment support so the new file scopes are granted.
 
 ## Safety model
 
-- Agents see only the exact connection-and-Action pairs captured when their configuration is saved.
+- Agents see only Actions from the exact connections enabled in their configuration. The available
+  Actions refresh from the current provider catalog so newly deployed capabilities do not require
+  reconnecting or resaving the agent.
 - The standard Microsoft Teams chat-send Action is excluded from agent grants. Proactive DMs must
   use the gateway path so recipient policy cannot be bypassed.
 - A recipient must be in an internal domain or be listed as an authorized external user.
@@ -58,22 +63,31 @@ after upgrading to attachment support so the new file scopes are granted.
   allowlist.
 - Disabled group chats and Teams are excluded from message reads, replies, pending-plan resumes, and
   pending-approval resumes. Direct 1:1 chats are unaffected.
+- Operator takeover is scoped to one conversation. New messages continue to be recorded, but the
+  agent cannot reply or resume a pending plan or approval until the operator returns it to AI.
 - Messages sent by any enabled gateway identity are suppressed before agent dispatch. The runtime
   also tracks its own recently emitted message IDs so Graph sender inconsistencies cannot create an
   echo loop.
 - App, system, and anonymous messages without a resolvable user identity are ignored.
 - Provider actions still use OpenConnector's exact-request approval process and audit trail.
-- Incoming files are capped by OpenConnector's transit-file limit (25 MB by default), staged only for
-  the current agent turn, and explicitly treated as untrusted data.
+- Incoming files are capped by OpenConnector's configured transit-file limit (100 MB by default in
+  the Node runtime and up to 25 MB on Cloudflare), staged only for the current agent turn, and
+  explicitly treated as untrusted data.
 
 ## Conversations, plans, and approvals
 
 Threads are durable, isolated per Teams agent and conversation, and processed with bounded
-concurrency. Recent Teams messages and their IDs, including proactive messages sent by the agent, are
-supplied as conversation context. Group rosters and channel/post names are also included. Channel
-responses are posted as replies to the root post rather than as new channel posts. The configured
-thread window controls when idle conversation context expires. Re-enabling a group starts from that
-moment, so messages sent while it was disabled are not handled retroactively.
+concurrency. The Inbox retains up to 500 recent messages per conversation for operator review while
+only messages inside the configured thread window, capped at 40 messages, are supplied to the agent
+as context. Sender identity is retained per message so group and channel transcripts identify the
+correct participant. Channel responses are posted as replies to the root post rather than as new
+channel posts. Re-enabling a group starts from that moment, so messages sent while it was disabled
+are not handled retroactively.
+
+Taking over clears the conversation's pending plan and denies any still-pending connector approvals
+so stale work cannot resume behind the operator. Human replies are labelled separately in the Inbox
+but are sent through the same Teams identity. Returning the conversation to AI affects only future
+inbound messages; the agent does not replay messages already handled during takeover.
 
 Agent Markdown is converted to Teams-safe HTML before sending. Paragraphs, headings, bold and
 italic text, links, code, quotes, lists, task lists, and tables retain their structure in chats and

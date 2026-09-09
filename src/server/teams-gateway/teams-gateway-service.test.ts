@@ -551,6 +551,109 @@ describe("TeamsGatewayService", () => {
     expect((await store.getThread("agent-1", "chat-1"))?.pendingApprovalIds).toBeUndefined();
   });
 
+  it("logs messages without automated replies while an operator has taken over", async () => {
+    const approval = createApproval("takeover-approval");
+    const approvals = new FakeApprovals([approval]);
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    await store.setThread({
+      id: "agent-1:chat-1",
+      agentId: "agent-1",
+      chatId: "chat-1",
+      conversationKind: "direct",
+      participantId: "person-user-id",
+      participantEmail: "person@company.test",
+      participantName: "Person",
+      messages: [],
+      cursorAt: "2026-09-01T00:00:00.000Z",
+      pendingPlan: {
+        summary: "Update a record",
+        steps: ["Update it"],
+        originalRequest: "Update it",
+        createdAt: "2026-09-01T00:30:00.000Z",
+      },
+      pendingApprovalIds: [approval.id],
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:30:00.000Z",
+    });
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Is someone looking at this?"),
+    ]);
+    const chat = new FakeAgentChat([completedResponse("The agent is handling messages again.")]);
+    const service = createService(store, graph, chat, approvals);
+
+    const takenOver = await service.setOperatorTakeover("agent-1:chat-1", true);
+    expect(takenOver).toMatchObject({
+      operatorTakeover: { startedAt: "2026-09-01T02:00:00.000Z" },
+    });
+    expect(takenOver.pendingPlan).toBeUndefined();
+    expect(takenOver.pendingApprovalIds).toBeUndefined();
+    expect(approvals.status(approval.id)).toBe("denied");
+
+    expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
+    expect(chat.respondExtensions).toHaveLength(0);
+    expect(graph.sent).toHaveLength(0);
+    expect((await store.getThread("agent-1", "chat-1"))?.messages).toMatchObject([
+      {
+        id: "message-1",
+        sender: { userId: "person-user-id", email: "person@company.test", displayName: "Person" },
+      },
+    ]);
+
+    await service.sendOperatorReply("agent-1:chat-1", "I am looking into this for you.");
+    expect((await store.getThread("agent-1", "chat-1"))?.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "I am looking into this for you.",
+      sentBy: "operator",
+    });
+
+    await service.setOperatorTakeover("agent-1:chat-1", false);
+    graph.messages.push(inboundMessage("message-2", "2026-09-01T01:01:00.000Z", "Please continue."));
+    await service.pollNow();
+
+    expect(chat.respondExtensions).toHaveLength(1);
+    expect(graph.sent.at(-1)?.text).toBe("The agent is handling messages again.");
+  });
+
+  it("retains the conversation log while limiting old messages in agent context", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false, threadWindowHours: 12 })]);
+    await store.setThread({
+      id: "agent-1:chat-1",
+      agentId: "agent-1",
+      chatId: "chat-1",
+      conversationKind: "direct",
+      participantId: "person-user-id",
+      participantEmail: "person@company.test",
+      participantName: "Person",
+      messages: [
+        {
+          id: "old-message",
+          role: "user",
+          content: "This is outside the context window.",
+          createdAt: "2026-08-01T01:00:00.000Z",
+        },
+      ],
+      cursorAt: "2026-08-01T01:00:00.000Z",
+      createdAt: "2026-08-01T01:00:00.000Z",
+      updatedAt: "2026-08-01T01:00:00.000Z",
+    });
+    const graph = new FakeTeamsGraph([
+      inboundMessage("current-message", "2026-09-01T01:00:00.000Z", "This should reach the agent."),
+    ]);
+    const chat = new FakeAgentChat([completedResponse("Current message received.")]);
+    const service = createService(store, graph, chat);
+
+    await service.pollNow();
+
+    expect(chat.inputs[0]).toMatchObject({
+      messages: [expect.objectContaining({ content: "This should reach the agent." })],
+    });
+    expect((await store.getThread("agent-1", "chat-1"))?.messages.map((message) => message.id)).toEqual([
+      "old-message",
+      "current-message",
+      expect.any(String),
+    ]);
+  });
+
   it("detects group chats, keeps their roster as context, and replies to the group", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
     const graph = new FakeTeamsGraph([

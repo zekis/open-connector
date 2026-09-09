@@ -28,6 +28,7 @@ import {
   ChevronUp,
   ExternalLink,
   FileText,
+  Headphones,
   Loader2,
   ListTodo,
   Mail,
@@ -50,7 +51,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import remarkGfm from "remark-gfm";
 import { ApiError, apiGet, apiPost, apiPut, apiUpload } from "./api";
 import { ProviderIcon as CatalogProviderIcon } from "./shared-ui";
@@ -146,10 +147,13 @@ interface InboxPageProps {
 
 export function InboxPageView(props: InboxPageProps): ReactNode {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState<InboxPage>({ sources: [], conversations: [], errors: [] });
   const [selectedId, setSelectedId] = useState<string>();
   const [conversation, setConversation] = useState<InboxConversation>();
-  const [sourceId, setSourceId] = useState("all");
+  const [sourceId, setSourceId] = useState(() =>
+    searchParams.get("source") === "microsoft_teams" ? "microsoft_teams" : "all",
+  );
   const [contactFilter, setContactFilter] = useState<InboxContactFilter>();
   const [pinnedContactIds, setPinnedContactIds] = useState<Set<string>>(readPinnedContactIds);
   const [junkContactIds, setJunkContactIds] = useState<Set<string>>(readJunkContactIds);
@@ -179,6 +183,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
   const [sendingHandoff, setSendingHandoff] = useState(false);
   const [synapseMessageId, setSynapseMessageId] = useState<string>();
   const [approvingPlanMessageId, setApprovingPlanMessageId] = useState<string>();
+  const [changingTakeover, setChangingTakeover] = useState(false);
   const [expandedEmailMessageIds, setExpandedEmailMessageIds] = useState<Set<string>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -198,7 +203,11 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         const next = await apiGet<InboxPage>("/api/inbox");
         setPage(next);
         setSelectedId((current) => {
-          const visible = next.conversations.filter((item) => !isJunkConversation(item, junkContactIds));
+          const visible = next.conversations.filter(
+            (item) =>
+              !isJunkConversation(item, junkContactIds) &&
+              (sourceId === "all" || item.sourceId === sourceId || item.provider === sourceId),
+          );
           const selectedJunkContact = contactFilterRef.current?.includeJunk ? contactFilterRef.current : undefined;
           const canKeepCurrent = next.conversations.some(
             (item) =>
@@ -215,7 +224,7 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
         if (!silent) setLoading(false);
       }
     },
-    [junkContactIds],
+    [junkContactIds, sourceId],
   );
 
   const loadConversation = useCallback(async (id: string, silent = false): Promise<void> => {
@@ -247,9 +256,12 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
 
   useEffect(() => {
     void loadPage();
-    const timer = window.setInterval(() => void loadPage(true), 30_000);
+    const timer = window.setInterval(() => {
+      void loadPage(true);
+      if (selectedId) void loadConversation(selectedId, true);
+    }, 30_000);
     return () => window.clearInterval(timer);
-  }, [loadPage]);
+  }, [loadConversation, loadPage, selectedId]);
 
   useEffect(() => {
     window.localStorage.setItem(inboxPanelWidthsStorageKey, JSON.stringify(panelWidths));
@@ -381,14 +393,38 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
     }
   }
 
+  async function setTeamsTakeover(active: boolean): Promise<void> {
+    if (!selectedId || conversation?.provider !== "microsoft_teams" || changingTakeover) return;
+    setChangingTakeover(true);
+    try {
+      const next = await apiPut<InboxConversation>(
+        `/api/inbox/conversations/${encodeURIComponent(selectedId)}/teams-takeover`,
+        { active },
+      );
+      adoptConversation(next, selectedId);
+      await loadPage(true);
+    } catch (takeoverError) {
+      setError(messageForError(takeoverError, "Could not change who is handling this Teams conversation."));
+    } finally {
+      setChangingTakeover(false);
+    }
+  }
+
   function selectSource(id: string): void {
     setSourceId(id);
     setContactFilter(undefined);
+    setSelectedId(
+      page.conversations.find(
+        (item) =>
+          !isJunkConversation(item, junkContactIds) && (id === "all" || item.sourceId === id || item.provider === id),
+      )?.id,
+    );
   }
 
   function selectContact(contact: InboxChannelContact): void {
     setSourceId("all");
     setContactFilter({ id: contact.id, key: contact.key, includeJunk: contact.junk });
+    setSelectedId(page.conversations.find((item) => conversationHasContact(item, contact.key))?.id);
   }
 
   function toggleContactPin(id: string): void {
@@ -896,6 +932,18 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 <span>{conversation.contextLabel}</span>
               </div>
               <span className={`inbox-status ${conversation.status}`}>{conversation.status}</span>
+              {conversation.provider === "microsoft_teams" ? (
+                <Button
+                  className={`inbox-header-action inbox-takeover-action${conversation.operatorTakeover ? " active" : ""}`}
+                  variant="outline"
+                  size="sm"
+                  disabled={changingTakeover}
+                  onClick={() => void setTeamsTakeover(!conversation.operatorTakeover)}
+                >
+                  {changingTakeover ? <Loader2 className="spin" size={14} /> : <Headphones size={14} />}
+                  <span>{conversation.operatorTakeover ? "Return to AI" : "Take over"}</span>
+                </Button>
+              ) : null}
               <Button
                 className="inbox-header-action"
                 variant="outline"
@@ -930,6 +978,18 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
               {loadingConversation ? (
                 <div className="inbox-loading">
                   <Loader2 className="spin" size={18} /> Loading conversation…
+                </div>
+              ) : null}
+              {conversation.operatorTakeover ? (
+                <div className="inbox-takeover-banner">
+                  <Headphones size={15} />
+                  <span>
+                    <strong>You are handling this conversation</strong>
+                    <small>The support agent is paused. New Teams messages will continue to appear here.</small>
+                  </span>
+                  <button type="button" disabled={changingTakeover} onClick={() => void setTeamsTakeover(false)}>
+                    Return to AI
+                  </button>
                 </div>
               ) : null}
               {conversation.messages.map((message, index) => {
@@ -1225,6 +1285,17 @@ export function InboxPageView(props: InboxPageProps): ReactNode {
                 <small>{selectedSource.accountLabel}</small>
               ) : null}
             </DetailBlock>
+            {conversation.provider === "microsoft_teams" ? (
+              <DetailBlock label="Handling">
+                <span className={`inbox-handling-state${conversation.operatorTakeover ? " operator" : ""}`}>
+                  {conversation.operatorTakeover ? <Headphones size={13} /> : <Bot size={13} />}
+                  {conversation.operatorTakeover ? "Human operator" : "Support agent"}
+                </span>
+                {conversation.operatorTakeoverAt ? (
+                  <small>Taken over {formatRelativeTime(conversation.operatorTakeoverAt)}</small>
+                ) : null}
+              </DetailBlock>
+            ) : null}
             <DetailBlock label="Priority">
               <select
                 className={`inbox-priority-select ${conversation.priority}`}
@@ -1684,12 +1755,21 @@ function ConversationButton(props: {
           {props.personName ? [item.title, item.contextLabel].filter(Boolean).join(" · ") : item.contextLabel}
         </span>
         <p>{item.preview || "Attachment"}</p>
-        {item.labels.length || item.usedConnections.length || item.priority !== "none" || item.status === "waiting" ? (
+        {item.labels.length ||
+        item.usedConnections.length ||
+        item.priority !== "none" ||
+        item.status === "waiting" ||
+        item.operatorTakeover ? (
           <span className="inbox-list-tags">
             {item.priority !== "none" ? (
               <small className={`inbox-priority ${item.priority}`}>{item.priority}</small>
             ) : null}
             {item.status === "waiting" ? <small className="inbox-waiting">Waiting</small> : null}
+            {item.operatorTakeover ? (
+              <small className="inbox-takeover-badge">
+                <Headphones size={9} /> Human
+              </small>
+            ) : null}
             {item.labels.slice(0, 2).map((label) => (
               <small className="inbox-label" key={label}>
                 {label}

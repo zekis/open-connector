@@ -3,7 +3,7 @@ import type { ConnectionService, ConnectionSummary } from "../../connection-serv
 import type { AgentCredentialService, AgentProvider } from "../agents/agent-credential-service.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { AgentChatExtension, AgentChatService, AgentChatToolActivity } from "../chat/agent-chat-service.ts";
-import type { AgentChatAttachment } from "../chat/agent-chat-types.ts";
+import type { AgentChatAttachment, AgentChatMessage } from "../chat/agent-chat-types.ts";
 import type { ITransitFileService } from "../files/transit-file-store.ts";
 import type { Logger } from "../logger.ts";
 import type {
@@ -126,7 +126,8 @@ const requiredTeamsGatewayScopes = [
   microsoftTeamsProviderScopes.filesReadWriteAll,
   microsoftTeamsProviderScopes.sitesReadWriteAll,
 ];
-const maxThreadMessages = 40;
+const maxThreadMessages = 500;
+const maxAgentContextMessages = 40;
 const maxAttachmentsPerMessage = 10;
 const maxConcurrentAgents = 4;
 const maxConcurrentChats = 4;
@@ -159,7 +160,38 @@ export class TeamsGatewayService {
   }
 
   listThreads(agentId?: string): Promise<TeamsGatewayThread[]> {
-    return this.options.store.listThreads(agentId, 100);
+    return this.options.store.listThreads(agentId, 500);
+  }
+
+  /** Pause or restore automated replies for one Teams conversation. */
+  async setOperatorTakeover(threadIdValue: string, active: boolean): Promise<TeamsGatewayThread> {
+    const candidate = (await this.options.store.listThreads(undefined, 500)).find(
+      (thread) => thread.id === threadIdValue,
+    );
+    if (!candidate) {
+      throw new TeamsGatewayError("thread_not_found", `Teams gateway thread not found: ${threadIdValue}.`, 404);
+    }
+    return this.withOperationLock(candidate.id, async () => {
+      const thread = await this.options.store.getThread(candidate.agentId, candidate.chatId);
+      if (!thread) {
+        throw new TeamsGatewayError("thread_not_found", `Teams gateway thread not found: ${threadIdValue}.`, 404);
+      }
+      if (active) {
+        for (const approvalId of thread.pendingApprovalIds ?? []) {
+          const approval = await this.options.approvals.getActionApproval(approvalId);
+          if (approval?.status === "pending") await this.options.approvals.deny(approvalId);
+        }
+        thread.pendingPlan = undefined;
+        thread.pendingApprovalIds = undefined;
+        thread.pendingApprovalMessageId = undefined;
+        thread.operatorTakeover ??= { startedAt: this.now().toISOString() };
+      } else {
+        thread.operatorTakeover = undefined;
+      }
+      thread.updatedAt = this.now().toISOString();
+      await this.options.store.setThread(thread);
+      return thread;
+    });
   }
 
   /** Send a human operator reply from the unified inbox through the bound Teams identity. */
@@ -191,7 +223,7 @@ export class TeamsGatewayService {
     return this.withOperationLock(thread.id, async () => {
       const graphContext = await this.options.graph.context(agent.teamsConnectionId);
       if (attachments.length === 0) {
-        await this.reply(graphContext, thread, text.trim());
+        await this.reply(graphContext, thread, text.trim(), "operator");
         return thread;
       }
 
@@ -235,6 +267,7 @@ export class TeamsGatewayService {
         role: "assistant",
         content: text.trim() || attachmentOnlyMessage(sentAttachments),
         attachments: sentAttachments,
+        sentBy: "operator",
         createdAt: this.now().toISOString(),
       });
       thread.updatedAt = this.now().toISOString();
@@ -336,6 +369,7 @@ export class TeamsGatewayService {
           (total, thread) => total + (thread.pendingApprovalIds?.length ?? 0),
           0,
         ),
+        operatorTakeoverCount: agentThreads.filter((thread) => thread.operatorTakeover).length,
       };
     });
   }
@@ -597,6 +631,7 @@ export class TeamsGatewayService {
     if (target.kind === "chat_message") {
       const existing = await this.options.store.getThread(agent.id, target.chatId);
       if (
+        !existing?.operatorTakeover &&
         existing?.pendingPlan?.messageId === target.messageId &&
         (await this.isConversationEnabled(agent.id, descriptorFromThread(existing))) &&
         (await this.resumeConfirmedPlan(agent, graphContext, existing))
@@ -621,6 +656,7 @@ export class TeamsGatewayService {
     const existing = await this.options.store.getThread(agent.id, chatId);
     const changedMessageId = target.replyId ?? target.rootMessageId;
     if (
+      !existing?.operatorTakeover &&
       existing?.pendingPlan?.messageId === changedMessageId &&
       (await this.isConversationEnabled(agent.id, descriptorFromThread(existing))) &&
       (await this.resumeConfirmedPlan(agent, graphContext, existing))
@@ -702,6 +738,7 @@ export class TeamsGatewayService {
         id: sent.id ?? crypto.randomUUID(),
         role: "assistant",
         content: message,
+        sentBy: "agent",
         createdAt: sentAt,
       });
       thread.updatedAt = sentAt;
@@ -1171,9 +1208,16 @@ export class TeamsGatewayService {
       role: "user",
       content: message.text || attachmentOnlyMessage(attachments),
       ...(attachments.length ? { attachments } : {}),
+      sender: {
+        userId: participant.userId,
+        email: participant.email,
+        displayName: participant.displayName,
+      },
       createdAt: message.createdAt,
     });
     await this.options.store.setThread(thread);
+
+    if (thread.operatorTakeover) return true;
 
     if (thread.pendingApprovalIds?.length) {
       await this.handleApprovalReply(agent, graphContext, thread, message.text);
@@ -1254,7 +1298,7 @@ export class TeamsGatewayService {
     });
     const response = await this.options.agentChat.respondWithExtension(
       {
-        messages: thread.messages.map(({ role, content, attachments }) => ({ role, content, attachments })),
+        messages: this.agentContextMessages(agent, thread),
         voiceMode: false,
         timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         agentProvider: agent.agentProvider,
@@ -1279,6 +1323,14 @@ export class TeamsGatewayService {
       return;
     }
     await this.applyAgentResponse(graphContext, thread, response);
+  }
+
+  private agentContextMessages(agent: TeamsGatewayAgent, thread: TeamsGatewayThread): AgentChatMessage[] {
+    const cutoff = this.now().getTime() - agent.threadWindowHours * 60 * 60 * 1_000;
+    return thread.messages
+      .filter((message) => Date.parse(message.createdAt) >= cutoff)
+      .slice(-maxAgentContextMessages)
+      .map(({ role, content, attachments }) => ({ role, content, attachments }));
   }
 
   private createExtension(
@@ -1419,6 +1471,27 @@ export class TeamsGatewayService {
                   )
                 : await this.options.graph.sendChatAttachment(graphContext, thread.chatId, file, caption);
             this.markSelfPosted(output.id);
+            const sentAt = this.now().toISOString();
+            thread.messages = appendMessage(thread.messages, {
+              id: output.id ?? crypto.randomUUID(),
+              role: "assistant",
+              content:
+                caption ?? attachmentOnlyMessage([{ name: output.name, mimeType: file.type, sizeBytes: file.size }]),
+              attachments: [
+                {
+                  id: output.id,
+                  fileId: readOptionalText(input.fileId, "fileId", 500),
+                  name: output.name,
+                  mimeType: file.type || "application/octet-stream",
+                  sizeBytes: file.size,
+                  downloadUrl: output.webUrl,
+                },
+              ],
+              sentBy: "agent",
+              createdAt: sentAt,
+            });
+            thread.updatedAt = sentAt;
+            await this.options.store.setThread(thread);
             return completedGatewayActivity(toolName, "Send Teams attachment", input, output);
           } catch (error) {
             return failedGatewayActivity(toolName, "Send Teams attachment", input, error);
@@ -1542,7 +1615,8 @@ export class TeamsGatewayService {
     groups: TeamsGatewayGroup[],
   ): Promise<void> {
     const threads = (await this.options.store.listThreads(agent.id, 100)).filter(
-      (thread) => thread.pendingApprovalIds?.length && isThreadConversationEnabled(thread, groups),
+      (thread) =>
+        !thread.operatorTakeover && thread.pendingApprovalIds?.length && isThreadConversationEnabled(thread, groups),
     );
     for (const thread of threads) {
       const approvals = await Promise.all(
@@ -1577,7 +1651,7 @@ export class TeamsGatewayService {
     groups: TeamsGatewayGroup[],
   ): Promise<number> {
     const threads = (await this.options.store.listThreads(agent.id, 100)).filter(
-      (thread) => thread.pendingPlan && isThreadConversationEnabled(thread, groups),
+      (thread) => !thread.operatorTakeover && thread.pendingPlan && isThreadConversationEnabled(thread, groups),
     );
     let confirmedPlans = 0;
     for (const candidate of threads) {
@@ -1600,7 +1674,7 @@ export class TeamsGatewayService {
   ): Promise<boolean> {
     return this.withOperationLock(candidate.id, async () => {
       const thread = await this.options.store.getThread(agent.id, candidate.chatId);
-      if (!thread?.pendingPlan) return false;
+      if (!thread?.pendingPlan || thread.operatorTakeover) return false;
       const messageId =
         thread.pendingPlan.messageId ?? thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
       if (!messageId || !(await this.hasAuthorizedPlanLike(agent, graphContext, thread, messageId))) return false;
@@ -1659,24 +1733,29 @@ export class TeamsGatewayService {
     thread: TeamsGatewayThread,
     response: Awaited<ReturnType<AgentChatService["respondWithExtension"]>>,
   ): Promise<void> {
-    thread.messages = appendMessage(thread.messages, {
-      ...response.message,
-      toolActivity: response.toolActivity,
-    });
     thread.pendingApprovalIds =
       response.status === "waiting_for_approval"
         ? (response.approvalIds ?? (response.approvalId ? [response.approvalId] : []))
         : undefined;
-    thread.updatedAt = this.now().toISOString();
-    await this.options.store.setThread(thread);
     const approvalSuffix = thread.pendingApprovalIds?.length
       ? `\n\n${await this.describeApprovals(thread.pendingApprovalIds)}`
       : "";
-    const sent = await this.sendThreadMessage(
-      graphContext,
-      thread,
-      `${response.message.content}${approvalSuffix}`.trim(),
-    );
+    const outgoingText = `${response.message.content}${approvalSuffix}`.trim();
+    thread.messages = appendMessage(thread.messages, {
+      ...response.message,
+      content: outgoingText,
+      sentBy: "agent",
+      toolActivity: response.toolActivity,
+    });
+    thread.updatedAt = this.now().toISOString();
+    await this.options.store.setThread(thread);
+    const sent = await this.sendThreadMessage(graphContext, thread, outgoingText);
+    this.markSelfPosted(sent.id);
+    if (sent.id) {
+      thread.messages = thread.messages.map((message) =>
+        message.id === response.message.id ? { ...message, id: sent.id! } : message,
+      );
+    }
     thread.pendingApprovalMessageId = thread.pendingApprovalIds?.length ? sent.id : undefined;
     await this.options.store.setThread(thread);
   }
@@ -1695,6 +1774,7 @@ export class TeamsGatewayService {
     graphContext: TeamsGatewayGraphContext,
     thread: TeamsGatewayThread,
     text: string,
+    sentBy: "agent" | "operator" = "agent",
   ): Promise<{ id?: string }> {
     const sent = await this.sendThreadMessage(graphContext, thread, text);
     this.markSelfPosted(sent.id);
@@ -1703,6 +1783,7 @@ export class TeamsGatewayService {
       id: messageId,
       role: "assistant",
       content: text,
+      sentBy,
       createdAt: this.now().toISOString(),
     });
     thread.updatedAt = this.now().toISOString();
@@ -1741,9 +1822,7 @@ export class TeamsGatewayService {
     existing?: TeamsGatewayThread,
   ): TeamsGatewayThread {
     const now = this.now();
-    const expired =
-      existing && now.getTime() - Date.parse(existing.updatedAt) > agent.threadWindowHours * 60 * 60 * 1_000;
-    if (existing && !expired) {
+    if (existing) {
       return {
         ...existing,
         participantId: participant.userId,
@@ -1778,8 +1857,7 @@ export class TeamsGatewayService {
       participantEmail: participant.email!,
       participantName: participant.displayName,
       messages: [],
-      cursorAt: existing?.cursorAt ?? agent.watchStartedAt,
-      cursorMessageId: existing?.cursorMessageId,
+      cursorAt: agent.watchStartedAt,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -1825,6 +1903,7 @@ export class TeamsGatewayService {
         id: message.id,
         role: "assistant",
         content: message.text || "Sent a Microsoft Teams attachment.",
+        sentBy: "agent",
         createdAt: message.createdAt,
       });
     }
