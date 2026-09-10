@@ -115,4 +115,51 @@ describe("RuntimeTokenService", () => {
       "runtime token last use update failed",
     );
   });
+
+  it("returns OAuth audience and scopes and rejects expired tokens", async () => {
+    const activeToken = "oct_active";
+    const expiredToken = "oct_expired";
+    const records = [
+      {
+        id: "active",
+        name: "ChatGPT",
+        tokenHash: hashRuntimeToken(activeToken),
+        allowedActions: [],
+        blockedActions: [],
+        allowedProxies: [],
+        createdAt: "2026-09-10T00:00:00.000Z",
+        audience: "https://ocgw.example.test/mcp",
+        scopes: ["mcp:access"],
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+      {
+        id: "expired",
+        name: "Expired ChatGPT",
+        tokenHash: hashRuntimeToken(expiredToken),
+        allowedActions: [],
+        blockedActions: [],
+        allowedProxies: [],
+        createdAt: "2026-09-10T00:00:00.000Z",
+        audience: "https://ocgw.example.test/mcp",
+        scopes: ["mcp:access"],
+        expiresAt: "2000-01-01T00:00:00.000Z",
+      },
+    ];
+    const store: IRuntimeTokenStore = {
+      add: vi.fn(),
+      list: vi.fn(async () => records),
+      findByHash: vi.fn(async (hash) => records.find((record) => record.tokenHash === hash)),
+      updatePolicy: vi.fn(),
+      revoke: vi.fn(async () => false),
+      markUsed: vi.fn(),
+    };
+    const service = new RuntimeTokenService(store);
+
+    await expect(service.resolveToken(activeToken)).resolves.toMatchObject({
+      audience: "https://ocgw.example.test/mcp",
+      scopes: ["mcp:access"],
+    });
+    await expect(service.resolveToken(expiredToken)).resolves.toBeUndefined();
+    await expect(service.getGrantById("expired")).resolves.toBeUndefined();
+  });
 });

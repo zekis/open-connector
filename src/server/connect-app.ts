@@ -28,6 +28,7 @@ import { FlowRunner } from "./flows/flow-runner.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import { InboxService } from "./inbox/inbox-service.ts";
+import { McpOAuthService, mcpOAuthScope } from "./mcp-oauth/mcp-oauth-service.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 import { SynapseService } from "./synapse/synapse-service.ts";
 import { TeamsGatewayGraphClient } from "./teams-gateway/teams-gateway-graph.ts";
@@ -59,6 +60,13 @@ export interface ConnectApp {
 
 export async function createConnectApp(options: ConnectAppOptions): Promise<ConnectApp> {
   const runtimeTokens = new RuntimeTokenService(options.runtimeDatabase.runtimeTokenStore, options.logger);
+  const mcpOAuth = options.adminToken?.trim()
+    ? new McpOAuthService({
+        origin: options.publicOrigin,
+        store: options.runtimeDatabase.mcpOAuthStore,
+        runtimeTokens,
+      })
+    : undefined;
   const mobileAuth = new MobileAuthService(options.runtimeDatabase.mobileAuthStore, { logger: options.logger });
   const hasStoredRuntimeTokens = async (): Promise<boolean> => (await runtimeTokens.listTokens()).length > 0;
   const oauthClientConfigs = new OAuthClientConfigService({
@@ -204,6 +212,7 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
         connections,
         states: options.runtimeDatabase.oauthStateStore,
       }),
+      mcpOAuth,
       actions,
       flows,
       flowRunner,
@@ -224,6 +233,13 @@ export async function createConnectApp(options: ConnectAppOptions): Promise<Conn
         resolveRuntimeToken: (token) => runtimeTokens.resolveToken(token),
         resolveMobileToken: (token) => mobileAuth.resolveDeviceToken(token),
         verifyRuntimeJwt: options.verifyRuntimeJwt,
+        mcpOAuth: mcpOAuth
+          ? {
+              resource: mcpOAuth.resource,
+              resourceMetadataUrl: mcpOAuth.resourceMetadataUrl,
+              requiredScopes: [mcpOAuthScope],
+            }
+          : undefined,
       },
       actionPolicy,
       logger: options.logger,

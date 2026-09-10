@@ -337,6 +337,34 @@ describe("D1RuntimeDatabase", () => {
     await expect(database.oauthStateStore.take("state-1")).resolves.toBeUndefined();
   });
 
+  it("persists and rotates MCP OAuth refresh grants", async () => {
+    const database = new D1RuntimeDatabase(new SqliteD1Database());
+    await database.mcpOAuthStore.addClient({
+      id: "client-1",
+      name: "ChatGPT",
+      redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      grantTypes: ["authorization_code", "refresh_token"],
+      createdAt: "2026-09-10T00:00:00.000Z",
+    });
+    await database.mcpOAuthStore.addRefreshToken({
+      tokenHash: "refresh-hash",
+      clientId: "client-1",
+      runtimeTokenId: "runtime-token-1",
+      resource: "https://ocgw.example.test/mcp",
+      scopes: ["mcp:access"],
+      createdAt: "2026-09-10T00:00:00.000Z",
+      expiresAt: "2026-12-09T00:00:00.000Z",
+    });
+
+    await expect(database.mcpOAuthStore.getClient("client-1")).resolves.toMatchObject({ name: "ChatGPT" });
+    await expect(
+      database.mcpOAuthStore.takeRefreshToken("refresh-hash", "2026-09-10T00:01:00.000Z"),
+    ).resolves.toMatchObject({ runtimeTokenId: "runtime-token-1", scopes: ["mcp:access"] });
+    await expect(
+      database.mcpOAuthStore.takeRefreshToken("refresh-hash", "2026-09-10T00:01:00.000Z"),
+    ).resolves.toBeUndefined();
+  });
+
   it("stores runtime token hashes and supports verification and revocation", async () => {
     const database = new D1RuntimeDatabase(new SqliteD1Database());
     const tokens = new RuntimeTokenService(database.runtimeTokenStore);
@@ -781,6 +809,7 @@ class SqliteD1Database implements D1DatabaseBinding {
       readFileSync(new URL("../../../migrations/0020_teams_gateway_subscriptions.sql", import.meta.url), "utf8"),
     );
     this.database.exec(readFileSync(new URL("../../../migrations/0021_inbox.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0022_mcp_oauth.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

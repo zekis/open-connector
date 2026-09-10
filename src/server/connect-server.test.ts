@@ -37,6 +37,12 @@ import type {
 } from "./flows/flow-types.ts";
 import type { Logger } from "./logger.ts";
 import type {
+  IMcpOAuthStore,
+  McpOAuthAuthorizationCode,
+  McpOAuthClientRegistration,
+  McpOAuthRefreshToken,
+} from "./mcp-oauth/mcp-oauth-service.ts";
+import type {
   AbandonIdempotencyInput,
   CompleteIdempotencyInput,
   IdempotencyClaimInput,
@@ -47,6 +53,7 @@ import type { IRuntimePolicyStore, RuntimePolicyRecord } from "./storage/runtime
 import type { IRunLogStore, RunLog, RunLogListInput, RunLogPage } from "./storage/runtime-store.ts";
 import type { IRuntimeTokenStore, RuntimeTokenRecord } from "./storage/runtime-token-service.ts";
 import type { TeamsGatewayService } from "./teams-gateway/teams-gateway-service.ts";
+import type { Hono } from "hono";
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,6 +75,7 @@ import { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import { ConnectServer } from "./connect-server.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { FlowService } from "./flows/flow-service.ts";
+import { McpOAuthService, mcpOAuthScope } from "./mcp-oauth/mcp-oauth-service.ts";
 import { decodeRunLogCursor, encodeRunLogCursor } from "./storage/runtime-store.ts";
 import { RuntimeTokenService } from "./storage/runtime-token-service.ts";
 
@@ -1221,6 +1229,111 @@ describe("ConnectServer", () => {
         id: null,
       });
     }
+  });
+
+  it("completes DCR, admin consent, PKCE token exchange, and authenticated MCP initialization", async () => {
+    const app = createTestServer([apiKeyProvider], {
+      auth: { adminToken: "admin-secret", runtimeToken: "codex-token" },
+      mcpOAuth: true,
+    }).createApp();
+    const resource = "https://ocgw.example.test/mcp";
+    const redirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
+    const verifier = "v".repeat(64);
+
+    const protectedResource = await app.request("/.well-known/oauth-protected-resource/mcp");
+    expect(protectedResource.status).toBe(200);
+    await expect(protectedResource.json()).resolves.toMatchObject({
+      resource,
+      authorization_servers: ["https://ocgw.example.test"],
+      scopes_supported: [mcpOAuthScope],
+    });
+    const metadata = await app.request("/.well-known/oauth-authorization-server");
+    await expect(metadata.json()).resolves.toMatchObject({
+      registration_endpoint: "https://ocgw.example.test/oauth/register",
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["none"],
+      authorization_response_iss_parameter_supported: true,
+    });
+
+    const unauthorized = await app.request("/mcp", { method: "POST" });
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers.get("www-authenticate")).toContain(
+      'resource_metadata="https://ocgw.example.test/.well-known/oauth-protected-resource/mcp"',
+    );
+
+    const registration = await app.request("/oauth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "ChatGPT",
+        redirect_uris: [redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    });
+    expect(registration.status).toBe(201);
+    const client = (await registration.json()) as { client_id: string };
+
+    const authorization = new URL("https://ocgw.example.test/oauth/authorize");
+    authorization.search = new URLSearchParams({
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: redirectUri,
+      code_challenge: await oauthPkceChallenge(verifier),
+      code_challenge_method: "S256",
+      resource,
+      scope: mcpOAuthScope,
+      state: "chatgpt-state",
+    }).toString();
+
+    const locked = await app.request(`${authorization.pathname}${authorization.search}`);
+    expect(locked.status).toBe(200);
+    await expect(locked.text()).resolves.toContain("Unlock to continue");
+
+    const consent = await app.request(`${authorization.pathname}${authorization.search}`, {
+      headers: { authorization: "Bearer admin-secret" },
+    });
+    expect(consent.status).toBe(200);
+    await expect(consent.text()).resolves.toContain("Allow access");
+
+    const approved = await app.request("/oauth/authorize", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer admin-secret",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        ...Object.fromEntries(authorization.searchParams),
+        decision: "approve",
+      }).toString(),
+    });
+    expect(approved.status).toBe(303);
+    const callback = new URL(approved.headers.get("location")!);
+    expect(callback.origin + callback.pathname).toBe(redirectUri);
+    expect(callback.searchParams.get("state")).toBe("chatgpt-state");
+    expect(callback.searchParams.get("iss")).toBe("https://ocgw.example.test");
+
+    const tokenResponse = await app.request("/oauth/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: client.client_id,
+        code: callback.searchParams.get("code")!,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+        resource,
+      }).toString(),
+    });
+    expect(tokenResponse.status).toBe(200);
+    const token = (await tokenResponse.json()) as { access_token: string };
+
+    expect((await initializeMcp(app, token.access_token)).status).toBe(200);
+    expect((await initializeMcp(app, "codex-token")).status).toBe(200);
+    expect(
+      (await app.request("/v1/actions", { headers: { authorization: `Bearer ${token.access_token}` } })).status,
+    ).toBe(401);
   });
 
   it("surfaces provider errors returned on the OAuth callback", async () => {
@@ -3770,6 +3883,32 @@ interface TestAuthOptions {
   verifyRuntimeJwt?: RuntimeJwtVerifier;
 }
 
+async function oauthPkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return Buffer.from(digest).toString("base64url");
+}
+
+async function initializeMcp(app: Hono, token: string): Promise<Response> {
+  return await app.request("/mcp", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "oauth-integration-test", version: "1.0.0" },
+      },
+    }),
+  });
+}
+
 interface CreateTestServerOptions {
   auth?: TestAuthOptions;
   actionPolicy?: ActionPolicyService;
@@ -3789,6 +3928,7 @@ interface CreateTestServerOptions {
   connectionApprovalStore?: IConnectionApprovalStore;
   mobileAuth?: MobileAuthService;
   teamsGateway?: TeamsGatewayService;
+  mcpOAuth?: boolean;
 }
 
 function createTestServer(providers: ProviderDefinition[], options: CreateTestServerOptions = {}): ConnectServer {
@@ -3798,6 +3938,13 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
   const providerLoader = options.providerLoader ?? new EmptyProviderLoader();
   const idempotency = options.idempotency ?? new MemoryIdempotencyStore();
   const runtimeTokens = options.runtimeTokens ?? new RuntimeTokenService(new MemoryRuntimeTokenStore());
+  const mcpOAuth = options.mcpOAuth
+    ? new McpOAuthService({
+        origin: "https://ocgw.example.test",
+        store: new MemoryMcpOAuthStore(),
+        runtimeTokens,
+      })
+    : undefined;
   const runs = options.runs ?? new MemoryRunLogStore();
   const connectionStore = new MemoryConnectionStore();
   const connections = new ConnectionService({
@@ -3847,6 +3994,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
       connections,
       states: new MemoryOAuthStateStore(),
     }),
+    mcpOAuth,
     actions: actionRunner,
     flows: options.flows,
     flowTriggers: options.flowTriggers,
@@ -3864,6 +4012,13 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
       resolveRuntimeToken: (token) => runtimeTokens.resolveToken(token),
       resolveMobileToken: options.mobileAuth ? (token) => options.mobileAuth!.resolveDeviceToken(token) : undefined,
       verifyRuntimeJwt: options.auth?.verifyRuntimeJwt,
+      mcpOAuth: mcpOAuth
+        ? {
+            resource: mcpOAuth.resource,
+            resourceMetadataUrl: mcpOAuth.resourceMetadataUrl,
+            requiredScopes: [mcpOAuthScope],
+          }
+        : undefined,
     },
     actionPolicy: options.actionPolicy,
     actionSearch: options.actionSearch,
@@ -4309,6 +4464,40 @@ class MemoryOAuthStateStore implements IOAuthStateStore {
     const value = this.states.get(state);
     this.states.delete(state);
     return value;
+  }
+}
+
+class MemoryMcpOAuthStore implements IMcpOAuthStore {
+  private readonly clients = new Map<string, McpOAuthClientRegistration>();
+  private readonly codes = new Map<string, McpOAuthAuthorizationCode>();
+  private readonly refreshTokens = new Map<string, McpOAuthRefreshToken>();
+
+  async addClient(client: McpOAuthClientRegistration): Promise<void> {
+    this.clients.set(client.id, client);
+  }
+
+  async getClient(id: string): Promise<McpOAuthClientRegistration | undefined> {
+    return this.clients.get(id);
+  }
+
+  async addAuthorizationCode(code: McpOAuthAuthorizationCode): Promise<void> {
+    this.codes.set(code.codeHash, code);
+  }
+
+  async takeAuthorizationCode(codeHash: string, now: string): Promise<McpOAuthAuthorizationCode | undefined> {
+    const code = this.codes.get(codeHash);
+    this.codes.delete(codeHash);
+    return code && code.expiresAt > now ? code : undefined;
+  }
+
+  async addRefreshToken(token: McpOAuthRefreshToken): Promise<void> {
+    this.refreshTokens.set(token.tokenHash, token);
+  }
+
+  async takeRefreshToken(tokenHash: string, now: string): Promise<McpOAuthRefreshToken | undefined> {
+    const token = this.refreshTokens.get(tokenHash);
+    this.refreshTokens.delete(tokenHash);
+    return token && token.expiresAt > now ? token : undefined;
   }
 }
 

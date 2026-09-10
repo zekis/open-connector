@@ -46,6 +46,12 @@ or `*`; those grants can only narrow the deployment and runtime proxy policy.
 Because the bootstrap token has no stored policy, its proxy access is controlled only by the
 deployment and runtime proxy rules.
 
+When `OOMOL_CONNECT_ADMIN_TOKEN` and an HTTPS `OOMOL_CONNECT_ORIGIN` are configured, Open Connector
+also publishes an OAuth 2.1 authorization server for ChatGPT MCP connections. It supports automatic
+Dynamic Client Registration, authorization code with `S256` PKCE, resource indicators, rotating
+refresh tokens, and protected-resource discovery. Existing bearer-token access remains enabled.
+See [ChatGPT MCP OAuth](mcp-oauth.md) for the connection values and verification steps.
+
 ## OpenAI Codex subscription agent
 
 Open Connector can use a ChatGPT subscription through the official Codex CLI for Chat, Synapse,

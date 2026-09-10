@@ -104,6 +104,22 @@ describe("MCP server", () => {
     });
   });
 
+  it("advertises OAuth security metadata when MCP OAuth is enabled", async () => {
+    await withMcpClient(
+      async (client) => {
+        const result = await client.listTools();
+
+        expect(result.tools).toHaveLength(5);
+        for (const tool of result.tools) {
+          expect(tool._meta).toMatchObject({
+            securitySchemes: [{ type: "oauth2", scopes: ["mcp:access"] }],
+          });
+        }
+      },
+      { oauthResourceMetadataUrl: "https://ocgw.example.test/.well-known/oauth-protected-resource/mcp" },
+    );
+  });
+
   it("publishes server instructions through MCP initialization", async () => {
     await withMcpClient(async (client) => {
       const instructions = client.getInstructions();
@@ -539,6 +555,7 @@ async function withMcpClient(
       blockedActions: string[];
       allowedProxies: string[];
     };
+    oauthResourceMetadataUrl?: string;
   } = {},
 ): Promise<void> {
   const catalog = createCatalogStore([exampleProvider], {

@@ -124,6 +124,71 @@ describe("createLocalAuthMiddleware", () => {
     expect(resolveRuntimeToken).toHaveBeenCalledWith("oct_valid");
   });
 
+  it("challenges unauthenticated MCP callers when OAuth is enabled", async () => {
+    const app = new Hono();
+    app.use(
+      "*",
+      createLocalAuthMiddleware({
+        hasRuntimeTokens: async () => false,
+        resolveRuntimeToken: async () => undefined,
+        mcpOAuth: {
+          resource: "https://ocgw.example.test/mcp",
+          resourceMetadataUrl: "https://ocgw.example.test/.well-known/oauth-protected-resource/mcp",
+          requiredScopes: ["mcp:access"],
+        },
+      }),
+    );
+    app.post("/mcp", (context) => context.json({ ok: true }));
+
+    const response = await app.request("/mcp", { method: "POST" });
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe(
+      'Bearer resource_metadata="https://ocgw.example.test/.well-known/oauth-protected-resource/mcp", scope="mcp:access", error="invalid_token", error_description="OAuth access is required"',
+    );
+  });
+
+  it("limits audience-bound OAuth tokens to the MCP resource while preserving legacy tokens", async () => {
+    const app = new Hono();
+    app.use(
+      "*",
+      createLocalAuthMiddleware({
+        hasRuntimeTokens: async () => true,
+        resolveRuntimeToken: async (token) => {
+          if (token === "oauth-token") {
+            return {
+              tokenId: "oauth",
+              allowedActions: [],
+              blockedActions: [],
+              allowedProxies: [],
+              audience: "https://ocgw.example.test/mcp",
+              scopes: ["mcp:access"],
+            };
+          }
+          return token === "legacy-token"
+            ? { tokenId: "legacy", allowedActions: [], blockedActions: [], allowedProxies: [] }
+            : undefined;
+        },
+        mcpOAuth: {
+          resource: "https://ocgw.example.test/mcp",
+          resourceMetadataUrl: "https://ocgw.example.test/.well-known/oauth-protected-resource/mcp",
+          requiredScopes: ["mcp:access"],
+        },
+      }),
+    );
+    app.post("/mcp", (context) => context.json({ ok: true }));
+    app.get("/v1/actions", (context) => context.json({ ok: true }));
+
+    expect((await app.request("/mcp", { method: "POST", headers: authorize("Bearer", "oauth-token") })).status).toBe(
+      200,
+    );
+    expect((await app.request("/v1/actions", { headers: authorize("Bearer", "oauth-token") })).status).toBe(401);
+    expect((await app.request("/mcp", { method: "POST", headers: authorize("Bearer", "legacy-token") })).status).toBe(
+      200,
+    );
+    expect((await app.request("/v1/actions", { headers: authorize("Bearer", "legacy-token") })).status).toBe(200);
+  });
+
   it("allows configured admin tokens to elevate POST /v1/actions", async () => {
     const app = new Hono();
     app.use(

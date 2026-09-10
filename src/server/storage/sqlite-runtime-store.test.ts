@@ -94,6 +94,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0019_teams_gateway_groups.sql",
       "0020_teams_gateway_subscriptions.sql",
       "0021_inbox.sql",
+      "0022_mcp_oauth.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -234,6 +235,36 @@ describe("SqliteRuntimeDatabase", () => {
     await expect(second.teamsGatewayStore.listGroups(records.agent.id)).resolves.toEqual([]);
     await expect(second.teamsGatewayStore.listSubscriptions(records.agent.id)).resolves.toEqual([]);
     second.close();
+  });
+
+  it("persists and consumes MCP OAuth grants once", async () => {
+    const database = new SqliteRuntimeDatabase(await createDatabasePath());
+    await database.mcpOAuthStore.addClient({
+      id: "client-1",
+      name: "ChatGPT",
+      redirectUris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      grantTypes: ["authorization_code", "refresh_token"],
+      createdAt: "2026-09-10T00:00:00.000Z",
+    });
+    await database.mcpOAuthStore.addAuthorizationCode({
+      codeHash: "code-hash",
+      clientId: "client-1",
+      redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect",
+      codeChallenge: "challenge",
+      resource: "https://ocgw.example.test/mcp",
+      scopes: ["mcp:access"],
+      createdAt: "2026-09-10T00:00:00.000Z",
+      expiresAt: "2026-09-10T00:05:00.000Z",
+    });
+
+    await expect(database.mcpOAuthStore.getClient("client-1")).resolves.toMatchObject({ name: "ChatGPT" });
+    await expect(
+      database.mcpOAuthStore.takeAuthorizationCode("code-hash", "2026-09-10T00:01:00.000Z"),
+    ).resolves.toMatchObject({ clientId: "client-1", scopes: ["mcp:access"] });
+    await expect(
+      database.mcpOAuthStore.takeAuthorizationCode("code-hash", "2026-09-10T00:01:00.000Z"),
+    ).resolves.toBeUndefined();
+    database.close();
   });
 
   it("persists local runtime state across database instances", async () => {

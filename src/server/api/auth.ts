@@ -24,6 +24,13 @@ export interface LocalAuthOptions {
   resolveRuntimeToken?(token: string): Promise<RuntimeGrant | undefined>;
   resolveMobileToken?(token: string): Promise<unknown | undefined>;
   verifyRuntimeJwt?: RuntimeJwtVerifier;
+  mcpOAuth?: LocalAuthMcpOAuthOptions;
+}
+
+export interface LocalAuthMcpOAuthOptions {
+  resource: string;
+  resourceMetadataUrl: string;
+  requiredScopes: string[];
 }
 
 export interface LocalAuthSession {
@@ -48,7 +55,8 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
     !options.hasRuntimeTokens &&
     !options.resolveRuntimeToken &&
     !options.resolveMobileToken &&
-    !options.verifyRuntimeJwt
+    !options.verifyRuntimeJwt &&
+    !options.mcpOAuth
   ) {
     return async (_context, next) => {
       await next();
@@ -83,6 +91,11 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
       return;
     }
 
+    if (isMcpPath(context.req.path) && options.mcpOAuth) {
+      context.header("WWW-Authenticate", createMcpOAuthChallenge(options.mcpOAuth));
+      return jsonError(context, 401, "unauthorized", "A valid bearer token or OAuth connection is required.");
+    }
+
     return jsonError(context, 401, "unauthorized", "A valid local bearer token is required.");
   };
 }
@@ -107,6 +120,13 @@ function isPublicPath(path: string, method: string): boolean {
     path === "/health" ||
     path === "/oauth/callback" ||
     path.startsWith("/oauth/callback/") ||
+    path === "/.well-known/oauth-protected-resource" ||
+    path === "/.well-known/oauth-protected-resource/mcp" ||
+    path === "/.well-known/oauth-authorization-server" ||
+    path === "/oauth/authorize" ||
+    path === "/oauth/authorize/login" ||
+    path === "/oauth/register" ||
+    path === "/oauth/token" ||
     (method === "GET" && path === "/api/auth/session") ||
     (method === "POST" && path === "/api/auth/logout") ||
     (method === "POST" && path === "/api/mobile-auth/exchange") ||
@@ -114,6 +134,20 @@ function isPublicPath(path: string, method: string): boolean {
     (method === "GET" && path.startsWith("/api/files/")) ||
     isConsoleShellRequest(path, method)
   );
+}
+
+/** Validate an admin credential submitted by the server-hosted OAuth unlock form. */
+export async function authenticateLocalAdmin(
+  context: Context,
+  options: LocalAuthOptions,
+  credential: string,
+): Promise<boolean> {
+  const adminToken = normalizeToken(options.adminToken);
+  if (!adminToken || !constantTimeEqual(credential, adminToken)) {
+    return false;
+  }
+  await installLocalAuthCookie(context, options);
+  return true;
 }
 
 export async function readLocalAuthSession(context: Context, options: LocalAuthOptions): Promise<LocalAuthSession> {
@@ -179,7 +213,7 @@ async function hasValidToken(context: Context, options: LocalAuthOptions, scope:
     const hasRuntimeTokens = options.hasRuntimeTokens
       ? await options.hasRuntimeTokens()
       : options.resolveRuntimeToken !== undefined;
-    if (!hasRuntimeTokens && !options.verifyRuntimeJwt) {
+    if (!hasRuntimeTokens && !options.verifyRuntimeJwt && !(isMcpPath(context.req.path) && options.mcpOAuth)) {
       return true;
     }
     return hasValidRuntimeToken(context, options);
@@ -294,11 +328,31 @@ async function hasValidRuntimeToken(context: Context, options: LocalAuthOptions)
     return false;
   }
   const grant = await options.resolveRuntimeToken?.(token);
-  if (grant) {
+  if (grant && isRuntimeGrantAllowed(context, options, grant)) {
     runtimeGrants.set(context.req.raw, grant);
     return true;
   }
   return await (options.verifyRuntimeJwt?.(token) ?? false);
+}
+
+function isRuntimeGrantAllowed(context: Context, options: LocalAuthOptions, grant: RuntimeGrant): boolean {
+  if (!grant.audience && !grant.scopes?.length) {
+    return true;
+  }
+  const oauth = options.mcpOAuth;
+  if (!oauth || !isMcpPath(context.req.path) || grant.audience !== oauth.resource) {
+    return false;
+  }
+  return oauth.requiredScopes.every((scope) => grant.scopes?.includes(scope));
+}
+
+function isMcpPath(path: string): boolean {
+  return path === "/mcp" || path.startsWith("/mcp/");
+}
+
+function createMcpOAuthChallenge(options: LocalAuthMcpOAuthOptions): string {
+  const scope = options.requiredScopes.join(" ");
+  return `Bearer resource_metadata="${options.resourceMetadataUrl}", scope="${scope}", error="invalid_token", error_description="OAuth access is required"`;
 }
 
 function readBearerToken(context: Context): string | undefined {

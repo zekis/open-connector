@@ -7,6 +7,7 @@ import type { IFeedStore } from "../feed/feed-types.ts";
 import type { IFlowStore } from "../flows/flow-types.ts";
 import type { IInboxStore } from "../inbox/inbox-types.ts";
 import type { IKanbanStore } from "../kanban/kanban-types.ts";
+import type { IMcpOAuthStore } from "../mcp-oauth/mcp-oauth-service.ts";
 import type { ISynapseStore } from "../synapse/synapse-types.ts";
 import type { ITeamsGatewayStore } from "../teams-gateway/teams-gateway-types.ts";
 import type { IIdempotencyStore } from "./idempotency-store.ts";
@@ -18,6 +19,7 @@ export interface RuntimeDatabase {
   connectionStore: IConnectionStore;
   oauthClientConfigStore: IOAuthClientConfigStore;
   oauthStateStore: IOAuthStateStore;
+  mcpOAuthStore: IMcpOAuthStore;
   runtimeTokenStore: IRuntimeTokenStore;
   mobileAuthStore: IMobileAuthStore;
   runtimePolicyStore: IRuntimePolicyStore;

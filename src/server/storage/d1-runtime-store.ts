@@ -23,6 +23,12 @@ import type {
 } from "../flows/flow-types.ts";
 import type { IInboxStore, InboxConversationMetadata } from "../inbox/inbox-types.ts";
 import type { IKanbanStore, KanbanBoardDefinition } from "../kanban/kanban-types.ts";
+import type {
+  IMcpOAuthStore,
+  McpOAuthAuthorizationCode,
+  McpOAuthClientRegistration,
+  McpOAuthRefreshToken,
+} from "../mcp-oauth/mcp-oauth-service.ts";
 import type { ISecretCodec } from "../secrets/secret-codec-core.ts";
 import type { ISynapseStore, SynapseWorkspace } from "../synapse/synapse-types.ts";
 import type {
@@ -61,6 +67,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
   readonly connectionStore: D1ConnectionStore;
   readonly oauthClientConfigStore: D1OAuthClientConfigStore;
   readonly oauthStateStore: D1OAuthStateStore;
+  readonly mcpOAuthStore: D1McpOAuthStore;
   readonly runtimeTokenStore: D1RuntimeTokenStore;
   readonly mobileAuthStore: D1MobileAuthStore;
   readonly runtimePolicyStore: D1RuntimePolicyStore;
@@ -79,6 +86,7 @@ export class D1RuntimeDatabase implements RuntimeDatabase {
     this.connectionStore = new D1ConnectionStore(database, secretCodec);
     this.oauthClientConfigStore = new D1OAuthClientConfigStore(database, secretCodec);
     this.oauthStateStore = new D1OAuthStateStore(database);
+    this.mcpOAuthStore = new D1McpOAuthStore(database);
     this.runtimeTokenStore = new D1RuntimeTokenStore(database);
     this.mobileAuthStore = new D1MobileAuthStore(database);
     this.runtimePolicyStore = new D1RuntimePolicyStore(database);
@@ -385,6 +393,143 @@ export class D1OAuthStateStore implements IOAuthStateStore {
   }
 }
 
+export class D1McpOAuthStore implements IMcpOAuthStore {
+  private readonly database: D1DatabaseBinding;
+
+  constructor(database: D1DatabaseBinding) {
+    this.database = database;
+  }
+
+  async addClient(client: McpOAuthClientRegistration): Promise<void> {
+    await this.database
+      .prepare(
+        `insert into mcp_oauth_clients (id, name, redirect_uris, grant_types, created_at)
+         values (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        client.id,
+        client.name,
+        JSON.stringify(client.redirectUris),
+        JSON.stringify(client.grantTypes),
+        client.createdAt,
+      )
+      .run();
+  }
+
+  async getClient(id: string): Promise<McpOAuthClientRegistration | undefined> {
+    const row = await this.database
+      .prepare("select id, name, redirect_uris, grant_types, created_at from mcp_oauth_clients where id = ?")
+      .bind(id)
+      .first<RuntimeRow>();
+    return row ? readMcpOAuthClientRow(row) : undefined;
+  }
+
+  async addAuthorizationCode(code: McpOAuthAuthorizationCode): Promise<void> {
+    await this.database.prepare("delete from mcp_oauth_codes where expires_at <= ?").bind(code.createdAt).run();
+    await this.database
+      .prepare(
+        `insert into mcp_oauth_codes
+           (code_hash, client_id, redirect_uri, code_challenge, resource, scopes, created_at, expires_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        code.codeHash,
+        code.clientId,
+        code.redirectUri,
+        code.codeChallenge,
+        code.resource,
+        JSON.stringify(code.scopes),
+        code.createdAt,
+        code.expiresAt,
+      )
+      .run();
+  }
+
+  async takeAuthorizationCode(codeHash: string, now: string): Promise<McpOAuthAuthorizationCode | undefined> {
+    const row = await this.database
+      .prepare(
+        `delete from mcp_oauth_codes
+         where code_hash = ? and expires_at > ?
+         returning code_hash, client_id, redirect_uri, code_challenge, resource, scopes, created_at, expires_at`,
+      )
+      .bind(codeHash, now)
+      .first<RuntimeRow>();
+    await this.database.prepare("delete from mcp_oauth_codes where expires_at <= ?").bind(now).run();
+    return row ? readMcpOAuthAuthorizationCodeRow(row) : undefined;
+  }
+
+  async addRefreshToken(token: McpOAuthRefreshToken): Promise<void> {
+    await this.database
+      .prepare("delete from mcp_oauth_refresh_tokens where expires_at <= ?")
+      .bind(token.createdAt)
+      .run();
+    await this.database
+      .prepare(
+        `insert into mcp_oauth_refresh_tokens
+           (token_hash, client_id, runtime_token_id, resource, scopes, created_at, expires_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        token.tokenHash,
+        token.clientId,
+        token.runtimeTokenId,
+        token.resource,
+        JSON.stringify(token.scopes),
+        token.createdAt,
+        token.expiresAt,
+      )
+      .run();
+  }
+
+  async takeRefreshToken(tokenHash: string, now: string): Promise<McpOAuthRefreshToken | undefined> {
+    const row = await this.database
+      .prepare(
+        `delete from mcp_oauth_refresh_tokens
+         where token_hash = ? and expires_at > ?
+         returning token_hash, client_id, runtime_token_id, resource, scopes, created_at, expires_at`,
+      )
+      .bind(tokenHash, now)
+      .first<RuntimeRow>();
+    await this.database.prepare("delete from mcp_oauth_refresh_tokens where expires_at <= ?").bind(now).run();
+    return row ? readMcpOAuthRefreshTokenRow(row) : undefined;
+  }
+}
+
+function readMcpOAuthClientRow(row: RuntimeRow): McpOAuthClientRegistration {
+  return {
+    id: readString(row, "id"),
+    name: readString(row, "name"),
+    redirectUris: parseJson(readString(row, "redirect_uris")),
+    grantTypes: parseJson(readString(row, "grant_types")),
+    createdAt: readString(row, "created_at"),
+  };
+}
+
+function readMcpOAuthAuthorizationCodeRow(row: RuntimeRow): McpOAuthAuthorizationCode {
+  return {
+    codeHash: readString(row, "code_hash"),
+    clientId: readString(row, "client_id"),
+    redirectUri: readString(row, "redirect_uri"),
+    codeChallenge: readString(row, "code_challenge"),
+    resource: readString(row, "resource"),
+    scopes: parseJson(readString(row, "scopes")),
+    createdAt: readString(row, "created_at"),
+    expiresAt: readString(row, "expires_at"),
+  };
+}
+
+function readMcpOAuthRefreshTokenRow(row: RuntimeRow): McpOAuthRefreshToken {
+  return {
+    tokenHash: readString(row, "token_hash"),
+    clientId: readString(row, "client_id"),
+    runtimeTokenId: readString(row, "runtime_token_id"),
+    resource: readString(row, "resource"),
+    scopes: parseJson(readString(row, "scopes")),
+    createdAt: readString(row, "created_at"),
+    expiresAt: readString(row, "expires_at"),
+  };
+}
+
 export class D1RuntimeTokenStore implements IRuntimeTokenStore {
   private readonly database: D1DatabaseBinding;
 
@@ -397,9 +542,10 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         insert into runtime_tokens (
-          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
+          audience, scopes, expires_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .bind(
@@ -411,6 +557,9 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
         JSON.stringify(record.allowedProxies),
         record.createdAt,
         record.lastUsedAt ?? null,
+        record.audience ?? null,
+        JSON.stringify(record.scopes ?? []),
+        record.expiresAt ?? null,
       )
       .run();
   }
@@ -419,7 +568,8 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
     const { results } = await this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
+          audience, scopes, expires_at
         from runtime_tokens
         where revoked_at is null
         order by created_at desc, id desc
@@ -433,7 +583,8 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
     const row = await this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
+          audience, scopes, expires_at
         from runtime_tokens
         where token_hash = ? and revoked_at is null
       `,
@@ -450,7 +601,8 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
         update runtime_tokens
         set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?
         where id = ? and revoked_at is null
-        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at
+        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
+          audience, scopes, expires_at
       `,
       )
       .bind(
@@ -486,6 +638,9 @@ function readRuntimeTokenRow(row: RuntimeRow): RuntimeTokenRecord {
     allowedProxies: parseJson(readString(row, "allowed_proxies")),
     createdAt: readString(row, "created_at"),
     lastUsedAt: readOptionalString(row, "last_used_at"),
+    audience: readOptionalString(row, "audience"),
+    scopes: parseJson(readString(row, "scopes")),
+    expiresAt: readOptionalString(row, "expires_at"),
   };
 }
 

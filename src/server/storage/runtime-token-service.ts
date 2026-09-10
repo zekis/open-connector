@@ -12,6 +12,9 @@ export interface RuntimeTokenRecord {
   allowedProxies: string[];
   createdAt: string;
   lastUsedAt?: string;
+  audience?: string;
+  scopes?: string[];
+  expiresAt?: string;
 }
 
 export interface RuntimeTokenSummary {
@@ -22,11 +25,20 @@ export interface RuntimeTokenSummary {
   allowedProxies: string[];
   createdAt: string;
   lastUsedAt?: string;
+  audience?: string;
+  scopes?: string[];
+  expiresAt?: string;
 }
 
 export interface RuntimeTokenCreation {
   token: string;
   record: RuntimeTokenRecord;
+}
+
+export interface RuntimeTokenCreationOptions {
+  audience?: string;
+  scopes?: string[];
+  expiresAt?: string;
 }
 
 export interface IRuntimeTokenStore {
@@ -42,6 +54,9 @@ const tokenPrefix = "oct_";
 
 export interface RuntimeGrant extends TokenPolicy {
   tokenId: string;
+  audience?: string;
+  scopes?: string[];
+  expiresAt?: string;
 }
 
 export class RuntimeTokenService {
@@ -56,6 +71,7 @@ export class RuntimeTokenService {
   async createToken(
     name: string,
     policy: TokenPolicy = { allowedActions: [], blockedActions: [], allowedProxies: [] },
+    options: RuntimeTokenCreationOptions = {},
   ): Promise<RuntimeTokenCreation> {
     const token = `${tokenPrefix}${randomBytes(32).toString("base64url")}`;
     const now = new Date().toISOString();
@@ -67,6 +83,9 @@ export class RuntimeTokenService {
       blockedActions: policy.blockedActions,
       allowedProxies: policy.allowedProxies,
       createdAt: now,
+      audience: options.audience,
+      scopes: options.scopes,
+      expiresAt: options.expiresAt,
     };
     await this.store.add(record);
     return { token, record };
@@ -94,6 +113,9 @@ export class RuntimeTokenService {
     if (!matched || !equalHashes(matched.tokenHash, tokenHash)) {
       return undefined;
     }
+    if (isExpired(matched)) {
+      return undefined;
+    }
 
     await this.recordLastUsed(matched.id);
     return runtimeGrant(matched);
@@ -101,7 +123,7 @@ export class RuntimeTokenService {
 
   async getGrantById(id: string): Promise<RuntimeGrant | undefined> {
     const matched = (await this.store.list()).find((record) => record.id === id);
-    return matched ? runtimeGrant(matched) : undefined;
+    return matched && !isExpired(matched) ? runtimeGrant(matched) : undefined;
   }
 
   async verifyToken(token: string): Promise<boolean> {
@@ -134,6 +156,9 @@ export function summarizeRuntimeToken(record: RuntimeTokenRecord): RuntimeTokenS
     allowedProxies: record.allowedProxies,
     createdAt: record.createdAt,
     lastUsedAt: record.lastUsedAt,
+    audience: record.audience,
+    scopes: record.scopes,
+    expiresAt: record.expiresAt,
   };
 }
 
@@ -143,6 +168,9 @@ function runtimeGrant(record: RuntimeTokenRecord): RuntimeGrant {
     allowedActions: record.allowedActions,
     blockedActions: record.blockedActions,
     allowedProxies: record.allowedProxies,
+    audience: record.audience,
+    scopes: record.scopes,
+    expiresAt: record.expiresAt,
   };
 }
 
@@ -150,4 +178,10 @@ function equalHashes(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isExpired(record: RuntimeTokenRecord): boolean {
+  if (!record.expiresAt) return false;
+  const expiresAt = Date.parse(record.expiresAt);
+  return !Number.isFinite(expiresAt) || expiresAt <= Date.now();
 }

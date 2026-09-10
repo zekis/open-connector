@@ -27,6 +27,7 @@ export interface IMcpServerOptions {
   actionSearch?: ActionSearchIndexProvider;
   getPolicySnapshot?(): Promise<ActionPolicySnapshot>;
   runtimeGrant?: RuntimeGrant;
+  oauthResourceMetadataUrl?: string;
 }
 
 /**
@@ -99,6 +100,9 @@ export function listMcpToolSummaries(): IMcpToolSummary[] {
  * Create a stateless MCP server instance for one Streamable HTTP request.
  */
 export function createMcpServer(options: IMcpServerOptions): McpServer {
+  const securityMeta = options.oauthResourceMetadataUrl
+    ? { securitySchemes: [{ type: "oauth2", scopes: ["mcp:access"] }] }
+    : undefined;
   const server = new McpServer(
     {
       name: "oomol-connect",
@@ -117,6 +121,7 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
       inputSchema: {
         query: z.string().optional().describe("Optional case-insensitive app name, service, category, or auth filter."),
       },
+      _meta: securityMeta,
     },
     async ({ query }) => toolResult(successPayload(await listApps(options, query))),
   );
@@ -130,6 +135,7 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
       inputSchema: {
         service: z.string().optional().describe("Optional provider service id such as github, gmail, or notion."),
       },
+      _meta: securityMeta,
     },
     async ({ service }) => toolResult(await listConnections(options, service)),
   );
@@ -151,6 +157,7 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
           .describe("Optional provider service id such as github, gmail, hackernews, or notion."),
         limit: z.number().int().min(1).max(50).default(20).describe("Maximum number of actions to return."),
       },
+      _meta: securityMeta,
     },
     async ({ query, service, limit }) => toolResult(await searchActions(options, { query, service, limit })),
   );
@@ -164,6 +171,7 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
         actionId: z.string().describe("Full action id, for example github.get_current_user."),
         connectionName: optionalConnectionNameSchema,
       },
+      _meta: securityMeta,
     },
     async ({ actionId, connectionName }) => toolResult(await getActionGuide(options, actionId, connectionName)),
   );
@@ -182,6 +190,7 @@ export function createMcpServer(options: IMcpServerOptions): McpServer {
           .describe("Action input object matching the selected action guide."),
         connectionName: optionalConnectionNameSchema,
       },
+      _meta: securityMeta,
     },
     async ({ actionId, input, connectionName }) =>
       toolResult(await executeAction(options, actionId, input, connectionName)),

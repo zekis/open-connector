@@ -71,6 +71,9 @@ handing provider credentials to the agent process.
 Endpoint details, response envelopes, auth headers, MCP tools, and Action guide examples are in
 [docs/runtime-api.md](docs/runtime-api.md).
 
+To connect the hosted MCP endpoint to ChatGPT with OAuth 2.1 and automatic client registration, see
+[ChatGPT MCP OAuth](docs/mcp-oauth.md). Existing bearer-token access for Codex remains supported.
+
 ## Dashboard Preview
 
 OpenConnector ships with a local Dashboard for browsing connectors, configuring credentials,

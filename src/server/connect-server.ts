@@ -20,6 +20,7 @@ import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type { InboxService } from "./inbox/inbox-service.ts";
 import type { KanbanService } from "./kanban/kanban-service.ts";
 import type { Logger } from "./logger.ts";
+import type { McpOAuthService } from "./mcp-oauth/mcp-oauth-service.ts";
 import type { ProviderPreviewContent } from "./previews/provider-preview.ts";
 import type { IIdempotencyStore } from "./storage/idempotency-store.ts";
 import type { IRuntimePolicyStore } from "./storage/runtime-policy-store.ts";
@@ -54,6 +55,7 @@ import { AgentSettingsError } from "./agents/agent-settings-service.ts";
 import { renderActionMarkdown } from "./api/action-markdown.ts";
 import {
   clearLocalAuthCookie,
+  authenticateLocalAdmin,
   createLocalAuthMiddleware,
   installMobileAuthCookie,
   readLocalAuthSession,
@@ -85,6 +87,12 @@ import { InboxError } from "./inbox/inbox-service.ts";
 import { KanbanGenerationError } from "./kanban/kanban-generator.ts";
 import { kanbanPresets } from "./kanban/kanban-presets.ts";
 import { KanbanError } from "./kanban/kanban-service.ts";
+import {
+  renderMcpOAuthAuthorizationPage,
+  renderMcpOAuthErrorPage,
+  renderMcpOAuthUnlockPage,
+} from "./mcp-oauth/mcp-oauth-pages.ts";
+import { McpOAuthError } from "./mcp-oauth/mcp-oauth-service.ts";
 import { ProxyRunner } from "./proxy/proxy-runner.ts";
 import { decodeRunLogCursor } from "./storage/runtime-store.ts";
 import { SynapseError } from "./synapse/synapse-service.ts";
@@ -105,6 +113,7 @@ export interface IConnectServerOptions {
   kanban?: KanbanService;
   oauthClientConfigs: OAuthClientConfigService;
   oauthFlow: OAuthFlowService;
+  mcpOAuth?: McpOAuthService;
   runtimeTokens: RuntimeTokenService;
   mobileAuth?: MobileAuthService;
   teamsGateway?: TeamsGatewayService;
@@ -176,6 +185,16 @@ export class ConnectServer {
       app.use("/api/*", compress());
     }
     app.use("*", createLocalAuthMiddleware(auth));
+    if (this.options.mcpOAuth) {
+      app.get("/.well-known/oauth-protected-resource", (context) => this.getMcpProtectedResourceMetadata(context));
+      app.get("/.well-known/oauth-protected-resource/mcp", (context) => this.getMcpProtectedResourceMetadata(context));
+      app.get("/.well-known/oauth-authorization-server", (context) => this.getMcpAuthorizationServerMetadata(context));
+      app.post("/oauth/register", (context) => this.registerMcpOAuthClient(context));
+      app.get("/oauth/authorize", (context) => this.showMcpOAuthAuthorization(context));
+      app.post("/oauth/authorize", (context) => this.completeMcpOAuthAuthorization(context));
+      app.post("/oauth/authorize/login", (context) => this.loginMcpOAuthAuthorization(context));
+      app.post("/oauth/token", (context) => this.exchangeMcpOAuthToken(context));
+    }
     app.get("/v1/health", (context) => writeRuntimeSuccess(context, { ok: true, runtime: "oomol-connect" }));
     app.get("/v1/providers", (context) => this.listRuntimeProviders(context));
     app.get("/v1/actions", (context) => this.listRuntimeActions(context));
@@ -924,6 +943,100 @@ export class ConnectServer {
     return writeRuntimeSuccess(context, await this.options.connections.listAuthenticatedServices(services));
   }
 
+  private getMcpProtectedResourceMetadata(context: Context): Response {
+    context.header("Cache-Control", "public, max-age=300");
+    return context.json(this.options.mcpOAuth!.protectedResourceMetadata());
+  }
+
+  private getMcpAuthorizationServerMetadata(context: Context): Response {
+    context.header("Cache-Control", "public, max-age=300");
+    return context.json(this.options.mcpOAuth!.authorizationServerMetadata());
+  }
+
+  private async registerMcpOAuthClient(context: Context): Promise<Response> {
+    try {
+      const registration = await this.options.mcpOAuth!.registerClient(await readJsonBody(context, 16_384));
+      context.header("Cache-Control", "no-store");
+      return context.json(registration, 201);
+    } catch (error) {
+      return writeMcpOAuthError(context, error);
+    }
+  }
+
+  private async showMcpOAuthAuthorization(context: Context): Promise<Response> {
+    const authorizeUrl = new URL(context.req.url);
+    try {
+      const request = await this.options.mcpOAuth!.readAuthorizationRequest(authorizeUrl);
+      const session = await readLocalAuthSession(context, this.options.auth ?? {});
+      return writeMcpOAuthHtml(
+        context,
+        session.authenticated
+          ? renderMcpOAuthAuthorizationPage({ request, authorizeUrl })
+          : renderMcpOAuthUnlockPage({ authorizeUrl }),
+      );
+    } catch (error) {
+      return writeMcpOAuthPageError(context, error);
+    }
+  }
+
+  private async loginMcpOAuthAuthorization(context: Context): Promise<Response> {
+    try {
+      const form = await readMcpOAuthForm(context);
+      const returnTo = form.get("return_to") ?? "";
+      const authorizeUrl = new URL(returnTo, this.options.mcpOAuth!.issuer);
+      if (authorizeUrl.origin !== this.options.mcpOAuth!.issuer || authorizeUrl.pathname !== "/oauth/authorize") {
+        throw new McpOAuthError("invalid_request", "return_to must identify this OAuth authorization endpoint.");
+      }
+      await this.options.mcpOAuth!.readAuthorizationRequest(authorizeUrl);
+
+      const authenticated = await authenticateLocalAdmin(
+        context,
+        this.options.auth ?? {},
+        form.get("admin_token") ?? "",
+      );
+      if (!authenticated) {
+        return writeMcpOAuthHtml(context, renderMcpOAuthUnlockPage({ authorizeUrl, invalidCredential: true }), 401);
+      }
+      return context.redirect(`${authorizeUrl.pathname}${authorizeUrl.search}`, 303);
+    } catch (error) {
+      return writeMcpOAuthPageError(context, error);
+    }
+  }
+
+  private async completeMcpOAuthAuthorization(context: Context): Promise<Response> {
+    try {
+      const form = await readMcpOAuthForm(context);
+      const authorizeUrl = authorizationUrlFromForm(this.options.mcpOAuth!.issuer, form);
+      const request = await this.options.mcpOAuth!.readAuthorizationRequest(authorizeUrl);
+      const session = await readLocalAuthSession(context, this.options.auth ?? {});
+      if (!session.authenticated) {
+        return writeMcpOAuthHtml(context, renderMcpOAuthUnlockPage({ authorizeUrl }), 401);
+      }
+
+      const redirect =
+        form.get("decision") === "approve"
+          ? await this.options.mcpOAuth!.approveAuthorization(request)
+          : this.options.mcpOAuth!.denyAuthorization(request);
+      return context.redirect(redirect, 303);
+    } catch (error) {
+      return writeMcpOAuthPageError(context, error);
+    }
+  }
+
+  private async exchangeMcpOAuthToken(context: Context): Promise<Response> {
+    try {
+      if (context.req.header("authorization")) {
+        throw new McpOAuthError("invalid_client", "This authorization server accepts public clients only.", 401);
+      }
+      const token = await this.options.mcpOAuth!.exchangeToken(await readMcpOAuthForm(context));
+      context.header("Cache-Control", "no-store");
+      context.header("Pragma", "no-cache");
+      return context.json(token);
+    } catch (error) {
+      return writeMcpOAuthError(context, error);
+    }
+  }
+
   private async handleMcp(context: Context): Promise<Response> {
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -938,6 +1051,7 @@ export class ConnectServer {
       actionSearch: this.actionSearch,
       getPolicySnapshot: () => this.getPolicySnapshot(context),
       runtimeGrant: readRuntimeGrant(context),
+      oauthResourceMetadataUrl: this.options.mcpOAuth?.resourceMetadataUrl,
     });
 
     await server.connect(transport);
@@ -2104,6 +2218,53 @@ export class ConnectServer {
       throw new Error("Runtime policy is unavailable.");
     }
   }
+}
+
+async function readMcpOAuthForm(context: Context): Promise<URLSearchParams> {
+  const contentType = context.req.header("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/x-www-form-urlencoded")) {
+    throw new McpOAuthError("invalid_request", "OAuth form requests must use application/x-www-form-urlencoded.");
+  }
+  const contentLength = Number(context.req.header("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > 16_384) {
+    throw new McpOAuthError("invalid_request", "OAuth form body is too large.");
+  }
+  const body = await context.req.raw.text();
+  if (new TextEncoder().encode(body).byteLength > 16_384) {
+    throw new McpOAuthError("invalid_request", "OAuth form body is too large.");
+  }
+  return new URLSearchParams(body);
+}
+
+function authorizationUrlFromForm(issuer: string, form: URLSearchParams): URL {
+  const url = new URL("/oauth/authorize", issuer);
+  for (const [name, value] of form.entries()) {
+    if (name !== "decision") url.searchParams.append(name, value);
+  }
+  return url;
+}
+
+function writeMcpOAuthError(context: Context, error: unknown): Response {
+  if (!(error instanceof McpOAuthError)) throw error;
+  context.header("Cache-Control", "no-store");
+  context.header("Pragma", "no-cache");
+  return context.json({ error: error.code, error_description: error.message }, error.status);
+}
+
+function writeMcpOAuthPageError(context: Context, error: unknown): Response {
+  if (!(error instanceof McpOAuthError)) throw error;
+  return writeMcpOAuthHtml(context, renderMcpOAuthErrorPage(error.message), error.status);
+}
+
+function writeMcpOAuthHtml(context: Context, html: string, status: 200 | 400 | 401 = 200): Response {
+  context.header("Cache-Control", "no-store");
+  context.header(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  );
+  context.header("Referrer-Policy", "no-referrer");
+  context.header("X-Content-Type-Options", "nosniff");
+  return context.html(html, status);
 }
 
 function agentChatStreamError(error: unknown): AgentChatStreamEvent {
