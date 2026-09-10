@@ -138,7 +138,6 @@ export class McpOAuthService {
       authorization_servers: [this.issuer],
       scopes_supported: [mcpOAuthScope],
       bearer_methods_supported: ["header"],
-      resource_documentation: `${this.issuer}/docs`,
     };
   }
 
@@ -155,7 +154,6 @@ export class McpOAuthService {
       code_challenge_methods_supported: ["S256"],
       scopes_supported: [mcpOAuthScope],
       authorization_response_iss_parameter_supported: true,
-      service_documentation: `${this.issuer}/docs`,
     };
   }
 
