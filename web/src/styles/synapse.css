@@ -102,6 +102,16 @@
   gap: 7px;
 }
 
+.synapse-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+}
+
 .synapse-linking-hint {
   gap: 7px;
   color: var(--info);
@@ -131,6 +141,302 @@
 
 .synapse-stage.with-panel {
   grid-template-columns: minmax(480px, 1fr) minmax(360px, 430px);
+}
+
+.synapse-feed {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(18px, 3vw, 40px);
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--brand) 9%, transparent), transparent 34%),
+    color-mix(in oklab, var(--background) 97%, var(--muted));
+}
+
+.synapse-feed-header,
+.synapse-feed-list {
+  width: min(820px, 100%);
+  margin-inline: auto;
+}
+
+.synapse-feed-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.synapse-feed-header > div:first-child {
+  min-width: 0;
+}
+
+.synapse-feed-header span {
+  color: var(--brand);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.synapse-feed-header h1 {
+  margin: 4px 0;
+  font-size: clamp(24px, 4vw, 36px);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.synapse-feed-header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.synapse-feed-attention {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--card) 92%, transparent);
+}
+
+.synapse-feed-attention.active {
+  border-color: color-mix(in oklab, var(--warning) 55%, var(--border));
+  color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 9%, var(--card));
+}
+
+.synapse-feed-attention strong {
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.synapse-feed-attention span {
+  grid-column: 1 / -1;
+  color: inherit;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.synapse-feed-list {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 48px;
+}
+
+.synapse-feed-card {
+  display: grid;
+  gap: 12px;
+  padding: clamp(16px, 2.4vw, 24px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--success);
+  border-radius: 16px;
+  background: color-mix(in oklab, var(--card) 97%, transparent);
+  box-shadow: var(--console-shadow-sm);
+}
+
+.synapse-feed-card.waiting_for_approval {
+  border-left-color: var(--warning);
+}
+
+.synapse-feed-card.failed {
+  border-left-color: var(--destructive);
+}
+
+.synapse-feed-card.running,
+.synapse-feed-card.object {
+  border-left-color: var(--brand);
+}
+
+.synapse-feed-card > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.synapse-feed-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--brand);
+  background: var(--background);
+}
+
+.synapse-feed-card.waiting_for_approval .synapse-feed-status-icon {
+  color: var(--warning);
+}
+
+.synapse-feed-card.failed .synapse-feed-status-icon {
+  color: var(--destructive);
+}
+
+.synapse-feed-card.completed .synapse-feed-status-icon {
+  color: var(--success);
+}
+
+.synapse-feed-card > header > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 12px;
+}
+
+.synapse-feed-card > header span,
+.synapse-feed-card > header time {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.synapse-feed-card > header span {
+  font-weight: 720;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.synapse-feed-card h2 {
+  margin: 0;
+  font-size: clamp(16px, 2.4vw, 21px);
+  line-height: 1.35;
+}
+
+.synapse-feed-callout {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--warning);
+  background: color-mix(in oklab, var(--warning) 10%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.synapse-feed-card.failed .synapse-feed-callout {
+  color: var(--destructive);
+  background: color-mix(in oklab, var(--destructive) 9%, transparent);
+}
+
+.synapse-feed-summary {
+  display: -webkit-box;
+  max-height: 8.1em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.62;
+}
+
+.synapse-feed-summary .chat-markdown > :first-child,
+.synapse-feed-summary .chat-markdown > :last-child {
+  margin-block: 0;
+}
+
+.synapse-feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.synapse-feed-actions > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: var(--background);
+  font-size: 9px;
+  text-transform: capitalize;
+}
+
+.synapse-feed-actions .provider-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.synapse-feed-objects {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.synapse-feed-objects button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  background: var(--background);
+  text-align: left;
+  cursor: pointer;
+}
+
+.synapse-feed-objects button:hover,
+.synapse-feed-objects button:focus-visible {
+  border-color: var(--brand);
+  background: var(--accent);
+  outline: none;
+}
+
+.synapse-feed-objects button > span:first-child {
+  display: inline-flex;
+  color: var(--brand);
+}
+
+.synapse-feed-objects button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.synapse-feed-objects small,
+.synapse-feed-objects strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-feed-objects small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.synapse-feed-objects strong {
+  font-size: 11px;
+}
+
+.synapse-feed-empty {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.synapse-feed-empty > svg {
+  color: var(--brand);
+}
+
+.synapse-feed-empty strong {
+  color: var(--foreground);
 }
 
 .synapse-canvas-scroll {
@@ -198,6 +504,23 @@
   stroke: color-mix(in oklab, var(--brand) 56%, var(--muted-foreground));
   stroke-width: 1.6;
   opacity: 0.8;
+}
+
+.synapse-edge.proposed {
+  stroke-dasharray: 7 6;
+  opacity: 0.62;
+}
+
+.synapse-edge-label {
+  fill: var(--muted-foreground);
+  stroke: var(--background);
+  stroke-width: 4px;
+  paint-order: stroke;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  text-transform: capitalize;
 }
 
 #synapse-arrow path {
@@ -560,6 +883,23 @@
   min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.synapse-recipe-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in oklab, var(--brand) 35%, var(--border));
+  border-radius: 999px;
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 8%, transparent);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .synapse-node.artifact > header a {
@@ -1817,6 +2157,95 @@
 .synapse-source-dialog {
   max-width: min(620px, calc(100vw - 2rem));
 }
+
+.synapse-recipe-dialog {
+  width: min(760px, calc(100vw - 2rem));
+  max-width: 760px;
+  max-height: min(820px, calc(100svh - 2rem));
+  overflow-y: auto;
+}
+
+.synapse-recipe-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  margin: 14px 0;
+}
+
+.synapse-recipe-target {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.synapse-recipe-target > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+}
+
+.synapse-recipe-target small,
+.synapse-recipe-target strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.synapse-recipe-target small,
+.synapse-recipe-last-run {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.synapse-recipe-target strong {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.synapse-recipe-editor {
+  min-height: 250px;
+  max-height: 42svh;
+  overflow: auto;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.synapse-recipe-help {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--brand) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--brand) 7%, transparent);
+  font-size: 10px;
+}
+
+.synapse-recipe-help code {
+  overflow-x: auto;
+  padding: 7px;
+  border-radius: 7px;
+  background: var(--background);
+  white-space: nowrap;
+}
+
+.synapse-recipe-help span {
+  color: var(--muted-foreground);
+}
+
+.synapse-recipe-last-run.completed {
+  color: var(--success);
+}
+
+.synapse-recipe-last-run.failed {
+  color: var(--destructive);
+}
 .synapse-source-search {
   gap: 8px;
 }
@@ -1921,6 +2350,27 @@
   .synapse-toolbar-actions {
     width: 100%;
     overflow-x: auto;
+  }
+  .synapse-view-switch {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    flex: 0 0 auto;
+  }
+  .synapse-feed {
+    padding: 16px 12px;
+  }
+  .synapse-feed-header {
+    align-items: flex-start;
+  }
+  .synapse-feed-header p {
+    max-width: 260px;
+  }
+  .synapse-feed-attention {
+    padding: 8px 9px;
+  }
+  .synapse-feed-objects {
+    grid-template-columns: minmax(0, 1fr);
   }
   .synapse-workspace-select {
     width: calc(100vw - 86px);

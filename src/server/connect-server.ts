@@ -355,6 +355,9 @@ export class ConnectServer {
       app.post("/api/synapses/:id/nodes/:nodeId/continue", (context) =>
         this.continueSynapseNode(context, context.req.param("id"), context.req.param("nodeId")),
       );
+      app.post("/api/synapses/:id/nodes/:nodeId/recipe/run", (context) =>
+        this.runSynapseNodeRecipe(context, context.req.param("id"), context.req.param("nodeId")),
+      );
       app.get("/api/synapses/:id/nodes/:nodeId/previews/:previewId", (context) =>
         this.getSynapsePreview(
           context,
@@ -1207,6 +1210,10 @@ export class ConnectServer {
       context,
       this.options.synapse!.continueNodeInNewWorkspace(id, nodeId, await readJsonBody(context)),
     );
+  }
+
+  private async runSynapseNodeRecipe(context: Context, id: string, nodeId: string): Promise<Response> {
+    return await this.writeSynapseResult(context, this.options.synapse!.runNodeRecipe(id, nodeId));
   }
 
   private async getSynapsePreview(context: Context, id: string, nodeId: string, previewId: string): Promise<Response> {

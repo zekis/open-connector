@@ -7,7 +7,8 @@ const service = "asset_gateway";
 export const provider: ProviderDefinition = {
   service,
   displayName: "Asset Gateway",
-  description: "Manage asset requests, support tickets, and device inventory through a Device Portal management API.",
+  description:
+    "Manage asset requests, support tickets, device inventory, agent telemetry, and check-in history through a Device Portal management API.",
   categories: ["Productivity", "Infrastructure"],
   authTypes: ["api_key"],
   auth: [

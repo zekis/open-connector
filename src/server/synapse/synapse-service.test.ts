@@ -58,7 +58,14 @@ describe("SynapseService", () => {
     const research = await service.create({ question });
     const flowDestination = await service.create({ name: "Daily digest" });
 
-    expect(research).toMatchObject({ name: question, edges: [], threads: [] });
+    expect(research).toMatchObject({
+      name: question,
+      schemaVersion: 2,
+      edges: [],
+      threads: [],
+      instructions: [],
+      runs: [],
+    });
     expect(research.nodes).toEqual([
       expect.objectContaining({
         kind: "artifact",
@@ -181,10 +188,99 @@ describe("SynapseService", () => {
     );
     expect(result.edges).toHaveLength(3);
     expect(result.threads[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(result.instructions).toEqual([
+      expect.objectContaining({
+        content: "Search for similar sales.",
+        targetObjectIds: [outlookNode.id],
+        status: "completed",
+      }),
+    ]);
+    expect(result.runs).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        inputObjectIds: [outlookNode.id],
+        outputObjectIds: expect.arrayContaining(
+          result.nodes.filter((node) => node.id !== outlookNode.id).map((node) => node.id),
+        ),
+        actions: [expect.objectContaining({ actionId: "brave.web_search", status: "completed" })],
+      }),
+    ]);
     expect(result.nodes.find((node) => node.kind === "artifact" && node.title === "Deal one")).toMatchObject({
       content: "Half price\n\n[Open source](https://example.com/deal-one)",
       itemIdentity: "brave-1:brave:web_search:https://example.com/deal-one",
       previews: [expect.objectContaining({ kind: "web", externalUrl: "https://example.com/deal-one" })],
+    });
+  });
+
+  it("reruns a connector recipe with fresh period filters and replaces the same object", async () => {
+    const actions = {
+      run: vi.fn(async () => ({
+        executionId: "recipe-execution",
+        auditPersisted: true,
+        result: {
+          ok: true as const,
+          output: {
+            results: [
+              { title: "Current result", description: "Fresh connector data", url: "https://example.com/current" },
+            ],
+          },
+        },
+      })),
+    };
+    const service = createService(
+      {
+        respondWithExtension: vi.fn(async () => completedResponse([])),
+        getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+      },
+      actions,
+    );
+    const workspace = await service.create({ name: "Reusable research" });
+    const seeded = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "search_result",
+      title: "Old result",
+      content: "Stale connector data",
+      position: { x: 100, y: 100 },
+      recipe: {
+        version: 1,
+        actionId: "brave.web_search",
+        connectionId: "brave-1",
+        input: {
+          query: "monthly project risks",
+          from: { $synapse: "period", period: "month", edge: "start", offset: -1, format: "iso_date" },
+        },
+        result: { mode: "replace", match: "first" },
+      },
+    });
+    const originalNode = seeded.nodes[0] as SynapseArtifactNode;
+
+    const refreshed = await service.runNodeRecipe(workspace.id, originalNode.id);
+    const refreshedNode = refreshed.nodes[0] as SynapseArtifactNode;
+
+    expect(actions.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "brave.web_search",
+        connectionId: "brave-1",
+        input: expect.objectContaining({
+          query: "monthly project risks",
+          from: expect.stringMatching(/^\d{4}-\d{2}-01$/u),
+        }),
+        approvalPolicy: "enforce",
+      }),
+    );
+    expect(refreshedNode).toMatchObject({
+      id: originalNode.id,
+      title: "Current result",
+      content: "Fresh connector data\n\n[Open source](https://example.com/current)",
+      recipe: {
+        input: expect.objectContaining({ from: expect.objectContaining({ $synapse: "period", offset: -1 }) }),
+        lastRun: expect.objectContaining({ status: "completed", runId: expect.any(String) }),
+      },
+    });
+    expect(refreshed.runs?.at(-1)).toMatchObject({
+      status: "completed",
+      inputObjectIds: [originalNode.id],
+      outputObjectIds: [originalNode.id],
     });
   });
 
@@ -877,6 +973,37 @@ describe("SynapseService", () => {
     });
   });
 
+  it("stores typed relationships so the workspace can explain how objects fit together", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async () => completedResponse([])),
+      getApprovalResult: vi.fn(async (approvalId: string) => pendingApproval(approvalId)),
+    });
+    const workspace = await service.create({ name: "Claim lineage" });
+    const first = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "document",
+      title: "Timesheet",
+      position: { x: 100, y: 100 },
+    });
+    const second = await service.addNode(workspace.id, {
+      kind: "artifact",
+      artifactKind: "document",
+      title: "Payment claim",
+      position: { x: 420, y: 100 },
+    });
+
+    const related = await service.addEdge(workspace.id, {
+      sourceNodeId: first.nodes[0]!.id,
+      targetNodeId: second.nodes[1]!.id,
+      relationshipKind: "calculated_from",
+      state: "proposed",
+    });
+
+    expect(related.edges).toEqual([
+      expect.objectContaining({ relationshipKind: "calculated_from", state: "proposed" }),
+    ]);
+  });
+
   it("loads Outlook attachment previews through the source connection", async () => {
     const actions = {
       run: vi.fn(async () => ({
@@ -1487,6 +1614,13 @@ describe("SynapseService", () => {
       pendingApprovalId: approvalIds[0],
       pendingApprovalIds: approvalIds,
     });
+    expect(waiting.runs).toEqual([
+      expect.objectContaining({
+        status: "waiting_for_approval",
+        attention: "Connector changes are ready for review.",
+      }),
+    ]);
+    expect(waiting.instructions).toEqual([expect.objectContaining({ status: "waiting_for_approval" })]);
   });
 });
 
@@ -1534,6 +1668,8 @@ function createService(
 }
 
 function provider(service: string, displayName: string): ProviderDefinition {
+  const readActionName =
+    service === "outlook" ? "search_messages" : service === "brave" ? "web_search" : "query_work_items";
   return {
     service,
     displayName,
@@ -1541,7 +1677,18 @@ function provider(service: string, displayName: string): ProviderDefinition {
     categories: ["productivity"],
     authTypes: ["no_auth"],
     auth: [{ type: "no_auth" as const }],
-    actions: [],
+    actions: [
+      {
+        id: `${service}.${readActionName}`,
+        service,
+        name: readActionName,
+        description: `Read data from ${displayName}`,
+        requiredScopes: [],
+        providerPermissions: [],
+        inputSchema: { type: "object" },
+        outputSchema: { type: "object" },
+      },
+    ],
   };
 }
 

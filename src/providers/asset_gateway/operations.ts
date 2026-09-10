@@ -1,9 +1,16 @@
 import type { JsonSchema } from "../../core/types.ts";
 
 import { s } from "../../core/json-schema.ts";
+import {
+  deviceCheckinSchema,
+  deviceRecordSchema,
+  historyEventSchema,
+  requestRecordSchema,
+  ticketRecordSchema,
+} from "./resource-schemas.ts";
 
 export type AssetGatewayMethod = "GET" | "POST" | "PATCH";
-export type AssetGatewayResponseKind = "metadata" | "list" | "record" | "created_record" | "history" | "comment";
+export type AssetGatewayResponseKind = "metadata" | "list" | "record" | "created_record" | "cursor_page" | "comment";
 
 export interface AssetGatewayQueryField {
   input: string;
@@ -36,13 +43,13 @@ interface AssetGatewayResourceDefinition {
   bodyField: string;
   createSchema: JsonSchema;
   updateSchema: JsonSchema;
+  recordSchema: JsonSchema;
   listFilter: AssetGatewayQueryField;
   listFilterSchema: JsonSchema;
+  supportsEnrollmentFilter?: boolean;
 }
 
 const managementApiPrefix = "asset_gateway.";
-const recordSchema = s.unknownObject("The record returned by the Asset Gateway.");
-const eventSchema = s.unknownObject("One history event or internal comment.");
 const dateOrEmpty = (description: string): JsonSchema =>
   s.anyOf(description, [s.date("A date in YYYY-MM-DD format."), s.literal("", { description: "Clear the date." })]);
 const optionalLinkId = (description: string): JsonSchema => s.nullable(s.positiveInteger(description));
@@ -142,8 +149,10 @@ const resources: AssetGatewayResourceDefinition[] = [
     bodyField: "request",
     createSchema: requestCreateSchema,
     updateSchema: requestUpdateSchema,
+    recordSchema: requestRecordSchema,
     listFilter: { input: "status", parameter: "status" },
     listFilterSchema: requestFields.status,
+    supportsEnrollmentFilter: true,
   },
   {
     path: "/tickets",
@@ -154,8 +163,10 @@ const resources: AssetGatewayResourceDefinition[] = [
     bodyField: "ticket",
     createSchema: ticketCreateSchema,
     updateSchema: ticketUpdateSchema,
+    recordSchema: ticketRecordSchema,
     listFilter: { input: "status", parameter: "status" },
     listFilterSchema: ticketFields.status,
+    supportsEnrollmentFilter: true,
   },
   {
     path: "/devices",
@@ -166,6 +177,7 @@ const resources: AssetGatewayResourceDefinition[] = [
     bodyField: "device",
     createSchema: deviceCreateSchema,
     updateSchema: deviceUpdateSchema,
+    recordSchema: deviceRecordSchema,
     listFilter: { input: "active", parameter: "active" },
     listFilterSchema: s.boolean("Filter by active or inactive devices."),
   },
@@ -190,11 +202,36 @@ export const assetGatewayOperations: readonly AssetGatewayOperation[] = [
     }),
   },
   ...resources.flatMap(createResourceOperations),
+  {
+    name: "list_device_checkins",
+    description:
+      "List up to 200 stored check-in log entries for one device, newest first. These are historical agent reports, not a live network scan.",
+    method: "GET",
+    path: "/devices/{id}/checkins",
+    pathField: "deviceId",
+    queryFields: [{ input: "beforeId", parameter: "before_id" }],
+    responseKind: "cursor_page",
+    outputField: "checkins",
+    permission: "read",
+    inputSchema: s.object(
+      "Check-in log lookup for one device.",
+      {
+        deviceId: s.positiveInteger("The device ID."),
+        beforeId: s.positiveInteger("The next_before_id from the previous page."),
+      },
+      { required: ["deviceId"] },
+    ),
+    outputSchema: s.actionOutput({
+      checkins: s.array("Stored device check-ins, newest first.", deviceCheckinSchema),
+      nextBeforeId: s.nullableInteger("The cursor for the next page, or null when no more check-ins remain."),
+    }),
+    followUpActions: ["asset_gateway.get_device"],
+  },
 ];
 
 function createResourceOperations(resource: AssetGatewayResourceDefinition): AssetGatewayOperation[] {
   const recordId = s.positiveInteger(`The ${resource.label} ID.`);
-  const listFilters = {
+  const listFilters: Record<string, JsonSchema> = {
     q: s.nonWhitespaceString(`Search ${resource.plural} by their indexed text fields.`),
     companyName: s.nonWhitespaceString("Only return records for this visible company."),
     [resource.listFilter.input]: resource.listFilterSchema,
@@ -206,11 +243,21 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
     }),
     offset: s.nonNegativeInteger("The zero-based record offset.", { default: 0 }),
   };
+  const queryFields: AssetGatewayQueryField[] = [
+    { input: "q", parameter: "q" },
+    { input: "companyName", parameter: "company_name" },
+    resource.listFilter,
+  ];
+  if (resource.supportsEnrollmentFilter) {
+    listFilters.enrollmentId = s.positiveInteger("Only return records linked to this device ID.");
+    queryFields.push({ input: "enrollmentId", parameter: "enrollment_id" });
+  }
+  queryFields.push({ input: "limit", parameter: "limit" }, { input: "offset", parameter: "offset" });
   const recordOutput = (created: boolean): JsonSchema =>
     s.object(
       `The ${resource.label} response with its concurrency revision.`,
       {
-        [resource.singular]: recordSchema,
+        [resource.singular]: resource.recordSchema,
         revision: s.nonEmptyString("The record revision hash."),
         etag: s.nonEmptyString("The ETag, including quotes, to use for a later update."),
         location: s.nonEmptyString("The relative API location of the created record."),
@@ -223,16 +270,13 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
   return [
     {
       name: `list_${resource.plural}`,
-      description: `List and search ${resource.plural} visible to the management token, ordered newest first.`,
+      description:
+        resource.singular === "device"
+          ? "List and search devices with their latest hardware, OS, network, location, agent, Tailscale, virtualization, SSH public-key, and group inventory, ordered newest first."
+          : `List and search ${resource.plural} visible to the management token, ordered newest first. Use enrollmentId to return records linked to one device.`,
       method: "GET",
       path: resource.path,
-      queryFields: [
-        { input: "q", parameter: "q" },
-        { input: "companyName", parameter: "company_name" },
-        resource.listFilter,
-        { input: "limit", parameter: "limit" },
-        { input: "offset", parameter: "offset" },
-      ],
+      queryFields,
       responseKind: "list",
       outputField: resource.plural,
       permission: "read",
@@ -240,7 +284,7 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
         optional: Object.keys(listFilters),
       }),
       outputSchema: s.actionOutput({
-        [resource.plural]: s.array(`The returned ${resource.plural}.`, recordSchema),
+        [resource.plural]: s.array(`The returned ${resource.plural}.`, resource.recordSchema),
         total: s.nonNegativeInteger("The total matching record count."),
         limit: s.positiveInteger("The applied page size."),
         offset: s.nonNegativeInteger("The applied record offset."),
@@ -262,7 +306,10 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
     },
     {
       name: `get_${resource.singular}`,
-      description: `Get one ${resource.label} and the ETag required for a conflict-safe update.`,
+      description:
+        resource.singular === "device"
+          ? "Get one device with hardware, OS, network, location, allocation, purchase/warranty, agent status, Tailscale, virtualization, SSH public-key, and group inventory, plus the ETag required for a conflict-safe update. Use enrollmentId with list_requests or list_tickets to read linked records."
+          : `Get one ${resource.label} and the ETag required for a conflict-safe update.`,
       method: "GET",
       path: `${resource.path}/{id}`,
       pathField: resource.idField,
@@ -271,7 +318,16 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
       permission: "read",
       inputSchema: s.actionInput({ [resource.idField]: recordId }, [resource.idField]),
       outputSchema: recordOutput(false),
-      followUpActions: [`${managementApiPrefix}update_${resource.singular}`, historyAction],
+      followUpActions:
+        resource.singular === "device"
+          ? [
+              `${managementApiPrefix}update_device`,
+              historyAction,
+              `${managementApiPrefix}list_device_checkins`,
+              `${managementApiPrefix}list_requests`,
+              `${managementApiPrefix}list_tickets`,
+            ]
+          : [`${managementApiPrefix}update_${resource.singular}`, historyAction],
     },
     {
       name: `update_${resource.singular}`,
@@ -302,7 +358,8 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
       path: `${resource.path}/{id}/history`,
       pathField: resource.idField,
       queryFields: [{ input: "beforeId", parameter: "before_id" }],
-      responseKind: "history",
+      responseKind: "cursor_page",
+      outputField: "events",
       permission: "read",
       inputSchema: s.object(
         `History lookup for one ${resource.label}.`,
@@ -313,7 +370,7 @@ function createResourceOperations(resource: AssetGatewayResourceDefinition): Ass
         { required: [resource.idField] },
       ),
       outputSchema: s.actionOutput({
-        events: s.array("History events, newest first.", eventSchema),
+        events: s.array("History events, newest first.", historyEventSchema),
         nextBeforeId: s.nullableInteger("The cursor for the next page, or null when no more events remain."),
       }),
     },

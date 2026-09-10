@@ -69,6 +69,43 @@ describe("Asset Gateway runtime", () => {
     });
   });
 
+  it("filters tickets by linked device and reads device check-ins", async () => {
+    const requests: Request[] = [];
+    const context = createAssetGatewayContext(
+      { baseUrl: "https://assets.example.com/api/v1" },
+      "dp_test-token",
+      createAssetGatewayFetch(requests),
+    );
+
+    await expect(assetGatewayActionHandlers.list_tickets!({ enrollmentId: 7 }, context)).resolves.toEqual({
+      tickets: [{ id: 4, title: "Screen issue", enrollment_id: 7 }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    await expect(
+      assetGatewayActionHandlers.list_device_checkins!({ deviceId: 7, beforeId: 21 }, context),
+    ).resolves.toEqual({
+      checkins: [
+        {
+          id: 20,
+          checked_in_at: "2026-09-09 12:00:00.000000",
+          public_ip: "203.0.113.10",
+          geo_city: "Perth",
+          latitude: -31.95,
+          longitude: 115.86,
+          logged_in_user: "alice",
+          device_hostname: "LAPTOP-7",
+        },
+      ],
+      nextBeforeId: null,
+    });
+
+    expect(new URL(requests[0]!.url).searchParams.get("enrollment_id")).toBe("7");
+    expect(new URL(requests[1]!.url).pathname).toBe("/api/v1/devices/7/checkins");
+    expect(new URL(requests[1]!.url).searchParams.get("before_id")).toBe("21");
+  });
+
   it("sends the current ETag and preserves omitted update fields", async () => {
     const requests: Request[] = [];
     const context = createAssetGatewayContext(
@@ -168,6 +205,31 @@ function createAssetGatewayFetch(requests: Request[]): typeof fetch {
     }
     if (url.pathname === "/api/v1/devices") {
       return jsonResponse({ data: [{ id: 7, device_label: "Laptop" }], total: 1, limit: 25, offset: 50 });
+    }
+    if (url.pathname === "/api/v1/tickets") {
+      return jsonResponse({
+        data: [{ id: 4, title: "Screen issue", enrollment_id: 7 }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      });
+    }
+    if (url.pathname === "/api/v1/devices/7/checkins") {
+      return jsonResponse({
+        data: [
+          {
+            id: 20,
+            checked_in_at: "2026-09-09 12:00:00.000000",
+            public_ip: "203.0.113.10",
+            geo_city: "Perth",
+            latitude: -31.95,
+            longitude: 115.86,
+            logged_in_user: "alice",
+            device_hostname: "LAPTOP-7",
+          },
+        ],
+        next_before_id: null,
+      });
     }
     if (url.pathname === "/api/v1/requests/12") {
       return jsonResponse({ data: { id: 12, title: "Laptop", status: "Delivered" }, revision: "revision-2" }, 200, {

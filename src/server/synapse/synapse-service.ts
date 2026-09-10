@@ -13,8 +13,12 @@ import type {
   SynapseEdge,
   SynapseMessage,
   SynapseNode,
+  SynapseObjectRecipe,
   SynapsePosition,
   SynapseProviderNode,
+  SynapseRelationshipKind,
+  SynapseRelationshipState,
+  SynapseRun,
   SynapseSelectionResult,
   SynapseSize,
   SynapseThread,
@@ -28,6 +32,7 @@ import {
   ProviderPreviewError,
   readProviderPreviewContent,
 } from "../previews/provider-preview.ts";
+import { createSynapseObjectRecipe, isLikelyReadAction, resolveSynapseRecipeInput } from "./synapse-recipe.ts";
 
 const maximumWorkspaceNameCharacters = 120;
 const maximumNodeTitleCharacters = 240;
@@ -67,11 +72,13 @@ export class SynapseService {
 
   async list(): Promise<SynapseWorkspaceSummary[]> {
     return (await this.options.store.listWorkspaces()).map((workspace) => {
+      ensureWorkspacePrimitives(workspace);
       removeLegacyRawConnectorArtifacts(workspace);
       return {
         id: workspace.id,
         name: workspace.name,
         nodeCount: workspace.nodes.length,
+        attentionCount: (workspace.runs ?? []).filter((run) => run.attention).length,
         updatedAt: workspace.updatedAt,
       };
     });
@@ -87,9 +94,12 @@ export class SynapseService {
     const workspace: SynapseWorkspace = {
       id: crypto.randomUUID(),
       name,
+      schemaVersion: 2,
       nodes: [],
       edges: [],
       threads: [],
+      instructions: [],
+      runs: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -149,6 +159,128 @@ export class SynapseService {
     }
   }
 
+  async runNodeRecipe(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
+    const workspace = await this.requiredWorkspace(workspaceId);
+    const node = requiredNode(workspace, nodeId);
+    if (node.kind !== "artifact" || !node.recipe) {
+      throw new SynapseError("synapse_recipe_not_found", "This object does not have a reusable recipe.", 404);
+    }
+    if (!this.options.actions) {
+      throw new SynapseError("synapse_recipe_unavailable", "Connector execution is unavailable.", 503);
+    }
+    const recipe = node.recipe;
+    const activeRun = startSynapseRun(workspace, `Refresh “${node.title}” from its recipe.`, [node.id]);
+    let resolvedInput: Record<string, unknown>;
+    try {
+      resolvedInput = resolveSynapseRecipeInput(recipe);
+    } catch (error) {
+      return await this.finishFailedRecipeRun(workspace, node, activeRun, {}, messageFromRecipeError(error));
+    }
+    const action = this.options.catalog.actionsById.get(recipe.actionId);
+    const connection = (await this.options.connections.listConnections()).find(
+      (candidate) => candidate.id === recipe.connectionId,
+    );
+    if (!action || !connection || action.service !== connection.service) {
+      return await this.finishFailedRecipeRun(
+        workspace,
+        node,
+        activeRun,
+        resolvedInput,
+        "The recipe's connector action or connected account is no longer available.",
+      );
+    }
+    const policy = await this.options.getPolicySnapshot?.();
+    const execution = await this.options.actions.run({
+      actionId: recipe.actionId,
+      connectionId: recipe.connectionId,
+      input: resolvedInput,
+      caller: "web",
+      policy,
+      approvalPolicy: "enforce",
+    });
+    if (!execution?.result.ok) {
+      const message =
+        execution?.result.error?.code === "approval_pending"
+          ? "This recipe requires approval. Run it as an AI instruction so the proposed change can be reviewed."
+          : (execution?.result.error?.message ?? "The connector recipe failed to run.");
+      return await this.finishFailedRecipeRun(
+        workspace,
+        node,
+        activeRun,
+        resolvedInput,
+        message,
+        execution?.executionId,
+      );
+    }
+    const candidates = artifactCandidates(execution.result.output, recipe.actionId, recipe.connectionId, resolvedInput);
+    const candidate =
+      recipe.result.match === "first"
+        ? candidates[0]
+        : (candidates.find((item) => item.itemIdentity === node.itemIdentity) ??
+          (candidates.length === 1 ? candidates[0] : undefined));
+    if (!candidate) {
+      return await this.finishFailedRecipeRun(
+        workspace,
+        node,
+        activeRun,
+        resolvedInput,
+        "The connector returned no result matching this object.",
+        execution.executionId,
+      );
+    }
+
+    node.artifactKind = candidate.artifactKind;
+    node.title = candidate.title;
+    node.summary = candidate.summary;
+    node.content = candidate.content;
+    node.display = candidate.display;
+    node.externalUrl = candidate.externalUrl;
+    node.sourceActionId = recipe.actionId;
+    node.sourceConnectionId = recipe.connectionId;
+    node.sourceActivityId = execution.executionId;
+    node.sourceInput = resolvedInput;
+    node.itemIdentity = candidate.itemIdentity;
+    node.data = candidate.data;
+    const completedAt = new Date().toISOString();
+    node.recipe.lastRun = {
+      runId: activeRun.runId,
+      status: "completed",
+      resolvedInput,
+      completedAt,
+    };
+    node.updatedAt = completedAt;
+    if (node.autoSize !== false) {
+      node.autoSize = true;
+      node.size = automaticNodeSize(node);
+    }
+    const response = recipeRunResponse(recipe, execution.executionId, resolvedInput, execution.result.output, true);
+    finishSynapseRun(workspace, activeRun, response);
+    const run = workspace.runs?.find((candidateRun) => candidateRun.id === activeRun.runId);
+    if (run) run.outputObjectIds = [node.id];
+    return await this.save(workspace);
+  }
+
+  private async finishFailedRecipeRun(
+    workspace: SynapseWorkspace,
+    node: SynapseArtifactNode,
+    activeRun: ActiveSynapseRun,
+    resolvedInput: Record<string, unknown>,
+    message: string,
+    executionId: string = crypto.randomUUID(),
+  ): Promise<SynapseWorkspace> {
+    const completedAt = new Date().toISOString();
+    node.recipe!.lastRun = {
+      runId: activeRun.runId,
+      status: "failed",
+      resolvedInput,
+      completedAt,
+      error: message,
+    };
+    const response = recipeRunResponse(node.recipe!, executionId, resolvedInput, { error: { message } }, false);
+    finishSynapseRun(workspace, activeRun, response);
+    return await this.save(workspace);
+  }
+
   async update(id: string, input: unknown): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(id);
     const body = readObject(input, "Synapse workspace");
@@ -192,6 +324,7 @@ export class SynapseService {
       });
     } else if (body.kind === "artifact") {
       const artifact = readArtifactInput(body);
+      if (artifact.recipe) await this.validateRecipe(artifact.recipe);
       const position = findOpenPosition(
         workspace,
         requestedPosition,
@@ -232,6 +365,11 @@ export class SynapseService {
       if (body.content !== undefined) node.content = optionalText(body.content, "content", maximumNodeTextCharacters);
       if (body.externalUrl !== undefined) node.externalUrl = optionalHttpsUrl(body.externalUrl, "externalUrl");
       if (body.artifactKind !== undefined) node.artifactKind = readArtifactKind(body.artifactKind);
+      if (body.recipe !== undefined) {
+        const recipe = readObjectRecipe(body.recipe);
+        if (recipe) await this.validateRecipe(recipe);
+        node.recipe = recipe;
+      }
       if (body.ungrouped === true) ungroupArtifactNode(workspace, node);
     }
     if (node.autoSize !== false) {
@@ -286,6 +424,7 @@ export class SynapseService {
     const workspace: SynapseWorkspace = {
       id: crypto.randomUUID(),
       name: optionalText(body.name, "name", maximumWorkspaceNameCharacters) ?? continuationName(sourceNode.title),
+      schemaVersion: 2,
       nodes: [continuedNode],
       edges: [],
       threads: sourceThread
@@ -297,6 +436,8 @@ export class SynapseService {
             },
           ]
         : [],
+      instructions: [],
+      runs: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -312,6 +453,8 @@ export class SynapseService {
       readText(body.sourceNodeId, "sourceNodeId", 200),
       readText(body.targetNodeId, "targetNodeId", 200),
       optionalText(body.label, "label", 120),
+      readRelationshipKind(body.relationshipKind),
+      readRelationshipState(body.state) ?? "confirmed",
     );
     return await this.save(workspace);
   }
@@ -346,6 +489,7 @@ export class SynapseService {
       );
     }
 
+    const activeRun = startSynapseRun(workspace, content, [nodeId]);
     const now = new Date().toISOString();
     thread.messages.push({ id: crypto.randomUUID(), role: "user", content, createdAt: now });
     thread.messages = thread.messages.slice(-maximumThreadMessages);
@@ -375,14 +519,12 @@ export class SynapseService {
         signal,
       );
       await this.applyAgentResponse(workspace, selectedNode, thread, response);
+      finishSynapseRun(workspace, activeRun, response);
       return await this.save(workspace);
     } catch (error) {
-      await this.applyAgentResponse(
-        workspace,
-        selectedNode,
-        thread,
-        failedSynapseResponse(error, completedToolActivity),
-      );
+      const response = failedSynapseResponse(error, completedToolActivity);
+      await this.applyAgentResponse(workspace, selectedNode, thread, response);
+      finishSynapseRun(workspace, activeRun, response);
       return await this.save(workspace);
     }
   }
@@ -394,6 +536,7 @@ export class SynapseService {
     const selectedNodes = selectedNodeIds.map((nodeId) => requiredNode(workspace, nodeId));
     const content = readText(body.content, "content", maximumChatCharacters);
     const selectedNode = selectedNodes[0]!;
+    const activeRun = startSynapseRun(workspace, content, selectedNodeIds);
     const existingNodeIds = new Set(workspace.nodes.map((node) => node.id));
     const extension = await this.createExtension(workspace, selectedNode, selectedNodeIds);
     const graphContext = createGraphContext(workspace, selectedNodeIds);
@@ -405,12 +548,17 @@ export class SynapseService {
       { role: "user" as const, content },
     ];
 
-    const response = await this.options.agentChat.respondWithExtension(
-      { messages: conversation, voiceMode: false },
-      extension,
-      undefined,
-      signal,
-    );
+    let response: AgentChatResponse;
+    try {
+      response = await this.options.agentChat.respondWithExtension(
+        { messages: conversation, voiceMode: false },
+        extension,
+        undefined,
+        signal,
+      );
+    } catch (error) {
+      response = failedSynapseResponse(error, []);
+    }
     const graphCreatedNodes = workspace.nodes.filter((node) => !existingNodeIds.has(node.id));
     const resultNode =
       selectionResultNode(graphCreatedNodes) ??
@@ -433,6 +581,7 @@ export class SynapseService {
     thread.updatedAt = now;
     await this.applyAgentResponse(workspace, resultNode, thread, response);
     for (const sourceNodeId of selectedNodeIds) this.connectNodes(workspace, sourceNodeId, resultNode.id);
+    finishSynapseRun(workspace, activeRun, response);
     return { workspace: await this.save(workspace), resultNodeId: resultNode.id };
   }
 
@@ -450,6 +599,7 @@ export class SynapseService {
       results.find((result) => result.response)?.response;
     if (response) {
       await this.applyAgentResponse(workspace, selectedNode, thread, response, thread.pendingMessageId);
+      finishWaitingSynapseRun(workspace, nodeId, response);
       return await this.save(workspace);
     }
     if (results.every((result) => result.status === "denied" || result.status === "expired")) {
@@ -461,6 +611,7 @@ export class SynapseService {
       thread.pendingApprovalIds = undefined;
       thread.pendingMessageId = undefined;
       thread.updatedAt = new Date().toISOString();
+      failWaitingSynapseRun(workspace, nodeId, "The requested connector actions were denied or expired.");
       return await this.save(workspace);
     }
     return this.presentWorkspace(workspace);
@@ -532,6 +683,7 @@ export class SynapseService {
       const sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
       const nodes = input.artifacts.map((item, index) => {
         const artifact = normalizeAgentArtifact(readArtifactInput(readObject(item, `artifacts[${index}]`)));
+        if (artifact.recipe) validateRecipeAgainstConnections(artifact.recipe, connectionsById, this.options.catalog);
         const node = this.addArtifactNode(
           workspace,
           nextFanPosition(workspace, parent, "artifact", automaticArtifactSize(artifact)),
@@ -548,6 +700,8 @@ export class SynapseService {
         readText(input.sourceNodeId, "sourceNodeId", 200),
         readText(input.targetNodeId, "targetNodeId", 200),
         optionalText(input.label, "label", 120),
+        readRelationshipKind(input.relationshipKind),
+        readRelationshipState(input.state) ?? "proposed",
       );
       return graphActivity(toolName, input, true, { edge });
     }
@@ -564,6 +718,11 @@ export class SynapseService {
       if (input.display !== undefined) node.display = readArtifactDisplay(input.display);
       if (input.sourceActivityId !== undefined) {
         node.sourceActivityId = optionalText(input.sourceActivityId, "sourceActivityId", 200);
+      }
+      if (input.recipe !== undefined) {
+        const recipe = readObjectRecipe(input.recipe);
+        if (recipe) validateRecipeAgainstConnections(recipe, connectionsById, this.options.catalog);
+        node.recipe = recipe;
       }
       if (node.autoSize !== false) {
         node.autoSize = true;
@@ -608,6 +767,13 @@ export class SynapseService {
     return node;
   }
 
+  private async validateRecipe(recipe: SynapseObjectRecipe): Promise<void> {
+    const connectionsById = new Map(
+      (await this.options.connections.listConnections()).map((connection) => [connection.id, connection]),
+    );
+    validateRecipeAgainstConnections(recipe, connectionsById, this.options.catalog);
+  }
+
   private addArtifactNode(
     workspace: SynapseWorkspace,
     position: SynapsePosition,
@@ -630,6 +796,7 @@ export class SynapseService {
       sourceInput: input.sourceInput,
       itemIdentity: input.itemIdentity,
       data: input.data,
+      recipe: input.recipe,
       position,
       size: size ?? automaticArtifactSize(input),
       autoSize: size === undefined,
@@ -645,6 +812,8 @@ export class SynapseService {
     sourceNodeId: string,
     targetNodeId: string,
     label?: string,
+    relationshipKind?: SynapseRelationshipKind,
+    state: SynapseRelationshipState = "confirmed",
   ): SynapseEdge {
     requiredNode(workspace, sourceNodeId);
     requiredNode(workspace, targetNodeId);
@@ -660,6 +829,8 @@ export class SynapseService {
       sourceNodeId,
       targetNodeId,
       label,
+      relationshipKind,
+      state,
       createdAt: new Date().toISOString(),
     };
     workspace.edges.push(edge);
@@ -799,6 +970,9 @@ export class SynapseService {
           sourceConnectionId: activity.connectionId,
           sourceActivityId: activity.id,
           sourceInput,
+          recipe: isLikelyReadAction(activity.actionId)
+            ? createSynapseObjectRecipe(activity.actionId, activity.connectionId, sourceInput ?? {})
+            : undefined,
         };
         const existing = artifact.itemIdentity
           ? workspace.nodes.find(
@@ -821,6 +995,7 @@ export class SynapseService {
           existing.sourceInput = artifact.sourceInput;
           existing.data = artifact.data;
           existing.externalUrl ??= artifact.externalUrl;
+          existing.recipe ??= artifact.recipe;
           existing.updatedAt = new Date().toISOString();
         }
         this.connectNodes(workspace, parent.id, node.id);
@@ -832,7 +1007,9 @@ export class SynapseService {
     const workspace = await this.options.store.getWorkspace(id);
     if (!workspace) throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
     removeLegacyRawConnectorArtifacts(workspace);
-    let migrated = migratePendingApprovalDrafts(workspace);
+    let migrated = ensureWorkspacePrimitives(workspace);
+    migrated = migrateObjectRecipes(workspace) || migrated;
+    migrated = migratePendingApprovalDrafts(workspace) || migrated;
     for (const thread of workspace.threads) {
       for (const message of thread.messages) {
         migrated = reconcileArtifactProvenance(workspace, message.toolActivity ?? []) || migrated;
@@ -853,6 +1030,9 @@ export class SynapseService {
   private presentWorkspace(workspace: SynapseWorkspace): SynapseWorkspace {
     return {
       ...workspace,
+      schemaVersion: 2,
+      instructions: workspace.instructions ?? [],
+      runs: workspace.runs ?? [],
       nodes: workspace.nodes.map((node) => {
         if (node.kind !== "artifact") {
           return { ...node, size: node.autoSize === false && node.size ? node.size : automaticNodeSize(node) };
@@ -893,6 +1073,7 @@ interface ArtifactInput {
   sourceInput?: Record<string, unknown>;
   itemIdentity?: string;
   data?: unknown;
+  recipe?: SynapseObjectRecipe;
 }
 
 const synapseArtifactDisplaySchema: Record<string, unknown> = {
@@ -1041,6 +1222,29 @@ const synapseArtifactDisplaySchema: Record<string, unknown> = {
   ],
 };
 
+const synapseObjectRecipeSchema: Record<string, unknown> = {
+  type: "object",
+  description:
+    "Reusable connector recipe for this object. Input values may contain {$synapse:'now'} or {$synapse:'period',period:'month',edge:'start',offset:-1,format:'iso_date'} expressions.",
+  properties: {
+    version: { const: 1 },
+    actionId: { type: "string" },
+    connectionId: { type: "string" },
+    input: { type: "object", additionalProperties: true },
+    result: {
+      type: "object",
+      properties: {
+        mode: { const: "replace" },
+        match: { type: "string", enum: ["source_identity", "first"] },
+      },
+      required: ["mode", "match"],
+      additionalProperties: false,
+    },
+  },
+  required: ["version", "actionId", "connectionId", "input", "result"],
+  additionalProperties: false,
+};
+
 const synapseTools: AgentChatExtensionTool[] = [
   {
     name: "synapse_add_provider",
@@ -1089,6 +1293,7 @@ const synapseTools: AgentChatExtensionTool[] = [
               },
               display: synapseArtifactDisplaySchema,
               externalUrl: { type: "string" },
+              recipe: synapseObjectRecipeSchema,
             },
             required: ["artifactKind", "title", "content"],
             additionalProperties: false,
@@ -1101,13 +1306,18 @@ const synapseTools: AgentChatExtensionTool[] = [
   },
   {
     name: "synapse_connect_nodes",
-    description: "Connect two existing Synapse nodes when their relationship is important to the user's investigation.",
+    description: "Propose or confirm a meaningful relationship between two existing Synapse objects.",
     inputSchema: {
       type: "object",
       properties: {
         sourceNodeId: { type: "string" },
         targetNodeId: { type: "string" },
         label: { type: "string" },
+        relationshipKind: {
+          type: "string",
+          enum: ["related_to", "calculated_from", "attached_to", "saved_in", "sent_to", "uses", "produced"],
+        },
+        state: { type: "string", enum: ["proposed", "confirmed"] },
       },
       required: ["sourceNodeId", "targetNodeId"],
       additionalProperties: false,
@@ -1139,6 +1349,10 @@ const synapseTools: AgentChatExtensionTool[] = [
           type: "string",
           description: "Connector tool activity id whose result is being written into this artifact.",
         },
+        recipe: {
+          description: "Replace the reusable connector recipe, or pass null to remove it.",
+          anyOf: [synapseObjectRecipeSchema, { type: "null" }],
+        },
       },
       additionalProperties: false,
     },
@@ -1156,10 +1370,11 @@ Multi-selection rules:
 - when the user explicitly asks for a new connector, call synapse_add_provider exactly once instead of creating a note
 - do not create multiple graph nodes for a multi-selection request`
       : "";
-  return `You are working inside Synapse, a visual research and action canvas. The selected node is ${selectedNode.id} (${selectedNode.title}).
+  return `You are the shared AI runtime inside Synapse, an object workspace backed by Open Connector. The selected object is ${selectedNode.id} (${selectedNode.title}).
 
 Rules:
-- use the selected node and its connected component as your factual canvas context; do not assume unrelated canvas nodes
+- every object is addressable by its stable id and capabilities; operate on the selected object and its connected component, not an independent per-object agent
+- use the selected object and its connected component as factual workspace context; do not assume unrelated objects
 - use connector tools whenever current external data or a side effect is needed
 - treat a connector-backed artifact with sourceConnectionId as an existing representation of that connection; do not add a separate provider node for the same connection
 - add a provider node with synapse_add_provider only when retrieved information needs a durable source node and that connection is not already represented by a provider or artifact nearby
@@ -1171,6 +1386,9 @@ Rules:
 - keep structured displays focused and human-readable; use short labels, preserve meaningful units in content, and never invent numeric values or relationships
 - when revising a structured artifact, update its display with the content; pass display as null if the result should return to Markdown
 - include sourceActivityId from connector tool activity when turning that result into artifacts
+- make connector-backed result objects directly refreshable with a recipe; preserve the exact action and connection and replace literal relative dates with period expressions
+- use {$synapse:"period",period:"month",edge:"start",offset:-1,format:"iso_date"} and the matching end expression for "last month" so reruns move with the calendar
+- recipes are declarative data, never executable code; use only the connector action's real input fields
 - when connector results update or expand the selected artifact, call synapse_update_artifact with its nodeId and sourceActivityId instead of creating a copy with synapse_add_artifacts
 - never recreate the selected artifact as a second card; update it in place when it represents the same external item or working document
 - never create an artifact containing raw JSON, a JSON code fence, an API response dump, or provider field-reference maps; translate structured results into concise human-readable Markdown
@@ -1178,8 +1396,8 @@ Rules:
 - use synapse_update_artifact with nodeId to update any earlier artifact card in the connected context, not only the selected card
 - after a connector mutation succeeds, update every earlier artifact card whose visible content is changed by that mutation; mark completed or closed list entries with Markdown strikethrough such as ~~completed item~~
 - never mark an item completed before its connector mutation succeeds or while it is still waiting for approval
-- connect nodes whose relationship helps explain the work
-- keep chat concise because durable detail belongs in artifact cards
+- connect objects whose relationship helps explain the work; use typed relationships such as calculated_from, attached_to, saved_in, or sent_to when known
+- keep the conversational response concise because durable detail belongs in workspace objects, relationships, and run results
 - never claim a graph mutation or connector side effect succeeded unless its host tool succeeded${selectionRules}`;
 }
 
@@ -1194,9 +1412,11 @@ function createGraphContext(
     .filter((entry): entry is { node: SynapseNode; distance: number } => entry.node !== undefined);
   const includedIds = new Set(rankedNodes.map(({ node }) => node.id));
   const context: Record<string, unknown> = {
-    workspace: { id: workspace.id, name: workspace.name },
+    workspace: { id: workspace.id, name: workspace.name, model: "objects_relationships_instructions_runs" },
+    selectedObjectIds: selectedNodeIds,
     nodes: rankedNodes.map(({ node, distance }) => ({
       ...node,
+      capabilities: synapseObjectCapabilities(node),
       graphDistance: distance,
       ...(node.kind === "artifact"
         ? {
@@ -1207,10 +1427,21 @@ function createGraphContext(
         : {}),
     })),
     edges: workspace.edges.filter((edge) => includedIds.has(edge.sourceNodeId) && includedIds.has(edge.targetNodeId)),
+    recentInstructions: (workspace.instructions ?? []).slice(-8),
+    recentRuns: (workspace.runs ?? []).slice(-8),
   };
   if (selectedNodeIds.length === 1) context.selectedNodeId = selectedNodeIds[0];
   else context.selectedNodeIds = selectedNodeIds;
   return context;
+}
+
+function synapseObjectCapabilities(node: SynapseNode): string[] {
+  const capabilities = ["instruct", "connect"];
+  if (node.kind === "provider") return [...capabilities, "query", "act"];
+  if (node.sourceConnectionId) capabilities.push("inspect", "refresh", "act");
+  if (node.recipe) capabilities.push("rerun", "reprogram");
+  if (node.externalUrl || (node.previews?.length ?? 0) > 0) capabilities.push("open");
+  return capabilities;
 }
 
 function connectedNodesByDistance(
@@ -1305,6 +1536,7 @@ function reconcileArtifactProvenance(
         itemIdentity: node.itemIdentity,
         data: node.data,
         externalUrl: node.externalUrl,
+        recipe: node.recipe,
       });
       node.sourceActionId = source.actionId;
       node.sourceConnectionId = source.connectionId;
@@ -1313,6 +1545,9 @@ function reconcileArtifactProvenance(
       node.itemIdentity ??= provenanceCandidate?.itemIdentity;
       node.data ??= provenanceCandidate?.data;
       node.externalUrl ??= provenanceCandidate?.externalUrl;
+      if (!node.recipe && isLikelyReadAction(source.actionId)) {
+        node.recipe = createSynapseObjectRecipe(source.actionId, source.connectionId, sourceInput ?? {});
+      }
       const after = JSON.stringify({
         sourceActionId: node.sourceActionId,
         sourceConnectionId: node.sourceConnectionId,
@@ -1321,6 +1556,7 @@ function reconcileArtifactProvenance(
         itemIdentity: node.itemIdentity,
         data: node.data,
         externalUrl: node.externalUrl,
+        recipe: node.recipe,
       });
       changed = before !== after || changed;
 
@@ -1390,6 +1626,7 @@ function mergeCuratedArtifact(target: SynapseArtifactNode, source: SynapseArtifa
   target.sourceInput = source.sourceInput;
   target.itemIdentity = source.itemIdentity ?? target.itemIdentity;
   target.data = source.data ?? target.data;
+  target.recipe = source.recipe ?? target.recipe;
   target.updatedAt = new Date().toISOString();
   if (target.autoSize !== false) {
     target.autoSize = true;
@@ -2073,7 +2310,7 @@ function providerItemIdentity(
     "uid",
   ]);
   const messageId = actionId.includes("attachment") ? firstText(sourceInput, ["messageId"]) : undefined;
-  const path = firstText(item, ["pathLower", "pathDisplay", "path"]);
+  const path = firstText(item, ["pathLower", "pathDisplay", "fullPath", "path"]);
   const externalUrl = firstHttpsUrl(item, ["webUrl", "webLink", "url", "link"]);
   const stableValue = explicit
     ? `${messageId ? `${messageId}:` : ""}${explicit}`
@@ -2450,6 +2687,153 @@ function defaultSizeForKind(kind: SynapseNode["kind"]): SynapseSize {
   };
 }
 
+interface ActiveSynapseRun {
+  instructionId: string;
+  runId: string;
+  existingObjectIds: Set<string>;
+}
+
+function ensureWorkspacePrimitives(workspace: SynapseWorkspace): boolean {
+  let changed = false;
+  if (workspace.schemaVersion !== 2) {
+    workspace.schemaVersion = 2;
+    changed = true;
+  }
+  if (!workspace.instructions) {
+    workspace.instructions = [];
+    changed = true;
+  }
+  if (!workspace.runs) {
+    workspace.runs = [];
+    changed = true;
+  }
+  return changed;
+}
+
+function migrateObjectRecipes(workspace: SynapseWorkspace): boolean {
+  let changed = false;
+  for (const node of workspace.nodes) {
+    if (
+      node.kind !== "artifact" ||
+      node.recipe ||
+      !node.sourceActionId ||
+      !node.sourceConnectionId ||
+      !isLikelyReadAction(node.sourceActionId)
+    ) {
+      continue;
+    }
+    node.recipe = createSynapseObjectRecipe(node.sourceActionId, node.sourceConnectionId, node.sourceInput ?? {});
+    changed = true;
+  }
+  return changed;
+}
+
+function startSynapseRun(workspace: SynapseWorkspace, content: string, targetObjectIds: string[]): ActiveSynapseRun {
+  ensureWorkspacePrimitives(workspace);
+  const now = new Date().toISOString();
+  const instructionId = crypto.randomUUID();
+  const runId = crypto.randomUUID();
+  workspace.instructions!.push({
+    id: instructionId,
+    content,
+    targetObjectIds: [...targetObjectIds],
+    status: "running",
+    runId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  workspace.runs!.push({
+    id: runId,
+    instructionId,
+    status: "running",
+    inputObjectIds: [...targetObjectIds],
+    outputObjectIds: [],
+    actions: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { instructionId, runId, existingObjectIds: new Set(workspace.nodes.map((node) => node.id)) };
+}
+
+function finishSynapseRun(workspace: SynapseWorkspace, activeRun: ActiveSynapseRun, response: AgentChatResponse): void {
+  const run = workspace.runs?.find((candidate) => candidate.id === activeRun.runId);
+  const instruction = workspace.instructions?.find((candidate) => candidate.id === activeRun.instructionId);
+  if (!run || !instruction) return;
+  const outputIds = workspace.nodes.filter((node) => !activeRun.existingObjectIds.has(node.id)).map((node) => node.id);
+  completeRunRecord(workspace, run, instruction, response, outputIds);
+}
+
+function finishWaitingSynapseRun(workspace: SynapseWorkspace, nodeId: string, response: AgentChatResponse): void {
+  const run = [...(workspace.runs ?? [])]
+    .reverse()
+    .find((candidate) => candidate.status === "waiting_for_approval" && candidate.inputObjectIds.includes(nodeId));
+  const instruction = run ? workspace.instructions?.find((candidate) => candidate.id === run.instructionId) : undefined;
+  if (!run || !instruction) return;
+  const outputIds = workspace.nodes
+    .filter((node) => !run.inputObjectIds.includes(node.id) && node.updatedAt >= run.createdAt)
+    .map((node) => node.id);
+  completeRunRecord(workspace, run, instruction, response, outputIds);
+}
+
+function failWaitingSynapseRun(workspace: SynapseWorkspace, nodeId: string, attention: string): void {
+  const run = [...(workspace.runs ?? [])]
+    .reverse()
+    .find((candidate) => candidate.status === "waiting_for_approval" && candidate.inputObjectIds.includes(nodeId));
+  const instruction = run ? workspace.instructions?.find((candidate) => candidate.id === run.instructionId) : undefined;
+  if (!run || !instruction) return;
+  const now = new Date().toISOString();
+  run.status = "failed";
+  run.attention = attention;
+  run.updatedAt = now;
+  run.completedAt = now;
+  instruction.status = "failed";
+  instruction.updatedAt = now;
+}
+
+function completeRunRecord(
+  workspace: SynapseWorkspace,
+  run: SynapseRun,
+  instruction: NonNullable<SynapseWorkspace["instructions"]>[number],
+  response: AgentChatResponse,
+  outputObjectIds: string[],
+): void {
+  const now = new Date().toISOString();
+  run.status = response.status;
+  run.outputObjectIds = [
+    ...new Set([
+      ...run.outputObjectIds,
+      ...outputObjectIds,
+      ...response.toolActivity.flatMap((activity) => graphArtifactNodeIds(activity)),
+    ]),
+  ].filter((nodeId) => workspace.nodes.some((node) => node.id === nodeId));
+  run.actions = response.toolActivity.flatMap((activity) => {
+    if (!activity.actionId || activity.actionId.startsWith("synapse_")) return [];
+    return [
+      {
+        actionId: activity.actionId,
+        connectionId: activity.connectionId,
+        status:
+          response.status === "waiting_for_approval" && activity.approvalId
+            ? ("waiting_for_approval" as const)
+            : activity.ok
+              ? ("completed" as const)
+              : ("failed" as const),
+      },
+    ];
+  });
+  run.summary = truncate(response.message.content, 1_200);
+  run.attention =
+    response.status === "waiting_for_approval"
+      ? "Connector changes are ready for review."
+      : response.status === "failed"
+        ? truncate(response.message.content, 600)
+        : undefined;
+  run.updatedAt = now;
+  run.completedAt = response.status === "waiting_for_approval" ? undefined : now;
+  instruction.status = response.status;
+  instruction.updatedAt = now;
+}
+
 function threadFor(workspace: SynapseWorkspace, nodeId: string): SynapseThread {
   const existing = workspace.threads.find((thread) => thread.nodeId === nodeId);
   if (existing) return existing;
@@ -2493,6 +2877,98 @@ function readArtifactInput(body: Record<string, unknown>): ArtifactInput {
     sourceInput: body.sourceInput === undefined ? undefined : readObject(body.sourceInput, "sourceInput"),
     itemIdentity: optionalText(body.itemIdentity, "itemIdentity", 1_000),
     data: body.data,
+    recipe: readObjectRecipe(body.recipe),
+  };
+}
+
+function readObjectRecipe(value: unknown): SynapseObjectRecipe | undefined {
+  if (value === undefined || value === null) return undefined;
+  const body = readObject(value, "recipe");
+  if (body.version !== 1) throw new SynapseError("invalid_synapse_recipe", "recipe.version must be 1.");
+  const input = readObject(body.input, "recipe.input");
+  const resultBody = body.result === undefined ? undefined : readObject(body.result, "recipe.result");
+  const mode = resultBody?.mode ?? "replace";
+  if (mode !== "replace") throw new SynapseError("invalid_synapse_recipe", "recipe.result.mode must be replace.");
+  const match = resultBody?.match ?? "source_identity";
+  if (match !== "source_identity" && match !== "first") {
+    throw new SynapseError("invalid_synapse_recipe", "recipe.result.match must be source_identity or first.");
+  }
+  const serialized = JSON.stringify(input);
+  if (serialized.length > 20_000) {
+    throw new SynapseError("invalid_synapse_recipe", "recipe.input cannot exceed 20,000 characters.");
+  }
+  const recipe: SynapseObjectRecipe = {
+    version: 1,
+    actionId: readText(body.actionId, "recipe.actionId", 200),
+    connectionId: readText(body.connectionId, "recipe.connectionId", 200),
+    input: structuredClone(input),
+    result: { mode: "replace", match },
+  };
+  try {
+    resolveSynapseRecipeInput(recipe, new Date("2026-01-15T12:00:00.000Z"));
+  } catch (error) {
+    throw new SynapseError("invalid_synapse_recipe", messageFromRecipeError(error));
+  }
+  return recipe;
+}
+
+function validateRecipeAgainstConnections(
+  recipe: SynapseObjectRecipe,
+  connectionsById: ReadonlyMap<string, ConnectionSummary>,
+  catalog: CatalogStore,
+): void {
+  const action = catalog.actionsById.get(recipe.actionId);
+  const connection = connectionsById.get(recipe.connectionId);
+  if (!action) throw new SynapseError("invalid_synapse_recipe", `Unknown recipe action: ${recipe.actionId}.`);
+  if (!connection) {
+    throw new SynapseError(
+      "synapse_connection_not_found",
+      `Connected provider not found: ${recipe.connectionId}.`,
+      404,
+    );
+  }
+  if (action.service !== connection.service) {
+    throw new SynapseError(
+      "invalid_synapse_recipe",
+      "The recipe action and connected account use different providers.",
+    );
+  }
+}
+
+function messageFromRecipeError(error: unknown): string {
+  return error instanceof Error ? error.message : "The Synapse recipe is invalid.";
+}
+
+function recipeRunResponse(
+  recipe: SynapseObjectRecipe,
+  executionId: string,
+  input: Record<string, unknown>,
+  output: unknown,
+  ok: boolean,
+): AgentChatResponse {
+  const content = ok
+    ? `Refreshed this object with ${recipe.actionId}.`
+    : `The object recipe failed: ${toolActivityErrorMessage(output) ?? "Unknown connector error."}`;
+  return {
+    status: ok ? "completed" : "failed",
+    message: {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content,
+      createdAt: new Date().toISOString(),
+    },
+    toolActivity: [
+      {
+        id: executionId,
+        type: "action",
+        label: recipe.actionId,
+        ok,
+        actionId: recipe.actionId,
+        connectionId: recipe.connectionId,
+        input,
+        output,
+      },
+    ],
   };
 }
 
@@ -2510,6 +2986,28 @@ function readArtifactKind(value: unknown): SynapseArtifactKind {
     return value;
   }
   throw new SynapseError("invalid_synapse_artifact", "artifactKind is invalid.");
+}
+
+function readRelationshipKind(value: unknown): SynapseRelationshipKind | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (
+    value === "related_to" ||
+    value === "calculated_from" ||
+    value === "attached_to" ||
+    value === "saved_in" ||
+    value === "sent_to" ||
+    value === "uses" ||
+    value === "produced"
+  ) {
+    return value;
+  }
+  throw new SynapseError("invalid_synapse_edge", "relationshipKind is invalid.");
+}
+
+function readRelationshipState(value: unknown): SynapseRelationshipState | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "proposed" || value === "confirmed") return value;
+  throw new SynapseError("invalid_synapse_edge", "state must be proposed or confirmed.");
 }
 
 function readArtifactDisplay(value: unknown): SynapseArtifactDisplay | undefined {

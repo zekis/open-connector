@@ -51,7 +51,7 @@ export interface AssetGatewayActionContext {
 }
 
 const requestTimeoutMs = 30_000;
-const maxResponseBytes = 5 * 1024 * 1024;
+const maxResponseBytes = 20 * 1024 * 1024;
 const maxErrorMessageCharacters = 2_000;
 
 export const assetGatewayActionHandlers: Record<string, AssetGatewayActionHandler> = {};
@@ -247,11 +247,11 @@ function normalizeAssetGatewayResponse(
       offset: integer(payload.offset, "offset", responseError),
     };
   }
-  if (kind === "history") {
+  if (kind === "cursor_page") {
     const nextBeforeId = nullableInteger(payload.next_before_id);
     if (nextBeforeId === undefined) throw responseError("next_before_id must be an integer or null");
     return {
-      events: objectArray(payload.data, "data", responseError),
+      [requiredOutputField(outputField)]: objectArray(payload.data, "data", responseError),
       nextBeforeId,
     };
   }

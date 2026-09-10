@@ -2,6 +2,51 @@ import type { AgentChatProgress, AgentChatToolActivity } from "../chat/agent-cha
 import type { ProviderPreview } from "../previews/provider-preview.ts";
 
 export type SynapseNodeKind = "provider" | "artifact";
+export type SynapseRelationshipKind =
+  | "related_to"
+  | "calculated_from"
+  | "attached_to"
+  | "saved_in"
+  | "sent_to"
+  | "uses"
+  | "produced";
+export type SynapseRelationshipState = "proposed" | "confirmed";
+export type SynapseInstructionStatus = "running" | "waiting_for_approval" | "completed" | "failed";
+export type SynapseRunStatus = SynapseInstructionStatus;
+export type SynapseRecipePeriod = "day" | "week" | "month" | "quarter" | "year";
+export type SynapseRecipeDateFormat = "iso_date" | "iso_datetime";
+export type SynapseRecipeExpression =
+  | {
+      $synapse: "now";
+      format?: SynapseRecipeDateFormat;
+    }
+  | {
+      $synapse: "period";
+      period: SynapseRecipePeriod;
+      edge: "start" | "end";
+      offset?: number;
+      format?: SynapseRecipeDateFormat;
+    };
+
+export interface SynapseRecipeLastRun {
+  runId: string;
+  status: "completed" | "failed";
+  resolvedInput: Record<string, unknown>;
+  completedAt: string;
+  error?: string;
+}
+
+export interface SynapseObjectRecipe {
+  version: 1;
+  actionId: string;
+  connectionId: string;
+  input: Record<string, unknown>;
+  result: {
+    mode: "replace";
+    match: "source_identity" | "first";
+  };
+  lastRun?: SynapseRecipeLastRun;
+}
 export type SynapseArtifactKind =
   | "question"
   | "email"
@@ -103,6 +148,7 @@ export interface SynapseArtifactNode extends SynapseNodeBase {
   ungrouped?: boolean;
   previews?: ProviderPreview[];
   data?: unknown;
+  recipe?: SynapseObjectRecipe;
 }
 
 export type SynapseNode = SynapseProviderNode | SynapseArtifactNode;
@@ -112,7 +158,39 @@ export interface SynapseEdge {
   sourceNodeId: string;
   targetNodeId: string;
   label?: string;
+  relationshipKind?: SynapseRelationshipKind;
+  state?: SynapseRelationshipState;
   createdAt: string;
+}
+
+export interface SynapseInstruction {
+  id: string;
+  content: string;
+  targetObjectIds: string[];
+  status: SynapseInstructionStatus;
+  runId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SynapseRunAction {
+  actionId: string;
+  connectionId?: string;
+  status: "waiting_for_approval" | "completed" | "failed";
+}
+
+export interface SynapseRun {
+  id: string;
+  instructionId: string;
+  status: SynapseRunStatus;
+  inputObjectIds: string[];
+  outputObjectIds: string[];
+  actions: SynapseRunAction[];
+  summary?: string;
+  attention?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface SynapseMessage {
@@ -135,9 +213,12 @@ export interface SynapseThread {
 export interface SynapseWorkspace {
   id: string;
   name: string;
+  schemaVersion?: 2;
   nodes: SynapseNode[];
   edges: SynapseEdge[];
   threads: SynapseThread[];
+  instructions?: SynapseInstruction[];
+  runs?: SynapseRun[];
   createdAt: string;
   updatedAt: string;
 }
@@ -146,6 +227,7 @@ export interface SynapseWorkspaceSummary {
   id: string;
   name: string;
   nodeCount: number;
+  attentionCount?: number;
   updatedAt: string;
 }
 
