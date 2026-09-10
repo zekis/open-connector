@@ -2260,7 +2260,7 @@ function writeMcpOAuthHtml(context: Context, html: string, status: 200 | 400 | 4
   context.header("Cache-Control", "no-store");
   context.header(
     "Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; base-uri 'none'; frame-ancestors 'none'",
   );
   context.header("Referrer-Policy", "no-referrer");
   context.header("X-Content-Type-Options", "nosniff");

@@ -1295,6 +1295,7 @@ describe("ConnectServer", () => {
       headers: { authorization: "Bearer admin-secret" },
     });
     expect(consent.status).toBe(200);
+    expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' https://chatgpt.com");
     await expect(consent.text()).resolves.toContain("Allow access");
 
     const approved = await app.request("/oauth/authorize", {
