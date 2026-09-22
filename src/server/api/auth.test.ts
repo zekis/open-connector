@@ -1,8 +1,77 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { createLocalAuthMiddleware, installMobileAuthCookie } from "./auth.ts";
+import {
+  createLocalAuthMiddleware,
+  installMobileAuthCookie,
+  isRuntimeActivityRequest,
+  readRuntimeGrant,
+} from "./auth.ts";
 
 describe("createLocalAuthMiddleware", () => {
+  it("allows runtime activity review and comments without granting administrative access", async () => {
+    const grant = { tokenId: "maya", allowedActions: [], blockedActions: [], allowedProxies: [] };
+    const app = new Hono();
+    app.use(
+      "*",
+      createLocalAuthMiddleware({
+        adminToken: "admin-secret",
+        runtimeToken: "bootstrap",
+        resolveRuntimeToken: async (token) => (token === "maya" ? grant : undefined),
+        verifyRuntimeJwt: async (token) => token === "jwt",
+      }),
+    );
+    app.all("*", (context) =>
+      context.json({ runtime: isRuntimeActivityRequest(context), grant: readRuntimeGrant(context) }),
+    );
+    for (const [method, path] of [
+      ["GET", "/api/feed"],
+      ["POST", "/api/feed"],
+      ["GET", "/api/flows"],
+      ["GET", "/api/flows/flow-1"],
+      ["GET", "/api/flow-runs"],
+      ["GET", "/api/flow-runs/run-1"],
+      ["POST", "/api/feed/flow%3Arun-1/comments"],
+      ["HEAD", "/api/feed"],
+    ]) {
+      for (const token of ["maya", "bootstrap", "jwt"]) {
+        const response = await app.request(path!, { method, headers: authorize("Bearer", token) });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        if (method !== "HEAD") expect(await response.json()).toMatchObject({ runtime: true });
+      }
+      expect((await app.request(path!, { method })).status).toBe(401);
+      const admin = await app.request(path!, { method, headers: authorize("Bearer", "admin-secret") });
+      expect(admin.status).toBe(200);
+      if (method !== "HEAD") expect(await admin.json()).toEqual({ runtime: false });
+    }
+    expect(await (await app.request("/api/feed", { headers: authorize("Bearer", "maya") })).json()).toEqual({
+      runtime: true,
+      grant,
+    });
+    for (const [method, path] of [
+      ["POST", "/api/flows"],
+      ["PUT", "/api/flows/flow-1"],
+      ["DELETE", "/api/flows/flow-1"],
+      ["POST", "/api/flows/flow-1/runs"],
+      ["POST", "/api/flow-approvals/approval-1/approve"],
+      ["GET", "/api/connections"],
+      ["GET", "/api/runtime-tokens"],
+      ["GET", "/api/feed/flow:run-1/previews/attachment-0"],
+      ["GET", "/api/flows-extra"],
+    ]) {
+      expect((await app.request(path!, { method, headers: authorize("Bearer", "maya") })).status).toBe(401);
+    }
+  });
+
+  it("does not open activity routes when only runtime authentication is configured", async () => {
+    const app = new Hono();
+    app.use("*", createLocalAuthMiddleware({ resolveRuntimeToken: async () => undefined }));
+    app.all("*", (context) => context.json({ ok: true }));
+    expect((await app.request("/api/feed")).status).toBe(401);
+    expect((await app.request("/api/flows")).status).toBe(401);
+    expect((await app.request("/api/feed/flow:run-1/comments", { method: "POST" })).status).toBe(401);
+  });
+
   it("fails closed when a runtime token resolver is configured without a token-count callback", async () => {
     const app = new Hono();
     app.use(
@@ -153,6 +222,7 @@ describe("createLocalAuthMiddleware", () => {
     app.use(
       "*",
       createLocalAuthMiddleware({
+        adminToken: "admin-secret",
         hasRuntimeTokens: async () => true,
         resolveRuntimeToken: async (token) => {
           if (token === "oauth-token") {
@@ -178,6 +248,10 @@ describe("createLocalAuthMiddleware", () => {
     );
     app.post("/mcp", (context) => context.json({ ok: true }));
     app.get("/v1/actions", (context) => context.json({ ok: true }));
+
+    app.get("/api/feed", (context) => context.json({ ok: true }));
+    expect((await app.request("/api/feed", { headers: authorize("Bearer", "oauth-token") })).status).toBe(401);
+    expect((await app.request("/api/feed", { headers: authorize("Bearer", "legacy-token") })).status).toBe(200);
 
     expect((await app.request("/mcp", { method: "POST", headers: authorize("Bearer", "oauth-token") })).status).toBe(
       200,

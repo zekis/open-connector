@@ -60,6 +60,7 @@ import {
   installMobileAuthCookie,
   readLocalAuthSession,
   readRuntimeGrant,
+  isRuntimeActivityRequest,
 } from "./api/auth.ts";
 import { getResponseCachePolicy } from "./api/cache-policy.ts";
 import { HttpRequestError, internalError, jsonError, notFound, readJsonBody } from "./api/http-utils.ts";
@@ -352,6 +353,7 @@ export class ConnectServer {
     }
     if (this.options.feed) {
       app.get("/api/feed", (context) => this.listFeed(context));
+      app.post("/api/feed", (context) => this.createFeedPost(context));
       app.get("/api/feed/:id/previews/:previewId", (context) =>
         this.getFeedPreview(context, context.req.param("id"), context.req.param("previewId")),
       );
@@ -1231,9 +1233,21 @@ export class ConnectServer {
     return context.json(await this.options.feed!.list());
   }
 
+  private async createFeedPost(context: Context): Promise<Response> {
+    try {
+      const item = await this.options.feed!.createPost(await readJsonBody(context), readRuntimeGrant(context)?.tokenId);
+      return context.json(item, 201);
+    } catch (error) {
+      if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
   private async replyToFeedItem(context: Context, itemId: string): Promise<Response> {
     try {
-      return context.json(await this.options.feed!.reply(itemId, await readJsonBody(context)));
+      return context.json(
+        await this.options.feed!.reply(itemId, await readJsonBody(context), !isRuntimeActivityRequest(context)),
+      );
     } catch (error) {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
       if (error instanceof AgentChatError) return jsonError(context, error.status, error.code, error.message);

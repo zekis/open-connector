@@ -1080,7 +1080,12 @@ export class D1FeedStore implements IFeedStore {
           value = excluded.value
       `,
       )
-      .bind(thread.id, thread.flowRunId, thread.updatedAt, await this.secretCodec.encode(JSON.stringify(thread)))
+      .bind(
+        thread.id,
+        thread.flowRunId ?? null,
+        thread.updatedAt,
+        await this.secretCodec.encode(JSON.stringify(thread)),
+      )
       .run();
   }
 

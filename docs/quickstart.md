@@ -135,17 +135,18 @@ Create the Cloudflare resources, apply the D1 schema, and start a local Worker p
 cp wrangler.example.jsonc wrangler.local.jsonc
 npx wrangler d1 create open-connector
 npx wrangler r2 bucket create open-connector-transit-files
-npx wrangler d1 migrations apply open-connector --local --config wrangler.local.jsonc
 npm run dev:cloudflare
 ```
 
-For remote deploys, put the returned D1 `database_id` in ignored `wrangler.local.jsonc`, run the
-migration with `--remote --config wrangler.local.jsonc`, set secrets with
+Local preview applies pending D1 migrations automatically. For remote deploys, put the returned
+D1 `database_id` in ignored `wrangler.local.jsonc`, set secrets with
 `wrangler secret put --config wrangler.local.jsonc`, then run:
 
 ```bash
 npm run deploy:cloudflare
 ```
+
+The deploy command applies pending remote D1 migrations before publishing the Worker.
 
 The Worker runtime exposes catalog metadata, connection/token/OAuth state APIs, R2-backed transit
 files, and the same generated provider action executor registry used by the Node runtime.

@@ -1177,7 +1177,12 @@ export class SqliteFeedStore implements IFeedStore {
           value = excluded.value
       `,
       )
-      .run(thread.id, thread.flowRunId, thread.updatedAt, await this.secretCodec.encode(JSON.stringify(thread)));
+      .run(
+        thread.id,
+        thread.flowRunId ?? null,
+        thread.updatedAt,
+        await this.secretCodec.encode(JSON.stringify(thread)),
+      );
   }
 
   async getThread(id: string): Promise<FeedThread | undefined> {

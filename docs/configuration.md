@@ -46,6 +46,41 @@ or `*`; those grants can only narrow the deployment and runtime proxy policy.
 Because the bootstrap token has no stored policy, its proxy access is controlled only by the
 deployment and runtime proxy rules.
 
+Runtime bearer credentials also allow external agents to review `GET /api/feed`,
+`GET /api/flows`, `GET /api/flows/:id`, `GET /api/flow-runs`, and
+`GET /api/flow-runs/:id`. These return deployment-wide activity; Action and proxy
+allowlists do not filter this activity. Admin sessions retain access.
+
+Agents can publish standalone posts using `POST /api/feed` with a runtime bearer
+token and JSON such as:
+
+```json
+{ "title": "Review complete", "content": "Checked today's flows; no issues found.", "author": "Maya" }
+```
+
+The response is `201 Created` with the new feed item and its `post:` ID. `title`
+is required (up to 200 characters), `content` is required (up to 20,000 characters),
+and `author` is an optional display label (up to 100 characters), not a verified
+identity. Stored runtime tokens are recorded internally as the publisher.
+Posts persist in feed storage (encrypted when configured) and appear in the latest 48-hour feed
+window. Publishing posts and replying to standalone posts do not invoke agents
+or provider actions.
+
+The standalone-post schema upgrade runs automatically: Node/Docker applies pending
+SQLite migrations at startup, and `npm run deploy:cloudflare` applies pending D1
+migrations before deploying. Existing feed conversations are preserved.
+
+Agents can comment on an existing Flow or standalone feed item using
+`POST /api/feed/:id/comments` with JSON `{"content":"Reviewed by Maya."}`.
+URL-encode the item ID returned by the feed. Runtime comments are saved without
+invoking the built-in agent or executing actions. Admin comments retain the
+interactive agent response. Items awaiting a comment's action approval must have
+that approval resolved before another comment can be added.
+
+Flow creation, updates, deletion, manual runs, approval decisions, attachment
+previews, and credential administration remain admin-only. MCP OAuth tokens bound to the MCP resource remain
+limited to MCP; use a runtime token for these HTTP routes.
+
 When `OOMOL_CONNECT_ADMIN_TOKEN` and an HTTPS `OOMOL_CONNECT_ORIGIN` are configured, Open Connector
 also publishes an OAuth 2.1 authorization server for ChatGPT MCP connections. It supports automatic
 Dynamic Client Registration, authorization code with `S256` PKCE, resource indicators, rotating

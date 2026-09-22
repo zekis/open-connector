@@ -76,14 +76,13 @@ OOMOL_CONNECT_ADMIN_TOKEN=replace-with-a-local-admin-token
 OOMOL_CONNECT_ENCRYPTION_KEY=replace-with-a-local-encryption-key
 ```
 
-Apply the migrations to Wrangler's local D1 state, then start the Worker:
+Start the Worker; pending migrations are applied automatically to Wrangler's local D1 state:
 
 ```bash
-npx wrangler d1 migrations apply open-connector --local --config wrangler.local.jsonc
 npm run dev:cloudflare
 ```
 
-`npm run dev:cloudflare` generates the catalog, builds the Web Console, copies catalog assets, and
+`npm run dev:cloudflare` generates the catalog, builds the Web Console, copies catalog assets, applies local D1 migrations, and
 runs `wrangler dev --config wrangler.local.jsonc`. The local Worker preview uses the same generated
 provider Action executor registry as the Node runtime.
 
@@ -97,12 +96,9 @@ The health endpoint should return `{"ok":true}`.
 
 ## Remote Deployment
 
-Apply all pending migrations to the remote D1 database before the initial deployment and every
-upgrade. `npm run deploy:cloudflare` does not apply D1 migrations:
-
-```bash
-npx wrangler d1 migrations apply open-connector --remote --config wrangler.local.jsonc
-```
+`npm run deploy:cloudflare` automatically applies all pending migrations to the remote
+D1 database through the `DB` binding before deploying the Worker. A failed migration
+stops deployment. Wrangler tracks applied migrations, so subsequent deployments skip them.
 
 Generate two independent random values by running this command twice:
 
@@ -128,7 +124,7 @@ Deploy:
 npm run deploy:cloudflare
 ```
 
-`npm run deploy:cloudflare` generates the catalog, builds the Web Console, copies catalog assets,
+`npm run deploy:cloudflare` generates the catalog, builds the Web Console, copies catalog assets, applies remote D1 migrations,
 and runs `wrangler deploy --config wrangler.local.jsonc`. The copied `wrangler.local.jsonc` already
 maps the built Web Console assets to the `ASSETS` binding used by the Worker.
 

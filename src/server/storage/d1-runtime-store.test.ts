@@ -155,6 +155,18 @@ describe("D1RuntimeDatabase", () => {
     await database.feedStore.setThread(thread);
     await expect(database.feedStore.getThread(thread.id)).resolves.toEqual(thread);
     await expect(database.feedStore.listThreads()).resolves.toEqual([thread]);
+    for (const id of ["post:one", "post:two"]) {
+      const post = {
+        id,
+        post: { title: "Review", content: "Checked", author: "Maya" },
+        comments: [],
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+      };
+      await database.feedStore.setThread(post);
+      await expect(database.feedStore.getThread(id)).resolves.toEqual(post);
+    }
+    expect(await database.feedStore.listThreads()).toHaveLength(3);
   });
 
   it("persists Flow trigger detector state", async () => {
@@ -810,6 +822,7 @@ class SqliteD1Database implements D1DatabaseBinding {
     );
     this.database.exec(readFileSync(new URL("../../../migrations/0021_inbox.sql", import.meta.url), "utf8"));
     this.database.exec(readFileSync(new URL("../../../migrations/0022_mcp_oauth.sql", import.meta.url), "utf8"));
+    this.database.exec(readFileSync(new URL("../../../migrations/0023_feed_posts.sql", import.meta.url), "utf8"));
   }
 
   prepare(query: string): D1PreparedStatementBinding {

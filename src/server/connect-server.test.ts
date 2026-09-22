@@ -24,6 +24,7 @@ import type {
 } from "./approvals/connection-approval-types.ts";
 import type { IMobileAuthStore, MobileDeviceRecord, MobilePairingRecord } from "./auth/mobile-auth-service.ts";
 import type { AgentChatProgressListener, AgentChatResponse, IAgentChatService } from "./chat/agent-chat-service.ts";
+import type { FeedThread } from "./feed/feed-types.ts";
 import type { FlowRunDetail } from "./flows/flow-runner.ts";
 import type { FlowTriggerEngine } from "./flows/flow-trigger-engine.ts";
 import type {
@@ -73,6 +74,7 @@ import { registerStaticRoutes } from "./api/static-routes.ts";
 import { ConnectionApprovalService } from "./approvals/connection-approval-service.ts";
 import { MobileAuthService } from "./auth/mobile-auth-service.ts";
 import { ConnectServer } from "./connect-server.ts";
+import { FeedService } from "./feed/feed-service.ts";
 import { TransitFileService } from "./files/transit-files.ts";
 import { FlowService } from "./flows/flow-service.ts";
 import { McpOAuthService, mcpOAuthScope } from "./mcp-oauth/mcp-oauth-service.ts";
@@ -166,6 +168,68 @@ afterEach(() => {
 });
 
 describe("ConnectServer", () => {
+  it("lets a stored runtime token publish, review, and comment on a standalone feed post", async () => {
+    const threads = new Map<string, FeedThread>();
+    const respond = vi.fn(async () => {
+      throw new Error("Posting must not invoke the agent");
+    });
+    const feed = new FeedService({
+      store: {
+        async setThread(thread) {
+          threads.set(thread.id, structuredClone(thread));
+        },
+        async getThread(id) {
+          return structuredClone(threads.get(id));
+        },
+        async listThreads() {
+          return structuredClone([...threads.values()]);
+        },
+      },
+      flows: {
+        async listRuns() {
+          return [];
+        },
+        async listApprovals() {
+          return [];
+        },
+        async getRunDetail() {
+          throw new Error("Standalone posts have no Flow run");
+        },
+      },
+      approvals: {
+        async listActionApprovals() {
+          return [];
+        },
+      },
+      agentChat: { respond },
+    });
+    const runtimeTokens = new RuntimeTokenService(new MemoryRuntimeTokenStore());
+    const credential = await runtimeTokens.createToken("Maya");
+    const app = createTestServer([], { feed, runtimeTokens, auth: { adminToken: "admin-secret" } }).createApp();
+    const headers = { authorization: `Bearer ${credential.token}`, "content-type": "application/json" };
+    const response = await app.request("/api/feed", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Reviewed", content: "All flows checked.", author: "Maya" }),
+    });
+    expect(response.status).toBe(201);
+    const item = await response.json();
+    expect(item).toMatchObject({ kind: "post", author: "Maya" });
+    expect(threads.get(item.id)?.post?.runtimeTokenId).toBe(credential.record.id);
+    expect(await (await app.request("/api/feed", { headers })).json()).toEqual({ items: [item] });
+    const reply = await app.request(`/api/feed/${encodeURIComponent(item.id)}/comments`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: "Follow-up complete." }),
+    });
+    expect(reply.status).toBe(200);
+    expect(await reply.json()).toMatchObject({ comments: [{ content: "Follow-up complete." }] });
+    expect(respond).not.toHaveBeenCalled();
+    expect((await app.request("/api/feed", { method: "POST", headers, body: "{}" })).status).toBe(400);
+    expect((await app.request("/api/feed", { method: "POST", body: "{}" })).status).toBe(401);
+    await runtimeTokens.revokeToken(credential.record.id);
+    expect((await app.request("/api/feed", { method: "POST", headers, body: "{}" })).status).toBe(401);
+  });
   it("reads and updates shared agent model settings", async () => {
     const app = createTestServer([]).createApp();
 
@@ -3911,6 +3975,7 @@ async function initializeMcp(app: Hono, token: string): Promise<Response> {
 }
 
 interface CreateTestServerOptions {
+  feed?: FeedService;
   auth?: TestAuthOptions;
   actionPolicy?: ActionPolicyService;
   actionSearch?: ActionSearchIndexProvider;
@@ -3998,6 +4063,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
     mcpOAuth,
     actions: actionRunner,
     flows: options.flows,
+    feed: options.feed,
     flowTriggers: options.flowTriggers,
     connectionApprovals,
     idempotency,

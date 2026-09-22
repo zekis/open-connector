@@ -190,6 +190,55 @@ describe("FeedService", () => {
     expect(page.items[0]?.post.image.headline).toBe("Granola meeting todos");
   });
 
+  it("persists standalone posts and replies without invoking an agent, and expires them from the feed", async () => {
+    const store = new MemoryFeedStore();
+    const respond = vi.fn(async () => completedResponse("Unexpected"));
+    const service = createService(store, [], undefined, respond);
+    const post = await service.createPost(
+      { title: " Review complete ", content: " All checked. ", author: "Maya" },
+      "token-maya",
+    );
+    expect(post).toMatchObject({
+      kind: "post",
+      title: "Review complete",
+      author: "Maya",
+      post: { text: "All checked." },
+      canReply: true,
+    });
+    expect(post.flow).toBeUndefined();
+    expect(await service.list()).toMatchObject({ items: expect.arrayContaining([post]) });
+    const replied = await service.reply(post.id, { content: "Thanks!" });
+    expect(replied.comments).toMatchObject([{ content: "Thanks!" }]);
+    expect(respond).not.toHaveBeenCalled();
+    const stored = (await store.getThread(post.id))!;
+    expect(stored.post?.runtimeTokenId).toBe("token-maya");
+    expect(stored.flowRunId).toBeUndefined();
+    await store.setThread({ ...stored, createdAt: "2026-08-12T00:00:00.000Z" });
+    expect((await service.list()).items.some((item) => item.id === post.id)).toBe(false);
+    await expect(service.reply("post:missing", { content: "Hello" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it.each([
+    {},
+    { title: "Title", content: " " },
+    { title: "x".repeat(201), content: "text" },
+    { title: "Title", content: "x".repeat(20001) },
+    { title: "Title", content: "text", author: 42 },
+  ])("rejects invalid standalone post input %j", async (input) => {
+    const service = createService(new MemoryFeedStore(), [], undefined);
+    await expect(service.createPost(input)).rejects.toMatchObject({ code: "invalid_feed_post", status: 400 });
+  });
+
+  it("stores external comments without invoking the built-in agent", async () => {
+    const store = new MemoryFeedStore();
+    const respond = vi.fn(async () => completedResponse("Unexpected agent response"));
+    const service = createService(store, [], undefined, respond);
+    const item = await service.reply("flow:run-1", { content: "Reviewed by Maya." }, false);
+    expect(item.comments).toMatchObject([{ role: "user", content: "Reviewed by Maya." }]);
+    expect(respond).not.toHaveBeenCalled();
+    await expect(store.getThread("flow:run-1")).resolves.toMatchObject({ comments: item.comments });
+  });
+
   it("persists follow-up comments and links one-time Chat approvals to their Feed thread", async () => {
     const approval = createActionApproval();
     const store = new MemoryFeedStore();

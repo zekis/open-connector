@@ -679,7 +679,7 @@ export interface FeedPreview {
 
 export interface FeedItem {
   id: string;
-  kind: "trigger" | "approval";
+  kind: "trigger" | "approval" | "post";
   createdAt: string;
   updatedAt: string;
   title: string;

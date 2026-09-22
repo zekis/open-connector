@@ -80,6 +80,30 @@ const item: FeedItem = {
 };
 
 describe("FeedCard", () => {
+  it("renders standalone API posts with the supplied author instead of Claude attribution", () => {
+    const html = renderToStaticMarkup(
+      <FeedCard
+        item={{
+          ...item,
+          kind: "post",
+          author: "Maya",
+          flow: undefined,
+          approvals: [],
+          actions: [],
+          previews: [],
+          comments: [],
+        }}
+        draft=""
+        replyBusy={false}
+        onDraftChange={() => {}}
+        onDecision={async () => {}}
+        onReply={async () => {}}
+      />,
+    );
+    expect(html).toContain("Maya");
+    expect(html).toContain("API post");
+    expect(html).not.toContain("@claude");
+  });
   it("renders trigger context, Claude updates, comments, and one-tap approval controls", () => {
     const html = renderToStaticMarkup(
       <FeedCard

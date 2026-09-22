@@ -56,6 +56,79 @@ afterEach(async () => {
 });
 
 describe("SqliteRuntimeDatabase", () => {
+  it("automatically upgrades an existing feed database once at startup", async () => {
+    const databasePath = await createDatabasePath();
+    const codec = new AesGcmSecretCodec("feed-upgrade-key");
+    const thread = {
+      id: "flow:existing",
+      flowRunId: "existing",
+      comments: [],
+      createdAt: "2026-09-22",
+      updatedAt: "2026-09-22",
+    };
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("create table runtime_migrations (name text primary key, applied_at text not null)");
+    const migrationDirectory = new URL("../../../migrations/", import.meta.url);
+    for (const file of (await readdir(migrationDirectory))
+      .filter((name) => /^\d+_.*\.sql$/.test(name) && name < "0023_feed_posts.sql")
+      .sort()) {
+      legacy.exec(readFileSync(new URL(file, migrationDirectory), "utf8"));
+      legacy.prepare("insert into runtime_migrations values (?, ?)").run(file, "2026-09-21");
+    }
+    legacy
+      .prepare("insert into feed_threads values (?, ?, ?, ?)")
+      .run(thread.id, thread.flowRunId, thread.updatedAt, await codec.encode(JSON.stringify(thread)));
+    legacy.close();
+
+    const upgraded = new SqliteRuntimeDatabase(databasePath, { secretCodec: codec });
+    await expect(upgraded.feedStore.getThread(thread.id)).resolves.toEqual(thread);
+    const post = {
+      id: "post:new",
+      post: { title: "Upgrade complete", content: "Ready" },
+      comments: [],
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    };
+    await upgraded.feedStore.setThread(post);
+    upgraded.close();
+
+    const reopened = new SqliteRuntimeDatabase(databasePath, { secretCodec: codec });
+    await expect(reopened.feedStore.getThread(post.id)).resolves.toEqual(post);
+    await expect(reopened.feedStore.getThread(thread.id)).resolves.toEqual(thread);
+    reopened.close();
+    const inspected = new DatabaseSync(databasePath);
+    expect(
+      inspected.prepare("select count(*) as count from runtime_migrations where name = '0023_feed_posts.sql'").get(),
+    ).toMatchObject({ count: 1 });
+    inspected.close();
+  });
+
+  it("preserves existing feed values while migrating to nullable Flow links", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      database.exec(readFileSync(new URL("../../../migrations/0014_feed.sql", import.meta.url), "utf8"));
+      database
+        .prepare("insert into feed_threads values (?, ?, ?, ?)")
+        .run("flow:run-1", "run-1", "2026-09-22", "existing encrypted value");
+      database.exec(readFileSync(new URL("../../../migrations/0023_feed_posts.sql", import.meta.url), "utf8"));
+      expect(database.prepare("select * from feed_threads").get()).toMatchObject({
+        id: "flow:run-1",
+        flow_run_id: "run-1",
+        value: "existing encrypted value",
+      });
+      const insert = database.prepare("insert into feed_threads values (?, ?, ?, ?)");
+      insert.run("post:one", null, "2026-09-22", "post one");
+      insert.run("post:two", null, "2026-09-22", "post two");
+      expect(() => insert.run("flow:duplicate", "run-1", "2026-09-22", "duplicate")).toThrow();
+      expect(
+        database
+          .prepare("select name from sqlite_master where type = 'index' and name = 'feed_threads_updated_at_id_idx'")
+          .get(),
+      ).toBeDefined();
+    } finally {
+      database.close();
+    }
+  });
   it("logs applied migrations and the ready state", async () => {
     const databasePath = await createDatabasePath();
     const entries: Array<{ fields: Record<string, unknown>; message: string }> = [];
@@ -95,6 +168,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0020_teams_gateway_subscriptions.sql",
       "0021_inbox.sql",
       "0022_mcp_oauth.sql",
+      "0023_feed_posts.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -399,6 +473,15 @@ describe("SqliteRuntimeDatabase", () => {
       updatedAt: "2026-07-30T00:00:04.000Z",
     };
     await first.feedStore.setThread(feedThread);
+    const feedPost = {
+      id: "post:one",
+      post: { title: "Review", content: "Checked", author: "Maya" },
+      comments: [],
+      createdAt: feedThread.createdAt,
+      updatedAt: feedThread.updatedAt,
+    };
+    await first.feedStore.setThread(feedPost);
+    await first.feedStore.setThread({ ...feedPost, id: "post:two" });
     first.close();
 
     const second = new SqliteRuntimeDatabase(databasePath, {
@@ -413,6 +496,8 @@ describe("SqliteRuntimeDatabase", () => {
       seenIds: ["message-1"],
     });
     await expect(second.feedStore.getThread(feedThread.id)).resolves.toEqual(feedThread);
+    await expect(second.feedStore.getThread(feedPost.id)).resolves.toEqual(feedPost);
+    expect(await second.feedStore.listThreads()).toHaveLength(3);
     const approved: FlowApproval = {
       ...approval,
       status: "approved",

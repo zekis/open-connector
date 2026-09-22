@@ -29,11 +29,19 @@ export interface FeedComment {
 
 export interface FeedThread {
   id: string;
-  flowRunId: string;
+  flowRunId?: string;
+  post?: FeedStandalonePost;
   comments: FeedComment[];
   pendingApprovalId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FeedStandalonePost {
+  title: string;
+  content: string;
+  author?: string;
+  runtimeTokenId?: string;
 }
 
 export interface IFeedStore {
@@ -75,7 +83,7 @@ export interface FeedPreviewContent extends ProviderPreviewContent {}
 
 export interface FeedItem {
   id: string;
-  kind: "trigger" | "approval";
+  kind: "trigger" | "approval" | "post";
   createdAt: string;
   updatedAt: string;
   title: string;

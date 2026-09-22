@@ -69,7 +69,7 @@ export class FeedService {
     const activityRunIds = new Set(activityRuns.map((run) => run.id));
     const linkedActionApprovalIds = new Set(
       threads
-        .filter((thread) => activityRunIds.has(thread.flowRunId))
+        .filter((thread) => thread.flowRunId && activityRunIds.has(thread.flowRunId))
         .flatMap((thread) => thread.pendingApprovalId ?? []),
     );
     const runItems = await Promise.all(
@@ -79,6 +79,7 @@ export class FeedService {
     );
     const linkedFlowApprovalIds = new Set(runItems.flatMap((item) => item.approvals.map((approval) => approval.id)));
     const standaloneItems = [
+      ...threads.filter((thread) => thread.post && thread.createdAt >= cutoff).map(standalonePostItem),
       ...actionApprovals
         .filter(
           (approval) =>
@@ -101,8 +102,36 @@ export class FeedService {
     };
   }
 
-  async reply(itemId: string, input: unknown): Promise<FeedItem> {
+  /** Publish a standalone post without invoking an agent or provider action. */
+  async createPost(input: unknown, runtimeTokenId?: string): Promise<FeedItem> {
+    const fields = record(input);
+    const title = readPostText(fields?.title, "title", 200);
+    const content = readPostText(fields?.content, "content", maximumCommentCharacters);
+    const author = fields?.author === undefined ? undefined : readPostText(fields.author, "author", 100);
+    const now = (this.options.now?.() ?? new Date()).toISOString();
+    const thread: FeedThread = {
+      id: `post:${crypto.randomUUID()}`,
+      post: { title, content, author, runtimeTokenId },
+      comments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.options.store.setThread(thread);
+    return standalonePostItem(thread);
+  }
+
+  async reply(itemId: string, input: unknown, invokeAgent = true): Promise<FeedItem> {
     const content = readComment(input);
+    if (itemId.startsWith("post:")) {
+      const thread = await this.options.store.getThread(itemId);
+      if (!thread?.post) throw new FeedError("feed_post_not_found", "Feed post not found.", 404);
+      const now = (this.options.now?.() ?? new Date()).toISOString();
+      const comment: FeedComment = { id: crypto.randomUUID(), role: "user", content, createdAt: now };
+      thread.comments = [...thread.comments, comment].slice(-maximumStoredComments);
+      thread.updatedAt = now;
+      await this.options.store.setThread(thread);
+      return standalonePostItem(thread);
+    }
     const runId = readRunId(itemId);
     const detail = await this.options.flows.getRunDetail(runId);
     const current = await this.options.store.getThread(itemId);
@@ -118,6 +147,17 @@ export class FeedService {
       createdAt: now,
     };
     const comments = [...(current?.comments ?? []), userComment].slice(-maximumStoredComments);
+    if (!invokeAgent) {
+      const thread: FeedThread = {
+        id: itemId,
+        flowRunId: runId,
+        comments,
+        createdAt: current?.createdAt ?? now,
+        updatedAt: now,
+      };
+      await this.options.store.setThread(thread);
+      return await this.flowItem(detail, thread, await this.options.approvals.listActionApprovals(500));
+    }
     const response = await this.options.agentChat.respond({
       messages: createAgentMessages(detail, comments),
       voiceMode: false,
@@ -566,6 +606,34 @@ function paletteForMotif(motif: FlowFeedImageMotif): FlowFeedImagePalette {
     default:
       return "slate";
   }
+}
+
+function standalonePostItem(thread: FeedThread): FeedItem {
+  const post = thread.post!;
+  return {
+    id: thread.id,
+    kind: "post",
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    title: post.title,
+    author: post.author,
+    post: {
+      text: post.content,
+      image: { alt: post.title, headline: post.title, motif: "message", palette: "violet" },
+    },
+    previews: [],
+    actions: [],
+    approvals: [],
+    comments: thread.comments,
+    canReply: true,
+  };
+}
+
+function readPostText(value: unknown, field: string, maximum: number): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > maximum) {
+    throw new FeedError("invalid_feed_post", `Post ${field} must contain between 1 and ${maximum} characters.`);
+  }
+  return value.trim();
 }
 
 function readComment(input: unknown): string {

@@ -324,7 +324,7 @@ export function FeedCard(props: {
           </div>
           <div className="feed-post-meta">
             <strong>{displayName}</strong>
-            <span className="feed-handle">@claude</span>
+            <span className="feed-handle">{props.item.kind === "post" ? "API post" : "@claude"}</span>
             <span>·</span>
             <time dateTime={props.item.createdAt}>{relativeTime(props.item.createdAt)}</time>
             {props.item.flow ? (
@@ -648,6 +648,7 @@ function formatBytes(bytes: number): string {
 }
 
 function triggerLabel(item: FeedItem): string {
+  if (item.kind === "post") return "API post";
   const trigger = item.flow?.trigger;
   if (trigger === "new_email") return "New email";
   if (trigger === "file_created") return "New file";

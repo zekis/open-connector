@@ -41,6 +41,12 @@ export interface LocalAuthSession {
 type AuthScope = "admin" | "runtime";
 
 const runtimeGrants = new WeakMap<Request, RuntimeGrant>();
+const runtimeActivityRequests = new WeakSet<Request>();
+
+/** Whether feed access was authorized as an external runtime caller. */
+export function isRuntimeActivityRequest(context: Context): boolean {
+  return runtimeActivityRequests.has(context.req.raw);
+}
 
 export function readRuntimeGrant(context: Context): RuntimeGrant | undefined {
   return runtimeGrants.get(context.req.raw);
@@ -68,6 +74,33 @@ export function createLocalAuthMiddleware(options: LocalAuthOptions): Middleware
     if (isPublicPath(context.req.path, context.req.method)) {
       await next();
       return;
+    }
+
+    if (isRuntimeActivityRoute(context.req.path, context.req.method)) {
+      const runtimeAuthenticated =
+        (runtimeToken && matchesConfiguredToken(context, runtimeToken)) ||
+        (await hasValidRuntimeToken(context, options));
+      if (runtimeAuthenticated) {
+        runtimeActivityRequests.add(context.req.raw);
+        await next();
+        return;
+      }
+      const adminAuthenticated = adminToken
+        ? await hasValidToken(context, options, "admin")
+        : await hasValidMobileSession(context, options);
+      if (
+        adminAuthenticated ||
+        (!adminToken &&
+          !runtimeToken &&
+          !options.verifyRuntimeJwt &&
+          !options.mcpOAuth &&
+          !(options.hasRuntimeTokens ? await options.hasRuntimeTokens() : options.resolveRuntimeToken !== undefined))
+      ) {
+        await installAdminCookieForBearer(context, options);
+        await next();
+        return;
+      }
+      return jsonError(context, 401, "unauthorized", "A valid runtime or admin bearer token is required.");
     }
 
     if (await hasValidToken(context, options, scope)) {
@@ -310,6 +343,13 @@ function normalizeToken(token: string | undefined): string | undefined {
 
 function readAuthScope(path: string): AuthScope {
   return path === "/mcp" || path.startsWith("/mcp/") || path === "/v1" || path.startsWith("/v1/") ? "runtime" : "admin";
+}
+
+function isRuntimeActivityRoute(path: string, method: string): boolean {
+  if (method === "GET" || method === "HEAD") {
+    return path === "/api/feed" || /^\/api\/(?:flows|flow-runs)(?:\/[^/]+)?$/.test(path);
+  }
+  return method === "POST" && (path === "/api/feed" || /^\/api\/feed\/[^/]+\/comments$/.test(path));
 }
 
 function canUseAdminAuth(path: string, method: string): boolean {
