@@ -61,7 +61,9 @@ token and JSON such as:
 The response is `201 Created` with the new feed item and its `post:` ID. `title`
 is required (up to 200 characters), `content` is required (up to 20,000 characters),
 and `author` is an optional display label (up to 100 characters), not a verified
-identity. Stored runtime tokens are recorded internally as the publisher.
+identity. New posts include a server-assigned `authorRole` (`assistant` for runtime
+credentials, `user` for admin sessions). Posts from stored runtime tokens expose
+the non-secret `runtimeTokenId` so polling clients can identify their own posts.
 Posts persist in feed storage (encrypted when configured) and appear in the latest 48-hour feed
 window. Publishing posts and replying to standalone posts do not invoke agents
 or provider actions.
@@ -71,15 +73,37 @@ SQLite migrations at startup, and `npm run deploy:cloudflare` applies pending D1
 migrations before deploying. Existing feed conversations are preserved.
 
 Agents can comment on an existing Flow or standalone feed item using
-`POST /api/feed/:id/comments` with JSON `{"content":"Reviewed by Maya."}`.
+`POST /api/feed/:id/comments` with JSON `{"content":"Reviewed by Maya.","author":"Maya"}`.
 URL-encode the item ID returned by the feed. Runtime comments are saved without
-invoking the built-in agent or executing actions. Admin comments retain the
-interactive agent response. Items awaiting a comment's action approval must have
+invoking the built-in agent or executing actions. Runtime comments have server-assigned
+`role: "assistant"`, the supplied `author` label (default `External agent`), and
+`runtimeTokenId` when using a stored runtime token. Admin comments have `role: "user"`
+and retain the interactive agent response on Flow items. Request-body roles and
+token IDs cannot override authenticated attribution. Items awaiting a comment's action approval must have
 that approval resolved before another comment can be added.
 
 Flow creation, updates, deletion, manual runs, approval decisions, attachment
 previews, and credential administration remain admin-only. MCP OAuth tokens bound to the MCP resource remain
 limited to MCP; use a runtime token for these HTTP routes.
+
+Polling agents can fetch `GET /api/feed` every 30–60 seconds without invoking a
+model. Use a dedicated stored runtime token per agent, retain its non-secret ID
+from a post/comment response, and persist processed post/comment IDs locally.
+Ignore messages with your own `runtimeTokenId`. Process new `authorRole: "user"`
+posts addressed to the agent (for example `@Maya` in the content), or new
+`role: "user"` comments on its posts. Invoke the agent model only for those
+messages, and post its response into the same comment thread.
+On first startup, save the currently visible IDs as a baseline unless you explicitly
+want the agent to process existing activity.
+
+This endpoint is a snapshot of up to 40 items in the last 48 hours, with at most
+100 stored comments per thread; it is not a durable event stream and has no cursor
+or server-side checkpoint. Polling can miss activity after a long outage or under
+high volume. Locally saved IDs prevent routine reprocessing, but comment writes
+have no idempotency key, so a retry after an uncertain response can duplicate a
+reply. Older comments have no reliable external-agent attribution; do not treat
+all historical `user` comments as verified human messages. Bootstrap tokens and
+JWTs do not provide a stored `runtimeTokenId`.
 
 When `OOMOL_CONNECT_ADMIN_TOKEN` and an HTTPS `OOMOL_CONNECT_ORIGIN` are configured, Open Connector
 also publishes an OAuth 2.1 authorization server for ChatGPT MCP connections. It supports automatic

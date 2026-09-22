@@ -214,16 +214,46 @@ describe("ConnectServer", () => {
     });
     expect(response.status).toBe(201);
     const item = await response.json();
-    expect(item).toMatchObject({ kind: "post", author: "Maya" });
+    expect(item).toMatchObject({
+      kind: "post",
+      author: "Maya",
+      authorRole: "assistant",
+      runtimeTokenId: credential.record.id,
+    });
     expect(threads.get(item.id)?.post?.runtimeTokenId).toBe(credential.record.id);
     expect(await (await app.request("/api/feed", { headers })).json()).toEqual({ items: [item] });
     const reply = await app.request(`/api/feed/${encodeURIComponent(item.id)}/comments`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ content: "Follow-up complete." }),
+      body: JSON.stringify({ content: "Follow-up complete.", author: "Maya", role: "user", runtimeTokenId: "spoofed" }),
     });
     expect(reply.status).toBe(200);
-    expect(await reply.json()).toMatchObject({ comments: [{ content: "Follow-up complete." }] });
+    expect(await reply.json()).toMatchObject({
+      comments: [
+        { content: "Follow-up complete.", author: "Maya", role: "assistant", runtimeTokenId: credential.record.id },
+      ],
+    });
+    const humanReply = await app.request(`/api/feed/${encodeURIComponent(item.id)}/comments`, {
+      method: "POST",
+      headers: { authorization: "Bearer admin-secret", "content-type": "application/json" },
+      body: JSON.stringify({ content: "Thanks Maya", role: "assistant", runtimeTokenId: credential.record.id }),
+    });
+    expect(humanReply.status).toBe(200);
+    const humanComment = (await humanReply.json()).comments[1];
+    expect(humanComment).toMatchObject({ role: "user", author: "You" });
+    expect(humanComment.runtimeTokenId).toBeUndefined();
+    const humanPost = await app.request("/api/feed", {
+      method: "POST",
+      headers: { authorization: "Bearer admin-secret", "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "For Maya",
+        content: "@Maya please review",
+        authorRole: "assistant",
+        runtimeTokenId: credential.record.id,
+      }),
+    });
+    expect(humanPost.status).toBe(201);
+    expect(await humanPost.json()).toMatchObject({ authorRole: "user", author: "You" });
     expect(respond).not.toHaveBeenCalled();
     expect((await app.request("/api/feed", { method: "POST", headers, body: "{}" })).status).toBe(400);
     expect((await app.request("/api/feed", { method: "POST", body: "{}" })).status).toBe(401);

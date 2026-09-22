@@ -363,7 +363,7 @@ export function FeedCard(props: {
             {comment.role === "assistant" ? <Bot size={16} /> : "You"}
           </div>
           <div className="feed-comment-body">
-            <strong>{comment.role === "assistant" ? "Claude" : "You"}</strong>
+            <strong>{comment.author ?? (comment.role === "assistant" ? "Claude" : "You")}</strong>
             {comment.role === "assistant" ? <ChatMarkdown>{comment.content}</ChatMarkdown> : <p>{comment.content}</p>}
             {comment.toolActivity?.length ? (
               <small>

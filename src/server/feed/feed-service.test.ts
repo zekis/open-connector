@@ -196,19 +196,21 @@ describe("FeedService", () => {
     const service = createService(store, [], undefined, respond);
     const post = await service.createPost(
       { title: " Review complete ", content: " All checked. ", author: "Maya" },
-      "token-maya",
+      { role: "assistant", runtimeTokenId: "token-maya" },
     );
     expect(post).toMatchObject({
       kind: "post",
       title: "Review complete",
       author: "Maya",
+      authorRole: "assistant",
+      runtimeTokenId: "token-maya",
       post: { text: "All checked." },
       canReply: true,
     });
     expect(post.flow).toBeUndefined();
     expect(await service.list()).toMatchObject({ items: expect.arrayContaining([post]) });
     const replied = await service.reply(post.id, { content: "Thanks!" });
-    expect(replied.comments).toMatchObject([{ content: "Thanks!" }]);
+    expect(replied.comments).toMatchObject([{ content: "Thanks!", role: "user", author: "You" }]);
     expect(respond).not.toHaveBeenCalled();
     const stored = (await store.getThread(post.id))!;
     expect(stored.post?.runtimeTokenId).toBe("token-maya");
@@ -233,8 +235,14 @@ describe("FeedService", () => {
     const store = new MemoryFeedStore();
     const respond = vi.fn(async () => completedResponse("Unexpected agent response"));
     const service = createService(store, [], undefined, respond);
-    const item = await service.reply("flow:run-1", { content: "Reviewed by Maya." }, false);
-    expect(item.comments).toMatchObject([{ role: "user", content: "Reviewed by Maya." }]);
+    const item = await service.reply(
+      "flow:run-1",
+      { content: "Reviewed by Maya.", author: "Maya" },
+      { role: "assistant", runtimeTokenId: "token-maya" },
+    );
+    expect(item.comments).toMatchObject([
+      { role: "assistant", author: "Maya", runtimeTokenId: "token-maya", content: "Reviewed by Maya." },
+    ]);
     expect(respond).not.toHaveBeenCalled();
     await expect(store.getThread("flow:run-1")).resolves.toMatchObject({ comments: item.comments });
   });

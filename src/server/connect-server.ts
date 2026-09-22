@@ -1235,7 +1235,10 @@ export class ConnectServer {
 
   private async createFeedPost(context: Context): Promise<Response> {
     try {
-      const item = await this.options.feed!.createPost(await readJsonBody(context), readRuntimeGrant(context)?.tokenId);
+      const item = await this.options.feed!.createPost(await readJsonBody(context), {
+        role: isRuntimeActivityRequest(context) ? "assistant" : "user",
+        runtimeTokenId: readRuntimeGrant(context)?.tokenId,
+      });
       return context.json(item, 201);
     } catch (error) {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);
@@ -1246,7 +1249,10 @@ export class ConnectServer {
   private async replyToFeedItem(context: Context, itemId: string): Promise<Response> {
     try {
       return context.json(
-        await this.options.feed!.reply(itemId, await readJsonBody(context), !isRuntimeActivityRequest(context)),
+        await this.options.feed!.reply(itemId, await readJsonBody(context), {
+          role: isRuntimeActivityRequest(context) ? "assistant" : "user",
+          runtimeTokenId: readRuntimeGrant(context)?.tokenId,
+        }),
       );
     } catch (error) {
       if (error instanceof FeedError) return jsonError(context, error.status, error.code, error.message);

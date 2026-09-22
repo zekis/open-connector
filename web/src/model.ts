@@ -641,6 +641,8 @@ export interface FeedCommentToolActivity {
 export interface FeedComment {
   id: string;
   role: "user" | "assistant";
+  author?: string;
+  runtimeTokenId?: string;
   content: string;
   createdAt: string;
   toolActivity?: FeedCommentToolActivity[];
@@ -685,6 +687,8 @@ export interface FeedItem {
   title: string;
   summary?: string;
   author?: string;
+  authorRole?: "user" | "assistant";
+  runtimeTokenId?: string;
   providerService?: string;
   post: FlowFeedPost;
   previews: FeedPreview[];

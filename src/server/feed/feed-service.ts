@@ -47,6 +47,12 @@ export interface FeedServiceOptions {
   now?(): Date;
 }
 
+/** Authenticated writer identity supplied by the HTTP server, never the request body. */
+export interface FeedWriter {
+  role: "user" | "assistant";
+  runtimeTokenId?: string;
+}
+
 /** Projects Flow activity into a durable, conversational activity feed. */
 export class FeedService {
   private readonly options: FeedServiceOptions;
@@ -103,15 +109,20 @@ export class FeedService {
   }
 
   /** Publish a standalone post without invoking an agent or provider action. */
-  async createPost(input: unknown, runtimeTokenId?: string): Promise<FeedItem> {
+  async createPost(input: unknown, writer: FeedWriter = { role: "user" }): Promise<FeedItem> {
     const fields = record(input);
     const title = readPostText(fields?.title, "title", 200);
     const content = readPostText(fields?.content, "content", maximumCommentCharacters);
-    const author = fields?.author === undefined ? undefined : readPostText(fields.author, "author", 100);
+    const author =
+      fields?.author === undefined
+        ? writer.role === "assistant"
+          ? "External agent"
+          : "You"
+        : readPostText(fields.author, "author", 100);
     const now = (this.options.now?.() ?? new Date()).toISOString();
     const thread: FeedThread = {
       id: `post:${crypto.randomUUID()}`,
-      post: { title, content, author, runtimeTokenId },
+      post: { title, content, author, authorRole: writer.role, runtimeTokenId: writer.runtimeTokenId },
       comments: [],
       createdAt: now,
       updatedAt: now,
@@ -120,13 +131,32 @@ export class FeedService {
     return standalonePostItem(thread);
   }
 
-  async reply(itemId: string, input: unknown, invokeAgent = true): Promise<FeedItem> {
+  async reply(itemId: string, input: unknown, writer: FeedWriter = { role: "user" }): Promise<FeedItem> {
     const content = readComment(input);
+    const suppliedAuthor = record(input)?.author;
+    if (
+      suppliedAuthor !== undefined &&
+      (typeof suppliedAuthor !== "string" || !suppliedAuthor.trim() || suppliedAuthor.trim().length > 100)
+    ) {
+      throw new FeedError("invalid_feed_comment", "Comment author must contain between 1 and 100 characters.");
+    }
+    const now = (this.options.now?.() ?? new Date()).toISOString();
+    const comment: FeedComment = {
+      id: crypto.randomUUID(),
+      role: writer.role,
+      author:
+        typeof suppliedAuthor === "string"
+          ? suppliedAuthor.trim()
+          : writer.role === "assistant"
+            ? "External agent"
+            : "You",
+      runtimeTokenId: writer.runtimeTokenId,
+      content,
+      createdAt: now,
+    };
     if (itemId.startsWith("post:")) {
       const thread = await this.options.store.getThread(itemId);
       if (!thread?.post) throw new FeedError("feed_post_not_found", "Feed post not found.", 404);
-      const now = (this.options.now?.() ?? new Date()).toISOString();
-      const comment: FeedComment = { id: crypto.randomUUID(), role: "user", content, createdAt: now };
       thread.comments = [...thread.comments, comment].slice(-maximumStoredComments);
       thread.updatedAt = now;
       await this.options.store.setThread(thread);
@@ -139,15 +169,8 @@ export class FeedService {
       throw new FeedError("feed_waiting_for_approval", "Approve or deny the pending action before replying.", 409);
     }
 
-    const now = new Date().toISOString();
-    const userComment: FeedComment = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content,
-      createdAt: now,
-    };
-    const comments = [...(current?.comments ?? []), userComment].slice(-maximumStoredComments);
-    if (!invokeAgent) {
+    const comments = [...(current?.comments ?? []), comment].slice(-maximumStoredComments);
+    if (writer.role === "assistant") {
       const thread: FeedThread = {
         id: itemId,
         flowRunId: runId,
@@ -617,6 +640,8 @@ function standalonePostItem(thread: FeedThread): FeedItem {
     updatedAt: thread.updatedAt,
     title: post.title,
     author: post.author,
+    authorRole: post.authorRole ?? (post.runtimeTokenId ? "assistant" : undefined),
+    runtimeTokenId: post.runtimeTokenId,
     post: {
       text: post.content,
       image: { alt: post.title, headline: post.title, motif: "message", palette: "violet" },

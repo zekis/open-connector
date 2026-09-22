@@ -91,7 +91,16 @@ describe("FeedCard", () => {
           approvals: [],
           actions: [],
           previews: [],
-          comments: [],
+          comments: [
+            {
+              id: "maya-comment",
+              role: "assistant",
+              author: "Maya",
+              runtimeTokenId: "maya-token",
+              content: "Review complete.",
+              createdAt: item.createdAt,
+            },
+          ],
         }}
         draft=""
         replyBusy={false}
@@ -103,6 +112,9 @@ describe("FeedCard", () => {
     expect(html).toContain("Maya");
     expect(html).toContain("API post");
     expect(html).not.toContain("@claude");
+    expect(html).toContain("<strong>Maya</strong>");
+    expect(html).toContain("Review complete.");
+    expect(html).not.toContain("<strong>Claude</strong>");
   });
   it("renders trigger context, Claude updates, comments, and one-tap approval controls", () => {
     const html = renderToStaticMarkup(
