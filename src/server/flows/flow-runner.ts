@@ -29,6 +29,7 @@ import type {
 
 import { hashActionRequest } from "../actions/action-idempotency.ts";
 import { FlowAgentError } from "./flow-agent.ts";
+import { createFlowDateContext } from "./flow-date-context.ts";
 import { FlowError, FlowService } from "./flow-service.ts";
 import { flowRunToolCallLimit, flowSourceConnectionIds, maximumFlowRunToolCalls } from "./flow-types.ts";
 
@@ -131,7 +132,7 @@ export class FlowRunner {
     return {
       flow,
       run,
-      initialInput: createInitialInput(flow, input.event),
+      initialInput: createInitialInput(flow, run),
     };
   }
 
@@ -284,7 +285,7 @@ export class FlowRunner {
     const bindings = await this.createToolBindings(flow);
     const bindingsByName = new Map(bindings.map((binding) => [binding.agentTool.name, binding]));
     const agentTools = bindings.map((binding) => binding.agentTool);
-    const agentInstructions = createAgentInstructions(flow, bindings);
+    const agentInstructions = createAgentInstructions(flow, bindings, initialRun);
     const agent = this.agentFor(flow);
     let run = initialRun;
     let input = initialInput;
@@ -555,18 +556,26 @@ export class FlowRunner {
   }
 }
 
-function createInitialInput(flow: FlowDefinition, event: FlowTriggerEvent | undefined): string {
+function createInitialInput(flow: FlowDefinition, run: FlowRun): string {
+  const event = run.triggerEvent;
   const triggerContext = event
     ? `\n\nTrigger event:\n<flow_trigger>\n${serializeTriggerEvent(event)}\n</flow_trigger>`
     : "";
-  return `Run the flow now.${triggerContext}\n\nFlow instructions:\n${flow.instructions}\n\nRun started at: ${new Date().toISOString()}`;
+  return `Run the flow now.${triggerContext}\n\nFlow instructions:\n${flow.instructions}\n\nRun started at: ${run.startedAt}`;
 }
 
 function serializeTriggerEvent(event: FlowTriggerEvent): string {
   return JSON.stringify(event).replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 }
 
-function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding[]): string {
+function createAgentInstructions(flow: FlowDefinition, bindings: FlowToolBinding[], run: FlowRun): string {
+  const dateContext =
+    flow.trigger.type === "schedule"
+      ? createFlowDateContext(
+          run.triggerEvent?.type === "schedule" ? run.triggerEvent.occurredAt : run.startedAt,
+          flow.trigger.timeZone,
+        )
+      : undefined;
   const toolRules = bindings
     .map(
       (binding) =>
@@ -582,6 +591,18 @@ Authoritative Flow instructions:
 <flow_instructions>
 ${flow.instructions}
 </flow_instructions>
+
+${
+  dateContext
+    ? `Authoritative date context calculated by OCGW (fixed for this run):
+${JSON.stringify(dateContext)}
+Use localDate and localWeekday as this run's local "today", not your own clock or the UTC date.
+For the reporting period requested by the Flow instructions, use the matching reportingWindows boundaries exactly. Do not substitute a different period.
+startAt is inclusive; endAtExclusive is exclusive. Use these UTC instants for timestamp filters and the explicit local dates for report labels. Calendar windows use local midnights, not a fixed 24-hour subtraction.
+If the requested period is not supplied, report the missing reporting-window configuration instead of guessing dates.
+`
+    : ""
+}
 
 Goal: Complete the authoritative Flow instructions exactly using only the supplied function tools.
 

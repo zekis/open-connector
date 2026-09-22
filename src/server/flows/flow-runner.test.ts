@@ -21,6 +21,30 @@ import { FlowRunner } from "./flow-runner.ts";
 import { flowRunToolCallLimit } from "./flow-types.ts";
 
 describe("FlowRunner", () => {
+  it("retains code-computed local reporting dates on every turn and after approval", async () => {
+    const harness = createHarness("require_approval");
+    harness.flow.trigger = { type: "schedule", cron: "0 7 * * *", timeZone: "Australia/Perth" };
+    const waiting = await harness.runner.start(harness.flow.id, {
+      trigger: "schedule",
+      event: {
+        type: "schedule",
+        occurredAt: "2026-09-21T23:00:00.000Z",
+        payload: { localDate: "1900-01-01" },
+      },
+    });
+    await harness.runner.approve(waiting.approvals[0]!.id);
+    expect(harness.agent.inputs).toHaveLength(2);
+    for (const input of harness.agent.inputs) {
+      expect(input.instructions).toContain('"localDate":"2026-09-22"');
+      expect(input.instructions).toContain('"localWeekday":"Tuesday"');
+      expect(input.instructions).toContain('"startAt":"2026-09-20T16:00:00.000Z"');
+      expect(input.instructions).toContain('"endAtExclusive":"2026-09-21T16:00:00.000Z"');
+      expect(input.instructions).not.toContain("1900-01-01");
+    }
+    expect(harness.agent.inputs[1]?.instructions).toBe(harness.agent.inputs[0]?.instructions);
+    expect(harness.agent.inputs[0]?.input).toContain(`Run started at: ${waiting.run.startedAt}`);
+  });
+
   it("executes an always-allowed tool and completes the agent loop", async () => {
     const harness = createHarness("always_allow");
 

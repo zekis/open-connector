@@ -111,6 +111,20 @@ Dynamic Client Registration, authorization code with `S256` PKCE, resource indic
 refresh tokens, and protected-resource discovery. Existing bearer-token access remains enabled.
 See [ChatGPT MCP OAuth](mcp-oauth.md) for the connection values and verification steps.
 
+## Scheduled Flow dates
+
+Scheduled Flows receive code-calculated date context on every model turn, using
+the trigger's IANA time zone and original occurrence time. OCGW supplies the local
+date and weekday plus explicit windows for today, yesterday, the previous
+Monday–Sunday calendar week, and the last 24 hours. Each window includes local
+date labels and UTC timestamp boundaries (`startAt` inclusive, `endAtExclusive`
+exclusive). Calendar windows respect daylight-saving changes.
+
+The Flow instructions still select the reporting period; no default period is
+inferred from the cron schedule. Unsupported periods are reported as missing
+configuration rather than guessed. Approval continuations retain the original
+date context. Manual runs of a scheduled Flow use their saved run start time.
+
 ## OpenAI Codex subscription agent
 
 Open Connector can use a ChatGPT subscription through the official Codex CLI for Chat, Synapse,
