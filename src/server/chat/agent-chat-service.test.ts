@@ -56,6 +56,74 @@ const connection: ConnectionSummary = {
 };
 
 describe("AgentChatService", () => {
+  it("feeds created card details back to the same investigator before its next tool decision", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "synapse_add_artifacts", arguments: {} },
+      {
+        kind: "tool_call",
+        toolName: "synapse_focus_card",
+        arguments: { nodeId: "sales-card", prompt: "Check sales comparability" },
+      },
+      { kind: "final", text: "The sales evidence needs a comparable-property check." },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+    const card = {
+      id: "sales-card",
+      title: "Recent sales",
+      content: "Three sales in the last month, with different land sizes.",
+    };
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Research house prices" }] },
+      {
+        systemPrompt: "Investigate the original goal using card feedback.",
+        tools: ["synapse_add_artifacts", "synapse_focus_card"].map((name) => ({
+          name,
+          description: name,
+          inputSchema: { type: "object" },
+        })),
+        runTool: async (name, input) => ({
+          id: name,
+          type: "action",
+          label: name,
+          actionId: name,
+          input,
+          ok: true,
+          output: name === "synapse_add_artifacts" ? { nodes: [card] } : { card, question: input.prompt },
+        }),
+      },
+    );
+    expect(response.status).toBe("completed");
+    expect(claude.inputs).toHaveLength(3);
+    expect(claude.inputs[1]?.prompt).toContain(card.content);
+    expect(claude.inputs[2]?.prompt).toContain("Check sales comparability");
+    for (const input of claude.inputs) expect(input.prompt).toContain("Research house prices");
+  });
+
+  it("honors a smaller extension tool budget before another tool executes", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "search_connector_actions", arguments: { query: "lookup" } },
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: { actionId: "example.lookup", connectionId: connection.id, input: { query: "record" } },
+      },
+    ]);
+    const actions = new FakeActionRunner();
+    const service = createService(claude, actions);
+    await expect(
+      service.respondWithExtension(
+        { messages: [{ role: "user", content: "Research" }] },
+        {
+          systemPrompt: "Research",
+          tools: [],
+          maxToolSteps: 1,
+          runTool: async () => undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "chat_step_limit_exceeded" });
+    expect(actions.inputs).toHaveLength(0);
+  });
+
   it("searches connected actions and executes the selected action through the guarded runner", async () => {
     const claude = new FakeClaudeCodeClient([
       {

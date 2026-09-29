@@ -32,6 +32,7 @@ import {
   ProviderPreviewError,
   readProviderPreviewContent,
 } from "../previews/provider-preview.ts";
+import { SynapseInvestigationSession, isInvestigationReadAction } from "./synapse-investigation.ts";
 import { createSynapseObjectRecipe, isLikelyReadAction, resolveSynapseRecipeInput } from "./synapse-recipe.ts";
 
 const maximumWorkspaceNameCharacters = 120;
@@ -65,6 +66,7 @@ export interface SynapseServiceOptions {
 /** Owns persistent Synapse canvases and node-scoped agent conversations. */
 export class SynapseService {
   private readonly options: SynapseServiceOptions;
+  private readonly investigations = new Map<string, AbortController>();
 
   constructor(options: SynapseServiceOptions) {
     this.options = options;
@@ -160,6 +162,7 @@ export class SynapseService {
   }
 
   async runNodeRecipe(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const node = requiredNode(workspace, nodeId);
     if (node.kind !== "artifact" || !node.recipe) {
@@ -282,6 +285,7 @@ export class SynapseService {
   }
 
   async update(id: string, input: unknown): Promise<SynapseWorkspace> {
+    this.assertEditable(id);
     const workspace = await this.requiredWorkspace(id);
     const body = readObject(input, "Synapse workspace");
     workspace.name = readText(body.name, "name", maximumWorkspaceNameCharacters);
@@ -289,12 +293,14 @@ export class SynapseService {
   }
 
   async arrange(id: string): Promise<SynapseWorkspace> {
+    this.assertEditable(id);
     const workspace = await this.requiredWorkspace(id);
     arrangeWorkspace(workspace);
     return await this.save(workspace);
   }
 
   async delete(id: string): Promise<{ deleted: true }> {
+    this.assertEditable(id);
     if (!(await this.options.store.deleteWorkspace(id))) {
       throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
     }
@@ -302,6 +308,7 @@ export class SynapseService {
   }
 
   async addNode(workspaceId: string, input: unknown): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse node");
     const requestedPosition = readPosition(body.position);
@@ -340,6 +347,7 @@ export class SynapseService {
   }
 
   async updateNode(workspaceId: string, nodeId: string, input: unknown): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const node = requiredNode(workspace, nodeId);
     const body = readObject(input, "Synapse node update");
@@ -381,6 +389,7 @@ export class SynapseService {
   }
 
   async deleteNode(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const node = requiredNode(workspace, nodeId);
     const groupId = node.kind === "artifact" ? node.groupId : undefined;
@@ -396,6 +405,7 @@ export class SynapseService {
     nodeId: string,
     input: unknown,
   ): Promise<SynapseSelectionResult> {
+    this.assertEditable(workspaceId);
     const sourceWorkspace = await this.requiredWorkspace(workspaceId);
     const sourceNode = requiredNode(sourceWorkspace, nodeId);
     const sourceThread = sourceWorkspace.threads.find((thread) => thread.nodeId === nodeId);
@@ -446,6 +456,7 @@ export class SynapseService {
   }
 
   async addEdge(workspaceId: string, input: unknown): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse connection");
     this.connectNodes(
@@ -460,6 +471,7 @@ export class SynapseService {
   }
 
   async deleteEdge(workspaceId: string, edgeId: string): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const next = workspace.edges.filter((edge) => edge.id !== edgeId);
     if (next.length === workspace.edges.length) {
@@ -469,12 +481,102 @@ export class SynapseService {
     return await this.save(workspace);
   }
 
+  stopInvestigation(workspaceId: string): void {
+    this.investigations.get(workspaceId)?.abort();
+  }
+
+  private assertEditable(workspaceId: string): void {
+    if (this.investigations.has(workspaceId))
+      throw new SynapseError("synapse_busy", "Stop the investigation before editing this canvas.", 409);
+  }
+
   async chat(
     workspaceId: string,
     nodeId: string,
     input: unknown,
     signal?: AbortSignal,
     onProgress?: AgentChatProgressListener,
+    onWorkspace?: (workspace: SynapseWorkspace) => void,
+  ): Promise<SynapseWorkspace> {
+    if (this.investigations.has(workspaceId))
+      throw new SynapseError("synapse_busy", "An investigation is already running on this canvas.", 409);
+    const body = readObject(input, "Synapse chat message");
+    const controller = new AbortController();
+    this.investigations.set(workspaceId, controller);
+    try {
+      if (body.mode !== "investigate") return await this.chatOnce(workspaceId, nodeId, input, signal, onProgress);
+      let workspace = await this.requiredWorkspace(workspaceId);
+      requiredNode(workspace, nodeId);
+      const session = new SynapseInvestigationSession(
+        workspace,
+        nodeId,
+        readText(body.content, "content", maximumChatCharacters),
+      );
+      const boundedSignal = AbortSignal.any([
+        signal ?? controller.signal,
+        controller.signal,
+        AbortSignal.timeout(600_000),
+      ]);
+      workspace.investigation = session.state;
+      onWorkspace?.(await this.save(workspace));
+      try {
+        boundedSignal.throwIfAborted();
+        workspace = await this.chatOnce(
+          workspaceId,
+          nodeId,
+          { content: session.state.goal },
+          boundedSignal,
+          onProgress,
+          async (base, current) => {
+            current.investigation = session.state;
+            const publish = async (): Promise<void> => {
+              onWorkspace?.(await this.save(current));
+            };
+            await publish();
+            return session.extend(
+              {
+                ...base,
+                connectorActionIds: new Set(
+                  [...this.options.catalog.actionsById.keys()].filter(isInvestigationReadAction),
+                ),
+              },
+              current,
+              publish,
+              boundedSignal,
+            );
+          },
+        );
+        if (workspace.runs?.at(-1)?.status === "failed" || pendingApprovalIds(threadFor(workspace, nodeId)).length > 0)
+          session.state.status = "failed";
+      } catch (error) {
+        workspace = await this.requiredWorkspace(workspaceId);
+        session.state.status = "failed";
+        session.state.summary = error instanceof Error ? error.message : "Investigation failed.";
+      }
+      session.state.status = boundedSignal.aborted
+        ? "stopped"
+        : session.state.status === "failed"
+          ? "failed"
+          : "completed";
+      for (const branch of session.state.branches)
+        if (branch.status === "queued" || branch.status === "running")
+          branch.status = session.state.status === "completed" ? "completed" : "skipped";
+      session.state.completedAt = new Date().toISOString();
+      session.state.summary ??= `${session.state.createdNodeIds.length} cards · ${session.state.branches.filter((branch) => branch.status === "completed").length} card focuses · ${session.state.connectorCalls} source lookups`;
+      workspace.investigation = session.state;
+      return await this.save(workspace);
+    } finally {
+      this.investigations.delete(workspaceId);
+    }
+  }
+
+  private async chatOnce(
+    workspaceId: string,
+    nodeId: string,
+    input: unknown,
+    signal?: AbortSignal,
+    onProgress?: AgentChatProgressListener,
+    extend?: (extension: AgentChatExtension, workspace: SynapseWorkspace) => Promise<AgentChatExtension>,
   ): Promise<SynapseWorkspace> {
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
@@ -494,7 +596,8 @@ export class SynapseService {
     thread.messages.push({ id: crypto.randomUUID(), role: "user", content, createdAt: now });
     thread.messages = thread.messages.slice(-maximumThreadMessages);
     thread.updatedAt = now;
-    const extension = await this.createExtension(workspace, selectedNode);
+    const baseExtension = await this.createExtension(workspace, selectedNode);
+    const extension = extend ? await extend(baseExtension, workspace) : baseExtension;
     const graphContext = createGraphContext(workspace, selectedNode.id);
     const conversation = [
       {
@@ -518,18 +621,19 @@ export class SynapseService {
         reportProgress,
         signal,
       );
-      await this.applyAgentResponse(workspace, selectedNode, thread, response);
+      await this.applyAgentResponse(workspace, selectedNode, thread, response, undefined, Boolean(extend));
       finishSynapseRun(workspace, activeRun, response);
       return await this.save(workspace);
     } catch (error) {
       const response = failedSynapseResponse(error, completedToolActivity);
-      await this.applyAgentResponse(workspace, selectedNode, thread, response);
+      await this.applyAgentResponse(workspace, selectedNode, thread, response, undefined, Boolean(extend));
       finishSynapseRun(workspace, activeRun, response);
       return await this.save(workspace);
     }
   }
 
   async chatSelection(workspaceId: string, input: unknown, signal?: AbortSignal): Promise<SynapseSelectionResult> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const body = readObject(input, "Synapse selection message");
     const selectedNodeIds = readSelectedNodeIds(body.nodeIds);
@@ -586,6 +690,7 @@ export class SynapseService {
   }
 
   async syncPendingApproval(workspaceId: string, nodeId: string): Promise<SynapseWorkspace> {
+    this.assertEditable(workspaceId);
     const workspace = await this.requiredWorkspace(workspaceId);
     const selectedNode = requiredNode(workspace, nodeId);
     const thread = threadFor(workspace, nodeId);
@@ -843,6 +948,7 @@ export class SynapseService {
     thread: SynapseThread,
     response: AgentChatResponse,
     replaceMessageId?: string,
+    investigation = false,
   ): Promise<void> {
     const priorMessage = replaceMessageId
       ? thread.messages.find((candidate) => candidate.id === replaceMessageId)
@@ -854,6 +960,7 @@ export class SynapseService {
       ) ?? [];
     const approvalDrafts = approvalDraftsById(workspace, resolvedApprovalIds);
     const message: SynapseMessage = { ...response.message, toolActivity: response.toolActivity };
+    if (investigation) message.investigationId = workspace.investigation?.id;
     if (replaceMessageId) {
       const index = thread.messages.findIndex((candidate) => candidate.id === replaceMessageId);
       if (index >= 0) thread.messages[index] = message;
@@ -864,7 +971,7 @@ export class SynapseService {
     thread.messages = thread.messages.slice(-maximumThreadMessages);
     reconcileArtifactProvenance(workspace, response.toolActivity, {
       selectedNodeId: selectedNode.id,
-      mergeDuplicates: true,
+      mergeDuplicates: !investigation,
     });
     const nextApprovalIds = response.status === "waiting_for_approval" ? responseApprovalIds(response) : [];
     reconcileDraftApprovalAssignments(
@@ -878,6 +985,7 @@ export class SynapseService {
     thread.pendingApprovalIds = nextApprovalIds.length > 0 ? nextApprovalIds : undefined;
     thread.pendingMessageId = response.status === "waiting_for_approval" ? response.message.id : undefined;
     thread.updatedAt = response.message.createdAt;
+    if (investigation) return;
     await this.materializeConnectorResults(
       workspace,
       selectedNode,
@@ -1008,13 +1116,23 @@ export class SynapseService {
     if (!workspace) throw new SynapseError("synapse_not_found", `Synapse workspace not found: ${id}.`, 404);
     removeLegacyRawConnectorArtifacts(workspace);
     let migrated = ensureWorkspacePrimitives(workspace);
+    if (workspace.investigation?.status === "running" && !this.investigations.has(id)) {
+      workspace.investigation.status = "stopped";
+      workspace.investigation.completedAt = new Date().toISOString();
+      workspace.investigation.summary =
+        "Investigation interrupted. Start a new investigation to continue from the saved cards.";
+      for (const branch of workspace.investigation.branches)
+        if (branch.status === "running" || branch.status === "queued") branch.status = "skipped";
+      migrated = true;
+    }
     migrated = migrateObjectRecipes(workspace) || migrated;
     migrated = migratePendingApprovalDrafts(workspace) || migrated;
     for (const thread of workspace.threads) {
       for (const message of thread.messages) {
         migrated = reconcileArtifactProvenance(workspace, message.toolActivity ?? []) || migrated;
-        migrated =
-          groupCreatedArtifacts(workspace, message.toolActivity ?? [], `artifact-group:${message.id}`) || migrated;
+        if (!message.investigationId)
+          migrated =
+            groupCreatedArtifacts(workspace, message.toolActivity ?? [], `artifact-group:${message.id}`) || migrated;
       }
     }
     if (migrated) await this.options.store.setWorkspace(workspace);

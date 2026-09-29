@@ -1487,7 +1487,7 @@ function SynapseCanvas(props: {
 
   return (
     <div
-      className={panning ? "synapse-canvas-scroll panning" : "synapse-canvas-scroll"}
+      className={`synapse-canvas-scroll${panning ? " panning" : ""}${props.workspace.investigation?.status === "running" ? " investigating" : ""}`}
       ref={scrollRef}
       style={{
         backgroundPosition: `${canvasView.x}px ${canvasView.y}px`,
@@ -2634,6 +2634,10 @@ function SynapseNodePanel(props: {
 }): ReactNode {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [investigate, setInvestigate] = useState(
+    props.node.kind === "artifact" && props.node.artifactKind === "question",
+  );
+  const requestController = useRef<AbortController | null>(null);
   const [liveProgress, setLiveProgress] = useState<AgentChatProgress[]>([]);
   const [error, setError] = useState<string>();
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -2651,7 +2655,16 @@ function SynapseNodePanel(props: {
   const sendContent = useCallback(
     async (rawContent: string): Promise<void> => {
       const content = rawContent.trim();
-      if (!content || sending || !configured || pendingApprovalIds.length > 0) return;
+      if (
+        !content ||
+        sending ||
+        props.workspace.investigation?.status === "running" ||
+        !configured ||
+        pendingApprovalIds.length > 0
+      )
+        return;
+      const controller = new AbortController();
+      requestController.current = controller;
       setSending(true);
       setLiveProgress([]);
       setDraft("");
@@ -2661,7 +2674,7 @@ function SynapseNodePanel(props: {
         let next: SynapseWorkspace | undefined;
         await apiPostNdjson<SynapseChatStreamEvent>(
           `/api/synapses/${encodeURIComponent(props.workspace.id)}/nodes/${encodeURIComponent(props.node.id)}/messages/stream`,
-          { content },
+          { content, mode: investigate ? "investigate" : "chat" },
           (item) => {
             if (item.type === "error") throw new Error(item.error.message);
             if (item.type === "progress") {
@@ -2671,11 +2684,14 @@ function SynapseNodePanel(props: {
               props.onWorkspaceChange(item.workspace);
             }
           },
+          { signal: controller.signal },
         );
         if (!next) throw new Error("Synapse chat ended before returning the updated canvas.");
         props.onRefresh();
       } catch (caught) {
-        setError(messageFrom(caught, "The AI could not complete this object instruction."));
+        if (!controller.signal.aborted)
+          setError(messageFrom(caught, "The AI could not complete this object instruction."));
+        props.onRefresh();
       } finally {
         setLiveProgress([]);
         setSending(false);
@@ -2683,6 +2699,7 @@ function SynapseNodePanel(props: {
     },
     [
       configured,
+      investigate,
       pendingApprovalIds.length,
       props.node.id,
       props.onRefresh,
@@ -2783,6 +2800,57 @@ function SynapseNodePanel(props: {
         ) : null}
       </div>
       {error ? <div className="synapse-panel-error">{error}</div> : null}
+      <section className="synapse-investigation-controls">
+        <label>
+          <input
+            type="checkbox"
+            checked={investigate}
+            disabled={sending}
+            onChange={(event) => setInvestigate(event.target.checked)}
+          />{" "}
+          Investigate linked cards
+        </label>
+        <small>One agent · 5 card follow-ups · 12 cards · read-only research</small>
+        {sending || props.workspace.investigation?.status === "running" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (props.workspace.investigation?.status === "running" || investigate)
+                void apiPost(`/api/synapses/${encodeURIComponent(props.workspace.id)}/investigation/stop`, {}).catch(
+                  (caught) => setError(messageFrom(caught, "Could not stop the investigation.")),
+                );
+              else requestController.current?.abort();
+            }}
+          >
+            Stop
+          </Button>
+        ) : null}
+        {props.workspace.investigation ? (
+          <div className="synapse-investigation-status" aria-live="polite">
+            <strong>
+              {props.workspace.investigation.status === "running"
+                ? "Exploring connections…"
+                : `Investigation ${props.workspace.investigation.status}`}
+            </strong>
+            <span>
+              {props.workspace.investigation.summary ??
+                `${props.workspace.investigation.createdNodeIds.length} cards · ${props.workspace.investigation.connectorCalls} source lookups`}
+            </span>
+            <ol>
+              {props.workspace.investigation.branches.map((branch, index) => (
+                <li
+                  key={`${branch.nodeId}:${index}`}
+                  data-status={branch.status}
+                  style={{ marginLeft: branch.depth * 12 }}
+                >
+                  <span>{branch.status}</span> {branch.prompt}
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+      </section>
       <form className="synapse-composer" onSubmit={send}>
         <Textarea
           value={draft}
@@ -2804,7 +2872,13 @@ function SynapseNodePanel(props: {
         <Button
           type="submit"
           size="icon"
-          disabled={!configured || !draft.trim() || sending || pendingApprovalIds.length > 0}
+          disabled={
+            !configured ||
+            !draft.trim() ||
+            sending ||
+            props.workspace.investigation?.status === "running" ||
+            pendingApprovalIds.length > 0
+          }
         >
           {sending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
           <span className="sr-only">Send</span>

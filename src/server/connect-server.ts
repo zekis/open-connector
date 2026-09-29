@@ -360,6 +360,10 @@ export class ConnectServer {
       app.post("/api/feed/:id/comments", (context) => this.replyToFeedItem(context, context.req.param("id")));
     }
     if (this.options.synapse) {
+      app.post("/api/synapses/:id/investigation/stop", (context) => {
+        this.options.synapse!.stopInvestigation(context.req.param("id"));
+        return context.json({ stopping: true });
+      });
       app.get("/api/synapses", (context) => this.listSynapses(context));
       app.post("/api/synapses", (context) => this.createSynapse(context));
       app.get("/api/synapses/:id", (context) => this.getSynapse(context, context.req.param("id")));
@@ -1394,7 +1398,14 @@ export class ConnectServer {
         writeText("\n");
         heartbeat = setInterval(() => writeText("\n"), 10_000);
         void this.options
-          .synapse!.chat(id, nodeId, body, abortController.signal, (progress) => write({ type: "progress", progress }))
+          .synapse!.chat(
+            id,
+            nodeId,
+            body,
+            abortController.signal,
+            (progress) => write({ type: "progress", progress }),
+            (workspace) => write({ type: "workspace", workspace }),
+          )
           .then((workspace) => write({ type: "workspace", workspace }))
           .catch((error: unknown) => write(synapseChatStreamError(error)))
           .finally(() => {

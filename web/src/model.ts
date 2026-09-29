@@ -902,6 +902,7 @@ export interface SynapseRun {
 }
 
 export interface SynapseMessage extends AgentChatMessage {
+  investigationId?: string;
   id: string;
   createdAt: string;
   toolActivity?: AgentChatToolActivity[];
@@ -917,6 +918,7 @@ export interface SynapseThread {
 }
 
 export interface SynapseWorkspace {
+  investigation?: SynapseInvestigation;
   id: string;
   name: string;
   schemaVersion?: 2;
@@ -1454,4 +1456,29 @@ function exampleValue(schema: JsonSchema | undefined): unknown {
   if (schema.type === "array") return [];
   if (schema.type === "object") return {};
   return "";
+}
+
+export interface SynapseInvestigationBranch {
+  nodeId: string;
+  parentNodeId?: string;
+  prompt: string;
+  depth: number;
+  status: "queued" | "running" | "completed" | "failed" | "skipped";
+}
+
+export interface SynapseInvestigation {
+  id: string;
+  rootNodeId: string;
+  goal: string;
+  status: "running" | "completed" | "stopped" | "failed";
+  branches: SynapseInvestigationBranch[];
+  createdNodeIds: string[];
+  connectorCalls: number;
+  maxDepth: number;
+  maxBranches: number;
+  maxCards: number;
+  maxConnectorCalls: number;
+  startedAt: string;
+  completedAt?: string;
+  summary?: string;
 }

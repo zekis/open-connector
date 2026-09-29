@@ -48,6 +48,154 @@ const connections = [
 ];
 
 describe("SynapseService", () => {
+  it("keeps card feedback and follow-up decisions in one original agent conversation", async () => {
+    const snapshots: SynapseWorkspace[] = [];
+    const respond = vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+      expect(extension.includeFlowTools).toBe(false);
+      expect(extension.maxToolSteps).toBe(48);
+      expect(extension.tools.some((tool) => tool.name === "synapse_queue_follow_up")).toBe(false);
+      expect(extension.connectorActionIds?.has("outlook.search_messages")).toBe(true);
+      expect((await extension.beforeConnectorAction!("outlook.send_message", "outlook-1", {}))?.ok).toBe(false);
+      for (let i = 0; i < 24; i++)
+        expect(await extension.beforeConnectorAction!("brave.web_search", "brave-1", {})).toBeUndefined();
+      expect((await extension.beforeConnectorAction!("brave.web_search", "brave-1", {}))?.ok).toBe(false);
+      const added = await extension.runTool("synapse_add_artifacts", {
+        artifacts: [
+          { artifactKind: "note", title: "House prices", content: "Sales evidence" },
+          { artifactKind: "note", title: "Rental yields", content: "Rental evidence" },
+        ],
+      });
+      const [prices, rentals] = (added!.output as { nodes: SynapseArtifactNode[] }).nodes;
+      const focus = await extension.runTool("synapse_focus_card", {
+        nodeId: prices!.id,
+        prompt: "Compare recent sales",
+      });
+      expect(focus?.output).toMatchObject({
+        card: { id: prices!.id, content: "Sales evidence" },
+        question: "Compare recent sales",
+      });
+      const detail = await extension.runTool("synapse_add_artifacts", {
+        parentNodeId: rentals!.id,
+        artifacts: [{ artifactKind: "note", title: "Sale comparison", content: "More evidence" }],
+      });
+      const detailNode = (detail!.output as { nodes: SynapseArtifactNode[] }).nodes[0]!;
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: rentals!.id, prompt: "Compare yields" }))?.ok,
+      ).toBe(true);
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: prices!.id, prompt: "Check price assumptions" }))?.ok,
+      ).toBe(true);
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: prices!.id, prompt: "Check price assumptions" }))?.ok,
+      ).toBe(false);
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: detailNode.id, prompt: "Check sale sources" }))?.ok,
+      ).toBe(true);
+      const deep = await extension.runTool("synapse_add_artifacts", {
+        artifacts: [{ artifactKind: "note", title: "Verified sources", content: "Source detail" }],
+      });
+      const deepNode = (deep!.output as { nodes: SynapseArtifactNode[] }).nodes[0]!;
+      expect((await extension.runTool("synapse_focus_card", { nodeId: deepNode.id, prompt: "Go deeper" }))?.ok).toBe(
+        false,
+      );
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: rentals!.id, prompt: "Check rental assumptions" }))
+          ?.ok,
+      ).toBe(true);
+      expect(
+        (await extension.runTool("synapse_focus_card", { nodeId: rentals!.id, prompt: "More rental research" }))?.ok,
+      ).toBe(false);
+      return completedResponse([added!, focus!, detail!, deep!]);
+    });
+    const service = createService({
+      respondWithExtension: respond,
+      getApprovalResult: vi.fn(async (id: string) => pendingApproval(id)),
+    });
+    const workspace = await service.create({ question: "Research house prices" });
+    const result = await service.chat(
+      workspace.id,
+      workspace.nodes[0]!.id,
+      { content: "Research house prices", mode: "investigate" },
+      undefined,
+      undefined,
+      (snapshot) => snapshots.push(structuredClone(snapshot)),
+    );
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(result.threads).toHaveLength(1);
+    expect(result.threads[0]?.nodeId).toBe(workspace.nodes[0]!.id);
+    expect(result.threads[0]?.messages).toHaveLength(2);
+    expect(result.runs).toHaveLength(1);
+    expect(result.investigation).toMatchObject({ status: "completed", connectorCalls: 24 });
+    expect(result.investigation?.branches.map((branch) => branch.depth)).toEqual([0, 1, 1, 1, 2, 1]);
+    const prices = result.nodes.find((node) => node.title === "House prices")!;
+    const detail = result.nodes.find((node) => node.title === "Sale comparison")!;
+    expect(result.edges.some((edge) => edge.sourceNodeId === prices.id && edge.targetNodeId === detail.id)).toBe(true);
+    expect(
+      snapshots.some((snapshot) => snapshot.nodes.length === 3 && snapshot.investigation?.status === "running"),
+    ).toBe(true);
+  });
+
+  it("stops an investigation, keeps partial cards, and blocks concurrent canvas edits", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension, _progress, signal) => {
+        const added = await extension.runTool("synapse_add_artifacts", {
+          artifacts: [{ artifactKind: "note", title: "Partial finding", content: "Source evidence" }],
+        });
+        await expect(service.update(workspace.id, { name: "Conflicting edit" })).rejects.toMatchObject({
+          code: "synapse_busy",
+        });
+        service.stopInvestigation(workspace.id);
+        expect(signal?.aborted).toBe(true);
+        await expect(extension.runTool("synapse_add_artifacts", { artifacts: [] })).rejects.toBeDefined();
+        return completedResponse([added!]);
+      }),
+      getApprovalResult: vi.fn(async (id: string) => pendingApproval(id)),
+    });
+    const workspace = await service.create({ question: "Find task context" });
+    const result = await service.chat(workspace.id, workspace.nodes[0]!.id, {
+      content: "Find task context",
+      mode: "investigate",
+    });
+    expect(result.investigation?.status).toBe("stopped");
+    expect(result.nodes).toHaveLength(2);
+    await expect(service.update(workspace.id, { name: "Editable again" })).resolves.toMatchObject({
+      name: "Editable again",
+    });
+  });
+
+  it("enforces the card budget independently of model instructions", async () => {
+    const service = createService({
+      respondWithExtension: vi.fn(async (_input: unknown, extension: AgentChatExtension) => {
+        const added = await extension.runTool("synapse_add_artifacts", {
+          artifacts: Array.from({ length: 12 }, (_, i) => ({
+            artifactKind: "note",
+            title: `Finding ${i}`,
+            content: `Evidence ${i}`,
+          })),
+        });
+        expect(added?.ok).toBe(true);
+        expect(
+          (
+            await extension.runTool("synapse_add_artifacts", {
+              artifacts: [{ artifactKind: "note", title: "Overflow" }],
+            })
+          )?.ok,
+        ).toBe(false);
+        return completedResponse([added!]);
+      }),
+      getApprovalResult: vi.fn(async (id: string) => pendingApproval(id)),
+    });
+    const workspace = await service.create({ question: "Research" });
+    const result = await service.chat(workspace.id, workspace.nodes[0]!.id, {
+      content: "Research",
+      mode: "investigate",
+    });
+    expect(result.nodes).toHaveLength(13);
+    expect(result.investigation?.createdNodeIds).toHaveLength(12);
+    const reloaded = await service.get(workspace.id);
+    expect(reloaded.nodes.filter((node) => node.kind === "artifact").every((node) => !node.groupId)).toBe(true);
+  });
+
   it("starts a new research canvas with a question node while retaining named empty canvases for Flow destinations", async () => {
     const service = createService({
       respondWithExtension: vi.fn(async () => completedResponse([])),

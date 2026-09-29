@@ -194,6 +194,7 @@ export interface SynapseRun {
 }
 
 export interface SynapseMessage {
+  investigationId?: string;
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -211,6 +212,7 @@ export interface SynapseThread {
 }
 
 export interface SynapseWorkspace {
+  investigation?: SynapseInvestigation;
   id: string;
   name: string;
   schemaVersion?: 2;
@@ -221,6 +223,31 @@ export interface SynapseWorkspace {
   runs?: SynapseRun[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SynapseInvestigationBranch {
+  nodeId: string;
+  parentNodeId?: string;
+  prompt: string;
+  depth: number;
+  status: "queued" | "running" | "completed" | "failed" | "skipped";
+}
+
+export interface SynapseInvestigation {
+  id: string;
+  rootNodeId: string;
+  goal: string;
+  status: "running" | "completed" | "stopped" | "failed";
+  branches: SynapseInvestigationBranch[];
+  createdNodeIds: string[];
+  connectorCalls: number;
+  maxDepth: number;
+  maxBranches: number;
+  maxCards: number;
+  maxConnectorCalls: number;
+  startedAt: string;
+  completedAt?: string;
+  summary?: string;
 }
 
 export interface SynapseWorkspaceSummary {

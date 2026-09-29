@@ -84,6 +84,8 @@ export interface AgentChatConnectorGrant {
 }
 
 export interface AgentChatExtension {
+  /** Optional lower per-conversation tool budget for bounded workspace exploration. */
+  maxToolSteps?: number;
   systemPrompt: string;
   context?: unknown;
   tools: AgentChatExtensionTool[];
@@ -467,8 +469,9 @@ export class AgentChatService implements IAgentChatService {
     const queuedApprovalIds: string[] = [];
     const attachments = await this.resolveTurnAttachments(messages);
     const availableTools = availableChatTools(options.extension?.tools, options.extension?.includeFlowTools);
+    const toolStepLimit = Math.max(1, Math.min(maxToolSteps, options.extension?.maxToolSteps ?? maxToolSteps));
     try {
-      for (let step = 0; step <= maxToolSteps; step++) {
+      for (let step = 0; step <= toolStepLimit; step++) {
         assertChatNotCancelled(options.signal);
         const result = await prepared.completeTurn({
           model: prepared.model,
@@ -510,7 +513,7 @@ export class AgentChatService implements IAgentChatService {
             "The agent returned a chat tool decision without a tool name and arguments.",
           );
         }
-        if (step === maxToolSteps) {
+        if (step === toolStepLimit) {
           if (queuedApprovalIds.length > 0) {
             return await this.pauseForApprovals(
               queuedApprovalIds,
@@ -521,7 +524,7 @@ export class AgentChatService implements IAgentChatService {
               prepared.provider,
             );
           }
-          throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
+          throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${toolStepLimit}-action limit.`, 503);
         }
         const toolCallId = crypto.randomUUID();
         await emitProgress(
@@ -555,7 +558,7 @@ export class AgentChatService implements IAgentChatService {
       }
       throw error;
     }
-    throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${maxToolSteps}-action limit.`, 503);
+    throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${toolStepLimit}-action limit.`, 503);
   }
 
   private async resolveTurnAttachments(messages: AgentChatMessage[]): Promise<AgentTurnRequest["attachments"]> {
