@@ -6,7 +6,7 @@
 
 .main-region-synapse {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100svh;
   min-height: 0;
   overflow: hidden;
@@ -2329,7 +2329,7 @@
 @media (max-width: 720px) {
   .main-region-synapse {
     display: grid;
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     height: auto;
     overflow: hidden;
   }

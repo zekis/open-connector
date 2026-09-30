@@ -57,6 +57,8 @@
     "docs": "Docs"
   },
   "shell": {
+    "backHome": "Retour à l’accueil",
+    "settings": "Paramètres",
     "invalidUnlockToken": "Saisissez un token administrateur valide pour déverrouiller la console.",
     "loadRuntimeFailed": "Impossible de charger les données du runtime. Actualisez ou vérifiez que le runtime est lancé.",
     "logoutFailed": "Impossible de se déconnecter. Réessayez.",

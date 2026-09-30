@@ -1,6 +1,6 @@
 .app-shell {
   display: grid;
-  grid-template-columns: 15.5rem minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 100svh;
 }
 
@@ -434,5 +434,84 @@
 
   .shell-header {
     padding: 0 12px;
+  }
+}
+
+.home-navigation {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.home-navigation-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.home-navigation-link:hover {
+  background: var(--accent);
+}
+.home-navigation-link:focus-visible,
+.shell-settings summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.shell-settings {
+  position: relative;
+  flex: 0 0 auto;
+}
+.shell-settings summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  border-radius: var(--radius-lg);
+  list-style: none;
+}
+.shell-settings summary::-webkit-details-marker {
+  display: none;
+}
+.shell-settings summary:hover {
+  background: var(--accent);
+}
+.shell-settings-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  display: grid;
+  gap: 14px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: var(--console-shadow-sm);
+}
+.shell-settings-panel .runtime-status {
+  display: flex;
+}
+@media (max-width: 480px) {
+  .home-navigation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-navigation-link {
+    padding: 12px;
+    gap: 8px;
+  }
+  .shell-header {
+    gap: 8px;
+  }
+  .shell-header-title {
+    gap: 6px;
   }
 }

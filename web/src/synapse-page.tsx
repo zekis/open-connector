@@ -703,11 +703,6 @@ export function SynapsePage(props: { data: AppData; onRefresh(): void }): ReactN
     <div className="synapse-page">
       <header className="synapse-toolbar">
         <div className="synapse-workspace-control">
-          <Button variant="ghost" size="icon-sm" asChild>
-            <Link to="/overview" aria-label="Leave Synapse workspace" title="Back to OOMOL Connect">
-              <ChevronLeft size={16} />
-            </Link>
-          </Button>
           <span className="synapse-mark">
             <BrainCircuit size={18} aria-hidden="true" />
           </span>

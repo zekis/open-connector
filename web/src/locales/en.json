@@ -57,6 +57,8 @@
     "docs": "Docs"
   },
   "shell": {
+    "backHome": "Back to home",
+    "settings": "Settings",
     "invalidUnlockToken": "Enter a valid admin token to unlock the console.",
     "loadRuntimeFailed": "Could not load runtime data. Refresh or check that the runtime is running.",
     "logoutFailed": "Could not log out. Try again.",

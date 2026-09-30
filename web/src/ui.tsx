@@ -22,6 +22,8 @@ import type { FormEvent, ReactNode } from "react";
 import { useI18n, useLang, useTranslate } from "@embra/i18n/react";
 import {
   Activity,
+  ArrowLeft,
+  Settings,
   Bot,
   BookOpen,
   BrainCircuit,
@@ -44,7 +46,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, NavLink, Route, Routes, useLocation } from "react-router";
+import { Navigate, Link, Route, Routes, useLocation } from "react-router";
 import { AccessPage } from "./access-page";
 import { ActionsPage } from "./actions-page";
 import { AgentsPage } from "./agents-page";
@@ -410,7 +412,6 @@ function AppShell(props: {
   const isChatPage = section === "chat";
   const isSynapsePage = section === "synapse";
   const isInboxPage = section === "inbox";
-  const isImmersivePage = isSynapsePage || isInboxPage;
   const pendingApprovalCount =
     (props.data.flowApprovals ?? []).filter((approval) => approval.status === "pending").length +
     (props.data.actionApprovals ?? []).filter((approval) => approval.status === "pending").length;
@@ -432,56 +433,6 @@ function AppShell(props: {
       className={isSynapsePage ? "app-shell synapse-shell" : isInboxPage ? "app-shell inbox-shell" : "app-shell"}
       aria-busy={props.loading}
     >
-      {!isImmersivePage ? (
-        <aside className="sidebar">
-          <div className="brand">
-            <img className="brand-mark" src={oomolConnectLogoUrl} alt="" />
-            <div>
-              <div className="brand-name">OOMOL Connect</div>
-              <div className="brand-subtitle">{t("brand.subtitle")}</div>
-            </div>
-          </div>
-
-          <nav className="sidebar-nav" aria-label={t("shell.primaryNav")}>
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <NavLink
-                  key={item.path}
-                  className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
-                  to={item.path}
-                >
-                  <Icon size={16} />
-                  <span>{t(item.labelKey)}</span>
-                  {item.path === "/approvals" && pendingApprovalCount > 0 ? (
-                    <strong className="nav-count">{pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}</strong>
-                  ) : null}
-                </NavLink>
-              );
-            })}
-          </nav>
-
-          <div className="sidebar-footer">
-            <LanguageSelect />
-            <ThemeControl theme={props.theme} onThemeChange={props.onThemeChange} />
-            <div className="runtime-status">
-              <StatusDot ok={!props.error} />
-              <span>{props.error ? t("common.apiUnavailable") : t("common.runtimeReady")}</span>
-            </div>
-            <div className="button-row tight">
-              <Button variant="outline" size="icon-sm" onClick={props.onRefresh} aria-label={t("shell.refreshData")}>
-                {props.loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-              </Button>
-              {props.showLogout ? (
-                <Button variant="outline" size="sm" onClick={props.onLogout}>
-                  {t("shell.logout")}
-                </Button>
-              ) : null}
-            </div>
-          </div>
-        </aside>
-      ) : null}
-
       <div
         className={
           isSynapsePage
@@ -493,17 +444,67 @@ function AppShell(props: {
                 : "main-region"
         }
       >
-        {!isImmersivePage ? (
-          <header className="shell-header">
-            <div className="shell-header-title">
-              <CurrentNavIcon size={16} />
-              <h1>{t(`shell.headings.${heading}.title`)}</h1>
+        <header className="shell-header">
+          <div className="shell-header-title">
+            {!isOverviewPage ? (
+              <Button asChild variant="ghost" size="sm">
+                <Link to="/overview">
+                  <ArrowLeft size={16} />
+                  {t("shell.backHome")}
+                </Link>
+              </Button>
+            ) : null}
+            <CurrentNavIcon size={16} />
+            <h1>{t(`shell.headings.${heading}.title`)}</h1>
+          </div>
+          <details className="shell-settings">
+            <summary aria-label={t("shell.settings")} title={t("shell.settings")}>
+              <Settings size={18} />
+            </summary>
+            <div className="shell-settings-panel">
+              <LanguageSelect />
+              <ThemeControl theme={props.theme} onThemeChange={props.onThemeChange} />
+              <div className="runtime-status">
+                <StatusDot ok={!props.error} />
+                <span>{props.error ? t("common.apiUnavailable") : t("common.runtimeReady")}</span>
+              </div>
+              <div className="button-row tight">
+                <Button variant="outline" size="icon-sm" onClick={props.onRefresh} aria-label={t("shell.refreshData")}>
+                  {props.loading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+                </Button>
+                {props.showLogout ? (
+                  <Button variant="outline" size="sm" onClick={props.onLogout}>
+                    {t("shell.logout")}
+                  </Button>
+                ) : null}
+              </div>
             </div>
-          </header>
-        ) : null}
+          </details>
+        </header>
 
         <main className={mainClassName}>
           {props.error ? <InlineError message={props.error} /> : null}
+
+          {isOverviewPage ? (
+            <nav className="home-navigation" aria-label={t("shell.primaryNav")}>
+              {navItems
+                .filter((item) => item.path !== "/overview")
+                .map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Link className="home-navigation-link" key={item.path} to={item.path}>
+                      <Icon size={20} />
+                      <span>{t(item.labelKey)}</span>
+                      {item.path === "/approvals" && pendingApprovalCount > 0 ? (
+                        <strong className="nav-count">
+                          {pendingApprovalCount > 99 ? "99+" : pendingApprovalCount}
+                        </strong>
+                      ) : null}
+                    </Link>
+                  );
+                })}
+            </nav>
+          ) : null}
 
           <Routes>
             <Route index element={<Navigate to="/overview" replace />} />

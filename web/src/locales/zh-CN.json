@@ -57,6 +57,8 @@
     "docs": "文档"
   },
   "shell": {
+    "backHome": "返回首页",
+    "settings": "设置",
     "invalidUnlockToken": "请输入有效的管理员 token 来解锁控制台。",
     "loadRuntimeFailed": "无法加载运行时数据。请刷新，或确认运行时已启动。",
     "logoutFailed": "无法登出，请重试。",

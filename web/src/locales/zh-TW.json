@@ -57,6 +57,8 @@
     "docs": "文件"
   },
   "shell": {
+    "backHome": "返回首頁",
+    "settings": "設定",
     "invalidUnlockToken": "請輸入有效的管理員權杖以解鎖控制台。",
     "loadRuntimeFailed": "無法載入執行階段資料。請重新整理，或確認執行階段正在運作。",
     "logoutFailed": "無法登出，請再試一次。",
