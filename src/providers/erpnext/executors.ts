@@ -4,10 +4,11 @@ import type {
   ProviderExecutors,
   ProviderProxyExecutor,
   ProxyExecutionResult,
+  TransitFileWriter,
 } from "../../core/types.ts";
 
 import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
-import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed } from "../../core/request.ts";
+import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed, readBoundedResponseBytes } from "../../core/request.ts";
 import {
   createProviderFetch,
   createProviderProxyUrl,
@@ -15,6 +16,7 @@ import {
   normalizeProviderProxyHeaders,
   ProviderRequestError,
   providerUserAgent,
+  readProviderJsonBody,
   readProviderProxyErrorMessage,
   readProviderProxyResponse,
   requireApiKeyCredential,
@@ -36,6 +38,7 @@ interface ErpnextActionContext {
   baseUrl: string;
   fetcher: typeof fetch;
   signal?: AbortSignal;
+  transitFiles?: TransitFileWriter;
 }
 
 interface ErpnextRequestOptions {
@@ -54,6 +57,56 @@ interface ErpnextRequestOptions {
 type ErpnextActionHandler = (input: Record<string, unknown>, context: ErpnextActionContext) => Promise<unknown>;
 
 const erpnextActionHandlers: Record<string, ErpnextActionHandler> = {
+  async list_document_attachments(input, context) {
+    const payload = await requestErpnext({
+      ...context,
+      path: buildResourcePath("File"),
+      method: "GET",
+      phase: "execute",
+      query: {
+        fields: JSON.stringify(["name", "file_name", "file_url", "is_private", "file_size"]),
+        filters: JSON.stringify({
+          attached_to_doctype: readRequiredString(input.doctype, "doctype"),
+          attached_to_name: readRequiredString(input.name, "name"),
+          is_folder: 0,
+        }),
+        order_by: "creation asc, name asc",
+        limit_start: readOptionalIntegerString(input.start) ?? "0",
+        limit_page_length: readOptionalIntegerString(input.page_length) ?? "20",
+      },
+    });
+    return { attachments: readRequiredDataArray(payload, "ERPNext attachment list response") };
+  },
+  async download_file(input, context) {
+    if (!context.transitFiles) {
+      throw new ProviderRequestError(400, "Transit file storage is not enabled.");
+    }
+    const fileUrl = readRequiredString(input.file_url, "file_url");
+    const name = fileUrl.slice(fileUrl.lastIndexOf("/") + 1);
+    if (!/^\/(?:private\/)?files\/[^/\\\p{Cc}]+$/u.test(fileUrl) || name === "." || name === "..") {
+      throw new ProviderRequestError(400, "file_url must be an attachment path under /files/ or /private/files/.");
+    }
+    // Send the path as data to Frappe's permission-checked method, never as an egress URL.
+    const url = buildUrl(context.baseUrl, buildMethodPath("frappe.handler.download_file"), { file_url: fileUrl });
+    const headers = buildHeaders(context.apiKey, context.apiSecret, false);
+    headers.set("accept", "*/*");
+    const response = await context.fetcher(url, { method: "GET", headers, signal: context.signal, redirect: "error" });
+    if (!response.ok) {
+      const payload = await readProviderJsonBody(response, {
+        emptyBody: {},
+        invalidJsonMessage: "Invalid ERPNext download error response",
+        invalidJsonFallback: (text) => ({ message: text }),
+      });
+      throw createErpnextError(response.status, payload, "execute");
+    }
+    const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+    const bytes = await readBoundedResponseBytes(response, {
+      maxBytes: context.transitFiles.maxBytes,
+      fieldName: "ERPNext attachment",
+      createError: (message) => new ProviderRequestError(413, message),
+    });
+    return { file: await context.transitFiles.create(new File([Uint8Array.from(bytes)], name, { type: mimeType })) };
+  },
   async get_logged_user(_input, context) {
     const payload = await requestErpnext({
       ...context,
@@ -203,6 +256,7 @@ export const executors: ProviderExecutors = defineProviderExecutors<ErpnextActio
       ),
       fetcher,
       signal: context.signal,
+      transitFiles: context.transitFiles,
     };
   },
   allowPrivateNetwork: isPrivateNetworkAccessAllowed,

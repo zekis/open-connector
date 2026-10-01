@@ -67,7 +67,7 @@ export class CodexClient implements IAgentTurnClient, AgentModelSource {
     const schemaPath = join(directory, "decision.schema.json");
     const outputPath = join(directory, "decision.json");
     try {
-      const attachments = await stageAgentTurnAttachments(directory, input.attachments);
+      const attachments = await stageAgentTurnAttachments(directory, input.attachments, input.signal);
       await writeFile(schemaPath, JSON.stringify(input.outputSchema), { encoding: "utf8", mode: 0o600 });
       const result = await this.runner.run({
         args: [

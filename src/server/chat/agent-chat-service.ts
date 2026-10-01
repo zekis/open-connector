@@ -24,6 +24,7 @@ import type {
 } from "./agent-chat-types.ts";
 
 import { buildActionSearchIndex, searchActions } from "../../core/action-search.ts";
+import { optionalRecord, optionalString } from "../../core/cast.ts";
 import { AgentCredentialError } from "../agents/agent-credential-service.ts";
 import {
   ClaudeAgentDecisionError,
@@ -497,6 +498,9 @@ export class AgentChatService implements IAgentChatService {
     const toolActivity = [...initialToolActivity];
     const queuedApprovalIds: string[] = [];
     const attachments = await this.resolveTurnAttachments(messages);
+    for (const activity of initialToolActivity) {
+      await this.appendToolAttachments(activity, attachments);
+    }
     const availableTools = availableChatTools(options.extension?.tools, options.extension?.includeFlowTools);
     const toolStepLimit = Math.max(1, Math.min(500, options.extension?.maxToolSteps ?? maxToolSteps));
     try {
@@ -516,7 +520,7 @@ export class AgentChatService implements IAgentChatService {
             options.extension?.context,
           ),
           outputSchema: createClaudeAgentDecisionSchema(availableTools.map((tool) => tool.name)),
-          attachments,
+          attachments: [...attachments],
           signal: options.signal,
           timeoutMs: options.extension?.turnTimeoutMs,
         };
@@ -587,6 +591,7 @@ export class AgentChatService implements IAgentChatService {
           toolCompletedProgress(toolCallId, decision.toolName, activity, prepared.context),
         );
         toolActivity.push(activity);
+        await this.appendToolAttachments(activity, attachments);
         if (activity.approvalId) queuedApprovalIds.push(activity.approvalId);
       }
     } catch (error) {
@@ -605,8 +610,10 @@ export class AgentChatService implements IAgentChatService {
     throw new AgentChatError("chat_step_limit_exceeded", `Chat exceeded its ${toolStepLimit}-action limit.`, 503);
   }
 
-  private async resolveTurnAttachments(messages: AgentChatMessage[]): Promise<AgentTurnRequest["attachments"]> {
-    if (!this.options.transitFiles) return undefined;
+  private async resolveTurnAttachments(
+    messages: AgentChatMessage[],
+  ): Promise<NonNullable<AgentTurnRequest["attachments"]>> {
+    if (!this.options.transitFiles) return [];
     const references = new Map(
       messages
         .flatMap((message) => message.attachments ?? [])
@@ -622,6 +629,24 @@ export class AgentChatService implements IAgentChatService {
       }
     }
     return attachments;
+  }
+
+  private async appendToolAttachments(
+    activity: AgentChatToolActivity,
+    attachments: NonNullable<AgentTurnRequest["attachments"]>,
+  ): Promise<void> {
+    if (!this.options.transitFiles || !activity.ok || activity.type !== "action") return;
+    const fileIds = new Set<string>();
+    collectToolFileIds(activity.output, fileIds);
+    for (const fileId of fileIds) {
+      if (attachments.some((attachment) => attachment.id === fileId)) continue;
+      try {
+        const stored = await this.options.transitFiles.read(fileId);
+        attachments.push({ id: fileId, file: stored.file });
+      } catch {
+        // Keep the tool metadata visible, but never claim an expired file was staged.
+      }
+    }
   }
 
   private async pauseForApprovals(
@@ -846,6 +871,22 @@ export class AgentChatService implements IAgentChatService {
   }
 }
 
+function collectToolFileIds(value: unknown, fileIds: Set<string>, depth = 0): void {
+  if (depth > 8 || fileIds.size >= 10) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectToolFileIds(item, fileIds, depth + 1);
+    return;
+  }
+  const record = optionalRecord(value);
+  if (!record) return;
+  const fileId = optionalString(record.fileId);
+  if (fileId && optionalString(record.downloadUrl) && optionalString(record.name) && optionalString(record.mimeType)) {
+    fileIds.add(fileId);
+    return;
+  }
+  for (const item of Object.values(record)) collectToolFileIds(item, fileIds, depth + 1);
+}
+
 export class AgentChatError extends Error {
   readonly code: string;
   readonly status: 400 | 404 | 409 | 503;
@@ -959,7 +1000,8 @@ function createSystemPrompt(voiceMode: boolean, extensionPrompt?: string): strin
 Answer the user directly and use connected applications when their request needs external data or an explicitly requested action.
 
 Rules:
-- use only the supplied host tools
+- use only the supplied host tools for connected applications; use local file-reading tools to inspect attachments staged by the host
+- downloaded connector files are staged on the next turn when available; a file ID or download link alone is not evidence that you read the contents
 - search for an action before executing it unless an exact action id and schema already appear in this turn's tool history
 - execute only actions clearly requested by the user; ask for confirmation in your final response when side effects are ambiguous
 - never refuse a clearly requested action because it may require approval; call the action so the host can create the approval request

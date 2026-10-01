@@ -45,6 +45,67 @@ const getValueInputSchema = s.object(
 
 export const erpnextActions: ActionDefinition[] = [
   defineProviderAction(service, {
+    name: "list_document_attachments",
+    description:
+      "List files attached to an ERPNext or Frappe document, including private resumes. Pass a returned file_url to download_file.",
+    inputSchema: s.object(
+      {
+        doctype: doctypeField,
+        name: documentNameField,
+        start: s.integer("The zero-based attachment offset.", { minimum: 0 }),
+        page_length: s.positiveInteger("Maximum attachments to return. Defaults to 20."),
+      },
+      { optional: ["start", "page_length"] },
+    ),
+    outputSchema: s.object(
+      {
+        attachments: s.array(
+          s.object(
+            {
+              name: s.string("The File document identifier."),
+              file_name: s.string("The attachment filename."),
+              file_url: s.string(
+                "Attachment path to pass to download_file. External links cannot be downloaded by this action.",
+              ),
+              is_private: s.integer("1 for a private attachment, 0 for a public attachment."),
+              file_size: s.number("Attachment size in bytes."),
+            },
+            { required: ["name", "file_name", "file_url", "is_private", "file_size"] },
+          ),
+        ),
+      },
+      { required: ["attachments"] },
+    ),
+  }),
+  defineProviderAction(service, {
+    name: "download_file",
+    description:
+      "Download a public or private ERPNext/Frappe attachment such as a resume into temporary file storage. Requires file storage and permission to read the attachment.",
+    inputSchema: s.object(
+      {
+        file_url: s.nonEmptyString(
+          "The exact /files/... or /private/files/... path from an Attach field or list_document_attachments. External URLs are not supported.",
+        ),
+      },
+      { required: ["file_url"] },
+    ),
+    outputSchema: s.object(
+      {
+        file: s.object(
+          {
+            fileId: s.string("Temporary file identifier."),
+            downloadUrl: s.string("URL for downloading the stored attachment."),
+            name: s.string("Attachment filename."),
+            mimeType: s.string("Attachment MIME type."),
+            sizeBytes: s.integer("Downloaded size in bytes.", { minimum: 0 }),
+          },
+          { required: ["fileId", "downloadUrl", "name", "mimeType", "sizeBytes"] },
+        ),
+      },
+      { required: ["file"] },
+    ),
+  }),
+  defineProviderAction(service, {
     name: "get_logged_user",
     description: "Get the currently authenticated ERPNext user for the configured connection.",
     inputSchema: s.object("The input payload for fetching the current ERPNext user.", {}),

@@ -1145,6 +1145,106 @@ describe("AgentChatService", () => {
     expect(codexInputs[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "medium" });
   });
 
+  it("stages connector downloads alongside Teams uploads on the next agent step", async () => {
+    const downloadDecision = {
+      kind: "tool_call",
+      toolName: "run_connector_action",
+      arguments: { actionId: "example.lookup", connectionId: connection.id, input: { query: "resume" } },
+    };
+    const claude = new FakeClaudeCodeClient([
+      downloadDecision,
+      downloadDecision,
+      { kind: "final", text: "Reviewed both resumes." },
+    ]);
+    const downloaded = new File(["ERP resume contents"], "erp-resume.txt", { type: "text/plain" });
+    const uploaded = new File(["Teams resume contents"], "teams-resume.txt", { type: "text/plain" });
+    const reference = {
+      fileId: "erp-file",
+      downloadUrl: "/api/files/erp-file",
+      name: downloaded.name,
+      mimeType: downloaded.type,
+      sizeBytes: downloaded.size,
+    };
+    const actions = new FakeActionRunner([
+      { ok: true, output: { file: reference } },
+      { ok: true, output: { file: reference } },
+    ]);
+    const reads: string[] = [];
+    const service = createService(
+      claude,
+      actions,
+      true,
+      new FakeChatApprovals(),
+      new FakeFlowService(),
+      undefined,
+      [connection],
+      {
+        async read(fileId) {
+          reads.push(fileId);
+          const file = fileId === "teams-file" ? uploaded : downloaded;
+          return { file, sizeBytes: file.size, name: file.name, mimeType: file.type };
+        },
+      },
+    );
+    await service.respond({
+      messages: [
+        {
+          role: "user",
+          content: "Compare this resume to the ERP resume.",
+          attachments: [
+            { fileId: "teams-file", name: uploaded.name, mimeType: uploaded.type, sizeBytes: uploaded.size },
+          ],
+        },
+      ],
+    });
+    expect(claude.inputs[0]!.attachments?.map((item) => item.id)).toEqual(["teams-file"]);
+    expect(claude.inputs[1]!.attachments?.map((item) => item.id)).toEqual(["teams-file", "erp-file"]);
+    expect(claude.inputs[2]!.attachments).toHaveLength(2);
+    await expect(claude.inputs[1]!.attachments![1]!.file.text()).resolves.toBe("ERP resume contents");
+    expect(reads).toEqual(["teams-file", "erp-file"]);
+  });
+
+  it("continues when a connector download has expired", async () => {
+    const claude = new FakeClaudeCodeClient([
+      {
+        kind: "tool_call",
+        toolName: "run_connector_action",
+        arguments: { actionId: "example.lookup", connectionId: connection.id, input: { query: "resume" } },
+      },
+      { kind: "final", text: "The file is unavailable." },
+    ]);
+    const actions = new FakeActionRunner([
+      {
+        ok: true,
+        output: {
+          file: {
+            fileId: "expired",
+            downloadUrl: "/api/files/expired",
+            name: "resume.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      },
+    ]);
+    const service = createService(
+      claude,
+      actions,
+      true,
+      new FakeChatApprovals(),
+      new FakeFlowService(),
+      undefined,
+      [connection],
+      {
+        async read() {
+          throw new Error("Expired");
+        },
+      },
+    );
+    const result = await service.respond({ messages: [{ role: "user", content: "Read the resume." }] });
+    expect(result.status).toBe("completed");
+    expect(claude.inputs[1]!.attachments).toEqual([]);
+  });
+
   it("resolves transit-file references into native agent attachments", async () => {
     const claude = new FakeClaudeCodeClient([{ kind: "final", text: "I reviewed the attachment." }]);
     const file = new File(["attachment contents"], "report.txt", { type: "text/plain" });
