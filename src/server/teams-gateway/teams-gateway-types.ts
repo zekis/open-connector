@@ -86,6 +86,28 @@ export interface TeamsGatewayOperatorTakeover {
   startedAt: string;
 }
 
+/** Saved execution status. Interrupted work is never automatically replayed. */
+export interface TeamsGatewayJob {
+  id: string;
+  status:
+    | "queued"
+    | "running"
+    | "completed"
+    | "waiting_for_plan"
+    | "waiting_for_approval"
+    | "cancelled"
+    | "timed_out"
+    | "failed"
+    | "interrupted";
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  progress?: string;
+  completedToolCount: number;
+  toolActivity: AgentChatToolActivity[];
+}
+
 export interface TeamsGatewayThread {
   id: string;
   agentId: string;
@@ -109,6 +131,7 @@ export interface TeamsGatewayThread {
   pendingApprovalIds?: string[];
   pendingApprovalMessageId?: string;
   operatorTakeover?: TeamsGatewayOperatorTakeover;
+  job?: TeamsGatewayJob;
   createdAt: string;
   updatedAt: string;
 }

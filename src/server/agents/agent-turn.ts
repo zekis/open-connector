@@ -8,6 +8,8 @@ export interface AgentTurnRequest {
   outputSchema: JsonSchema;
   attachments?: AgentTurnAttachment[];
   signal?: AbortSignal;
+  /** Per-model-call deadline; the caller owns the overall job deadline. */
+  timeoutMs?: number;
 }
 
 export interface AgentTurnAttachment {

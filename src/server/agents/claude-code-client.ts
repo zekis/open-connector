@@ -115,7 +115,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
             : []),
         ],
         oauthToken: input.oauthToken,
-        timeoutMs: 120_000,
+        timeoutMs: input.timeoutMs ?? 120_000,
         cwd: prompt.directory,
         stdin: prompt.stdin,
         signal: input.signal,

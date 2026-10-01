@@ -77,6 +77,33 @@ after upgrading to attachment support so the new file scopes are granted.
 
 ## Conversations, plans, and approvals
 
+### Long-running jobs
+
+Teams agents can run jobs lasting 30–60 minutes in the Node/Docker runtime. Each execution has a
+65-minute deadline, a 500-tool-step budget, and a five-minute deadline for each model call. Jobs that
+do not finish within 250 milliseconds receive a background-work acknowledgement; Graph polling and
+other conversations continue while the job runs. Up to four jobs execute at once, with additional
+jobs queued. The execution deadline starts when a queued job begins running.
+
+Send `status` or `job status` in the same conversation to see the saved state, completed tool count,
+and latest progress. Send `cancel`, `cancel job`, or `stop` to stop active work. A conversation runs
+one job at a time; other requests receive a reminder to check or cancel the existing job. Results
+are posted back to that chat or channel thread. Actions already sent to a connected service may
+still complete after cancellation.
+
+Plan confirmation and connector approvals still pause work. Confirmed plans and resolved approvals
+resume with the same background execution limits. Operator takeover cancels active work and
+suppresses late replies and approval requests. Disabling an agent or its group also stops its jobs,
+and connector grants are checked again before each action.
+
+Job status and completed tool activity are saved with the conversation. After a runtime restart,
+unfinished queued or running jobs are marked `interrupted`; they are not automatically replayed,
+because an external action may have completed before the restart. Check the saved progress and
+action audit trail before requesting the remaining work. A job's latest status remains available
+until another job starts in that conversation.
+
+### Conversation handling
+
 Threads are durable, isolated per Teams agent and conversation, and processed with bounded
 concurrency. The Inbox retains up to 500 recent messages per conversation for operator review while
 only messages inside the configured thread window, capped at 40 messages, are supplied to the agent

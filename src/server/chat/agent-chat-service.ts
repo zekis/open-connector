@@ -84,8 +84,10 @@ export interface AgentChatConnectorGrant {
 }
 
 export interface AgentChatExtension {
-  /** Optional lower per-conversation tool budget for bounded workspace exploration. */
+  /** Host-controlled tool budget, capped at 500 steps; ordinary chat defaults to 50. */
   maxToolSteps?: number;
+  /** Per-model-call deadline for background jobs. */
+  turnTimeoutMs?: number;
   systemPrompt: string;
   context?: unknown;
   tools: AgentChatExtensionTool[];
@@ -268,14 +270,19 @@ export class AgentChatService implements IAgentChatService {
     return this.resumeWithExtension(approvalId);
   }
 
-  async resumeWithExtension(approvalId: string, extension?: AgentChatExtension): Promise<AgentChatResponse> {
+  async resumeWithExtension(
+    approvalId: string,
+    extension?: AgentChatExtension,
+    onProgress?: AgentChatProgressListener,
+    signal?: AbortSignal,
+  ): Promise<AgentChatResponse> {
     const approval = await this.options.approvals.getActionApproval(approvalId);
     if (!approval || approval.caller !== "chat" || !approval.chat) {
       throw new AgentChatError("approval_not_found", `Chat approval not found: ${approvalId}.`, 404);
     }
     const batchApprovalIds = uniqueApprovalIds(approval.chat.batchApprovalIds ?? [approval.id]);
     return await this.withApprovalBatchLock(batchApprovalIds, async () =>
-      this.resumeApprovalBatch(approvalId, batchApprovalIds, extension),
+      this.resumeApprovalBatch(approvalId, batchApprovalIds, extension, onProgress, signal),
     );
   }
 
@@ -283,6 +290,8 @@ export class AgentChatService implements IAgentChatService {
     triggerApprovalId: string,
     batchApprovalIds: string[],
     extension?: AgentChatExtension,
+    onProgress?: AgentChatProgressListener,
+    signal?: AbortSignal,
   ): Promise<AgentChatResponse> {
     const approvals = await Promise.all(batchApprovalIds.map((id) => this.options.approvals.getActionApproval(id)));
     if (
@@ -316,7 +325,25 @@ export class AgentChatService implements IAgentChatService {
       const prepared = await this.prepareChat(continuation.agentProvider);
       const resolvedActivities = new Map<string, AgentChatToolActivity>();
       for (const candidate of chatApprovals) {
+        assertChatNotCancelled(signal);
         if (candidate.status === "approved") {
+          if (!connectorPairAllowed(extension, candidate.connectionId, candidate.actionId)) {
+            throw new AgentChatError(
+              "action_not_available",
+              "The approved action is no longer granted to this task.",
+              409,
+            );
+          }
+          const intercepted = await extension?.beforeConnectorAction?.(
+            candidate.actionId,
+            candidate.connectionId,
+            readRequiredObject(candidate.input, "approval input"),
+          );
+          if (intercepted) {
+            resolvedActivities.set(candidate.id, intercepted);
+            await this.options.approvals.consumeApproved(candidate.id, "chat");
+            continue;
+          }
           const action = prepared.context.actionsById.get(candidate.actionId);
           const connection = prepared.context.connectionsById.get(candidate.connectionId);
           if (!action || !connection || connection.service !== action.service) {
@@ -332,16 +359,16 @@ export class AgentChatService implements IAgentChatService {
             continue;
           }
           await this.options.approvals.consumeApproved(candidate.id, "chat");
-          const activity = await this.runAction(
-            {
-              actionId: candidate.actionId,
-              connectionId: candidate.connectionId,
-              input: readRequiredObject(candidate.input, "approval input"),
-            },
-            prepared.context,
-            "bypass",
-          );
+          const toolCallId = crypto.randomUUID();
+          const input = {
+            actionId: candidate.actionId,
+            connectionId: candidate.connectionId,
+            input: readRequiredObject(candidate.input, "approval input"),
+          };
+          await emitProgress(onProgress, toolStartedProgress(toolCallId, runToolName, input, prepared.context));
+          const activity = await this.runAction(input, prepared.context, "bypass", signal);
           activity.approvalId = candidate.id;
+          await emitProgress(onProgress, toolCompletedProgress(toolCallId, runToolName, activity, prepared.context));
           resolvedActivities.set(candidate.id, activity);
           continue;
         }
@@ -372,6 +399,8 @@ export class AgentChatService implements IAgentChatService {
         voiceMode: continuation.voiceMode ?? false,
         timeZone: continuation.timeZone ?? localTimeZone(),
         extension,
+        onProgress,
+        signal,
       });
       await this.storeBatchResponse(
         chatApprovals.map((candidate) => candidate.id),
@@ -469,7 +498,7 @@ export class AgentChatService implements IAgentChatService {
     const queuedApprovalIds: string[] = [];
     const attachments = await this.resolveTurnAttachments(messages);
     const availableTools = availableChatTools(options.extension?.tools, options.extension?.includeFlowTools);
-    const toolStepLimit = Math.max(1, Math.min(maxToolSteps, options.extension?.maxToolSteps ?? maxToolSteps));
+    const toolStepLimit = Math.max(1, Math.min(500, options.extension?.maxToolSteps ?? maxToolSteps));
     try {
       for (let step = 0; step <= toolStepLimit; step++) {
         assertChatNotCancelled(options.signal);
@@ -489,6 +518,7 @@ export class AgentChatService implements IAgentChatService {
           outputSchema: createClaudeAgentDecisionSchema(availableTools.map((tool) => tool.name)),
           attachments,
           signal: options.signal,
+          timeoutMs: options.extension?.turnTimeoutMs,
         };
         let result = await prepared.completeTurn(turn);
         let decision = readClaudeAgentDecision(result.structuredOutput);

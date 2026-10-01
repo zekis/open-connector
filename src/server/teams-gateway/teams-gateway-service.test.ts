@@ -2,7 +2,7 @@ import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionSummary } from "../../connection-service.ts";
 import type { ActionApproval } from "../approvals/connection-approval-types.ts";
 import type { AgentChatExtension } from "../chat/agent-chat-service.ts";
-import type { AgentChatResponse } from "../chat/agent-chat-types.ts";
+import type { AgentChatResponse, AgentChatProgressListener } from "../chat/agent-chat-types.ts";
 import type {
   ITeamsGatewayGraphClient,
   TeamsGatewayGraphChannelThread,
@@ -1073,6 +1073,145 @@ describe("TeamsGatewayService", () => {
   });
 });
 
+describe("Teams gateway background jobs", () => {
+  it("cancels a job paused for approval without executing its continuation", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
+    const chat = new FakeAgentChat([waitingResponse(["approval"])]);
+    const approvals = new FakeApprovals([createApproval("approval")]);
+    const service = createService(store, graph, chat, approvals);
+    await service.pollNow();
+    graph.messages.push(inboundMessage("cancel", "2026-09-01T02:01:00.000Z", "cancel"));
+    await service.pollNow();
+    expect(approvals.status("approval")).toBe("denied");
+    expect(chat.inputs).toHaveLength(1);
+    expect(await store.getThread("agent-1", "chat-1")).toMatchObject({ job: { status: "cancelled" } });
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingApprovalIds).toBeUndefined();
+  });
+  it("keeps polling responsive, saves progress, and preserves messages received during a job", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Prepare a report")]);
+    let release!: (response: AgentChatResponse) => void;
+    const chat = new FakeAgentChat([
+      () =>
+        new Promise<AgentChatResponse>((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const service = createService(store, graph, chat);
+    expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
+    expect(graph.sent.at(-1)?.text).toContain("background");
+    expect(chat.respondExtensions[0]).toMatchObject({ maxToolSteps: 500, turnTimeoutMs: 300_000 });
+    await chat.progressListeners[0]!({
+      id: "step",
+      phase: "tool_completed",
+      message: "Fetched report data",
+      speech: "",
+    });
+    graph.messages.push(inboundMessage("status", "2026-09-01T02:01:00.000Z", "status"));
+    await service.pollNow();
+    expect(graph.sent.at(-1)?.text).toContain("1 tool steps completed");
+    expect(graph.sent.at(-1)?.text).toContain("Fetched report data");
+    expect(chat.inputs).toHaveLength(1);
+    release(completedResponse("Your report is ready."));
+    await vi.waitFor(async () => expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe("completed"));
+    const thread = await store.getThread("agent-1", "chat-1");
+    expect(thread?.messages.some((message) => message.id === "status")).toBe(true);
+    expect(graph.sent.at(-1)?.text).toBe("Your report is ready.");
+  });
+
+  it("cancels a running job and denies approvals produced after cancellation", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
+    let release!: (response: AgentChatResponse) => void;
+    const chat = new FakeAgentChat([
+      () =>
+        new Promise<AgentChatResponse>((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const approvals = new FakeApprovals([createApproval("late-approval")]);
+    const service = createService(store, graph, chat, approvals);
+    await service.pollNow();
+    graph.messages.push(inboundMessage("cancel", "2026-09-01T02:01:00.000Z", "cancel"));
+    await service.pollNow();
+    expect(chat.signals[0]?.aborted).toBe(true);
+    expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe("cancelled");
+    release(waitingResponse(["late-approval"]));
+    await vi.waitFor(() => expect(approvals.status("late-approval")).toBe("denied"));
+    expect(graph.sent.at(-1)?.text).toContain("stopped this job");
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingApprovalIds).toBeUndefined();
+  });
+
+  it("lets an operator take over without waiting for a long turn", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
+    let release!: (response: AgentChatResponse) => void;
+    const chat = new FakeAgentChat([
+      () =>
+        new Promise<AgentChatResponse>((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const service = createService(store, graph, chat);
+    await service.pollNow();
+    const thread = (await store.getThread("agent-1", "chat-1"))!;
+    await service.setOperatorTakeover(thread.id, true);
+    expect(chat.signals[0]?.aborted).toBe(true);
+    release(completedResponse("This reply should be suppressed."));
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(graph.sent.some((message) => message.text.includes("suppressed"))).toBe(false);
+    expect((await store.getThread("agent-1", "chat-1"))?.operatorTakeover).toBeDefined();
+  });
+
+  it("runs approval continuations in the background with cancellation", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
+    let release!: (response: AgentChatResponse) => void;
+    const chat = new FakeAgentChat([
+      waitingResponse(["approval"]),
+      () =>
+        new Promise<AgentChatResponse>((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const service = createService(store, graph, chat, new FakeApprovals([createApproval("approval")]));
+    await service.pollNow();
+    graph.messages.push(inboundMessage("approve", "2026-09-01T02:01:00.000Z", "approve all"));
+    await service.pollNow();
+    expect(chat.inputs).toHaveLength(2);
+    expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe("running");
+    graph.messages.push(inboundMessage("cancel", "2026-09-01T02:02:00.000Z", "cancel"));
+    await service.pollNow();
+    expect(chat.signals[1]?.aborted).toBe(true);
+    release(completedResponse("Late continuation"));
+  });
+
+  it("marks saved running jobs interrupted after restart and never replays them", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
+    let release!: (response: AgentChatResponse) => void;
+    const first = createService(
+      store,
+      graph,
+      new FakeAgentChat([
+        () =>
+          new Promise<AgentChatResponse>((resolve) => {
+            release = resolve;
+          }),
+      ]),
+    );
+    await first.pollNow();
+    first.stop();
+    const chat = new FakeAgentChat([]);
+    const restarted = createService(store, graph, chat);
+    await restarted.pollNow();
+    expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe("interrupted");
+    expect(chat.inputs).toHaveLength(0);
+    release(completedResponse("Late result"));
+  });
+});
+
 function createService(
   store: MemoryTeamsGatewayStore,
   graph: FakeTeamsGraph,
@@ -1198,23 +1337,37 @@ type AgentChatDecision =
 class FakeAgentChat {
   readonly inputs: unknown[] = [];
   readonly respondExtensions: AgentChatExtension[] = [];
+  readonly signals: Array<AbortSignal | undefined> = [];
+  readonly progressListeners: Array<AgentChatProgressListener | undefined> = [];
   private readonly decisions: AgentChatDecision[];
 
   constructor(decisions: AgentChatDecision[]) {
     this.decisions = decisions;
   }
 
-  async respondWithExtension(input: unknown, extension: AgentChatExtension): Promise<AgentChatResponse> {
+  async respondWithExtension(
+    input: unknown,
+    extension: AgentChatExtension,
+    onProgress?: AgentChatProgressListener,
+    signal?: AbortSignal,
+  ): Promise<AgentChatResponse> {
     this.inputs.push(input);
     this.respondExtensions.push(extension);
+    this.signals.push(signal);
+    this.progressListeners.push(onProgress);
     const decision = this.decisions.shift();
     if (!decision) throw new Error("Unexpected agent turn.");
     return typeof decision === "function" ? await decision(extension) : decision;
   }
 
-  async resumeWithExtension(_approvalId: string, extension?: AgentChatExtension): Promise<AgentChatResponse> {
+  async resumeWithExtension(
+    _approvalId: string,
+    extension?: AgentChatExtension,
+    onProgress?: AgentChatProgressListener,
+    signal?: AbortSignal,
+  ): Promise<AgentChatResponse> {
     if (!extension) throw new Error("Expected the Teams extension when resuming.");
-    return await this.respondWithExtension({}, extension);
+    return await this.respondWithExtension({}, extension, onProgress, signal);
   }
 }
 

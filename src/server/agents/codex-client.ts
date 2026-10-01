@@ -94,7 +94,7 @@ export class CodexClient implements IAgentTurnClient, AgentModelSource {
           ),
           "-",
         ],
-        timeoutMs: 120_000,
+        timeoutMs: input.timeoutMs ?? 120_000,
         cwd: directory,
         stdin: `${createCodexPrompt(input)}${agentTurnAttachmentPrompt(attachments)}`,
         signal: input.signal,

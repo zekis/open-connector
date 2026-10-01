@@ -3,7 +3,12 @@ import type { ConnectionService, ConnectionSummary } from "../../connection-serv
 import type { AgentCredentialService, AgentProvider } from "../agents/agent-credential-service.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { AgentChatExtension, AgentChatService, AgentChatToolActivity } from "../chat/agent-chat-service.ts";
-import type { AgentChatAttachment, AgentChatMessage } from "../chat/agent-chat-types.ts";
+import type {
+  AgentChatAttachment,
+  AgentChatMessage,
+  AgentChatProgress,
+  AgentChatResponse,
+} from "../chat/agent-chat-types.ts";
 import type { ITransitFileService } from "../files/transit-file-store.ts";
 import type { Logger } from "../logger.ts";
 import type {
@@ -13,6 +18,7 @@ import type {
   TeamsGatewayGraphMember,
   TeamsGatewayGraphMessage,
 } from "./teams-gateway-graph.ts";
+import type { TeamsGatewayJobResult } from "./teams-gateway-jobs.ts";
 import type {
   TeamsGatewayAgentMetrics,
   ITeamsGatewayStore,
@@ -31,6 +37,7 @@ import type {
 import { optionalRecord, optionalString } from "../../core/cast.ts";
 import { microsoftTeamsProviderScopes } from "../../providers/microsoft_teams/scopes.ts";
 import { ProviderRequestError } from "../../providers/provider-runtime.ts";
+import { TeamsGatewayJobs } from "./teams-gateway-jobs.ts";
 import { approvalCode, evaluateTeamsOutboundRecipient, isTeamsRecipientAuthorized } from "./teams-gateway-policy.ts";
 
 export interface TeamsGatewayServiceOptions {
@@ -145,6 +152,7 @@ export class TeamsGatewayService {
   private readonly notificationTargets = new Map<string, Map<string, TeamsGatewayNotificationTarget>>();
   private readonly notificationFallbacks = new Set<string>();
   private readonly selfPostedMessageIds = new Map<string, number>();
+  private readonly jobs = new TeamsGatewayJobs();
   private gatewayUserIds = new Set<string>();
   private gatewayEmails = new Set<string>();
   private pollTimer?: ReturnType<typeof setInterval>;
@@ -177,6 +185,11 @@ export class TeamsGatewayService {
         throw new TeamsGatewayError("thread_not_found", `Teams gateway thread not found: ${threadIdValue}.`, 404);
       }
       if (active) {
+        if (thread.job && this.jobs.has(thread.job.id)) {
+          this.jobs.cancel(thread.job.id);
+          thread.job.status = "cancelled";
+          thread.job.finishedAt = this.now().toISOString();
+        }
         for (const approvalId of thread.pendingApprovalIds ?? []) {
           const approval = await this.options.approvals.getActionApproval(approvalId);
           if (approval?.status === "pending") await this.options.approvals.deny(approvalId);
@@ -335,6 +348,13 @@ export class TeamsGatewayService {
         updatedAt: now,
       };
       await this.options.store.setGroup(updated);
+      if (!enabled) {
+        for (const thread of await this.options.store.listThreads(group.agentId, 500)) {
+          const belongs =
+            group.kind === "team" ? thread.teamId === group.externalId : thread.chatId === group.externalId;
+          if (belongs && thread.job) this.jobs.cancel(thread.job.id);
+        }
+      }
       return updated;
     });
   }
@@ -459,6 +479,7 @@ export class TeamsGatewayService {
       updatedAt: now,
     };
     await this.options.store.setAgent(agent);
+    if (!enabled) await this.cancelAgentJobs(agent.id);
     if (enabled) return this.refreshPresence(agent, undefined, true);
     if (existing?.enabled) await this.clearPresence(agent);
     await this.deleteAgentSubscriptions(agent);
@@ -466,6 +487,7 @@ export class TeamsGatewayService {
   }
 
   async deleteAgent(id: string): Promise<boolean> {
+    await this.cancelAgentJobs(id);
     const agent = await this.options.store.getAgent(id);
     if (agent?.enabled) await this.clearPresence(agent);
     if (agent) await this.deleteAgentSubscriptions(agent);
@@ -493,6 +515,7 @@ export class TeamsGatewayService {
   stop(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = undefined;
+    this.jobs.stop();
   }
 
   async pollNow(): Promise<TeamsGatewayPollResult> {
@@ -503,6 +526,7 @@ export class TeamsGatewayService {
     this.polling = true;
     const result: TeamsGatewayPollResult = { agents: 0, chats: 0, messages: 0, errors: 0 };
     try {
+      await this.reconcileInterruptedJobs();
       const agents = (await this.options.store.listAgents()).filter((agent) => agent.enabled);
       result.agents = agents.length;
       const pollable: Array<{ agent: TeamsGatewayAgent; graphContext: TeamsGatewayGraphContext }> = [];
@@ -1219,6 +1243,8 @@ export class TeamsGatewayService {
 
     if (thread.operatorTakeover) return true;
 
+    if (await this.handleJobCommand(graphContext, thread, message.text)) return true;
+
     if (thread.pendingApprovalIds?.length) {
       await this.handleApprovalReply(agent, graphContext, thread, message.text);
       return true;
@@ -1290,31 +1316,239 @@ export class TeamsGatewayService {
     graphContext: TeamsGatewayGraphContext,
     thread: TeamsGatewayThread,
     requirePlan: boolean,
+    approvalId?: string,
   ): Promise<void> {
+    if (thread.job && this.jobs.has(thread.job.id)) return;
+    const jobId = crypto.randomUUID();
+    const timestamp = this.now().toISOString();
+    thread.job = {
+      id: jobId,
+      status: "queued",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedToolCount: 0,
+      toolActivity: [],
+    };
+    await this.options.store.setThread(thread);
     const pendingPlan = thread.pendingPlan;
+    const requestMessages = this.agentContextMessages(agent, thread);
+    const originalRequest = requestMessages.filter((message) => message.role === "user").at(-1)?.content ?? "";
     let proposedPlan: PlanCapture | undefined;
+    let background = false;
     const extension = this.createExtension(agent, graphContext, thread, requirePlan, (plan) => {
       proposedPlan = plan;
     });
-    const response = await this.options.agentChat
-      .respondWithExtension(
-        {
-          messages: this.agentContextMessages(agent, thread),
-          voiceMode: false,
-          timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-          agentProvider: agent.agentProvider,
-        },
-        extension,
-      )
-      .catch((error: unknown) => {
-        // A captured plan is already complete; a later agent failure must not discard it.
-        if (!proposedPlan) throw error;
-        this.options.logger?.warn(
-          { agentId: agent.id, chatId: thread.chatId, err: error },
-          "Teams gateway sending captured plan after agent response failed",
-        );
-        return undefined;
+    extension.maxToolSteps = 500;
+    extension.turnTimeoutMs = 5 * 60_000;
+    const withThread = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const refresh = async (): Promise<T> => {
+        const latest = await this.options.store.getThread(agent.id, thread.chatId);
+        if (!latest || latest.job?.id !== jobId)
+          throw new TeamsGatewayError("job_interrupted", "This job is no longer active.", 409);
+        Object.assign(thread, latest);
+        return operation();
+      };
+      return background ? this.withOperationLock(thread.id, refresh) : refresh();
+    };
+    const result = this.jobs.run(jobId, async (signal) => {
+      const assertActive = async (): Promise<void> => {
+        const [currentAgent, currentThread] = await Promise.all([
+          this.options.store.getAgent(agent.id),
+          this.options.store.getThread(agent.id, thread.chatId),
+        ]);
+        if (
+          signal.aborted ||
+          !currentAgent?.enabled ||
+          !currentThread ||
+          currentThread.operatorTakeover ||
+          currentThread.job?.id !== jobId ||
+          !["queued", "running"].includes(currentThread.job.status) ||
+          !(await this.isConversationEnabled(agent.id, descriptorFromThread(currentThread)))
+        ) {
+          throw new TeamsGatewayError("job_interrupted", "This job was stopped or its conversation was disabled.", 409);
+        }
+      };
+      const beforeAction = extension.beforeConnectorAction;
+      extension.beforeConnectorAction = async (actionId, connectionId, input) => {
+        await assertActive();
+        const currentAgent = await this.requiredAgent(agent.id);
+        if (
+          !currentAgent.toolGrants.some(
+            (grant) => grant.connectionId === connectionId && this.currentToolActionIds(grant).includes(actionId),
+          )
+        ) {
+          throw new TeamsGatewayError(
+            "action_not_available",
+            "This action is no longer granted to the Teams agent.",
+            403,
+          );
+        }
+        return beforeAction?.(actionId, connectionId, input);
+      };
+      const runTool = extension.runTool;
+      extension.runTool = async (name, input) =>
+        withThread(async () => {
+          await assertActive();
+          return runTool(name, input);
+        });
+      await withThread(async () => {
+        await assertActive();
+        thread.job!.status = "running";
+        thread.job!.startedAt = this.now().toISOString();
+        await this.options.store.setThread(thread);
       });
+      const onProgress = async (progress: AgentChatProgress): Promise<void> =>
+        withThread(async () => {
+          if (signal.aborted || thread.operatorTakeover || !["queued", "running"].includes(thread.job!.status)) return;
+          thread.job!.progress = progress.message;
+          thread.job!.updatedAt = this.now().toISOString();
+          if (progress.phase === "tool_completed") {
+            thread.job!.completedToolCount++;
+            if (progress.tool?.activity) thread.job!.toolActivity.push(progress.tool.activity);
+          }
+          await this.options.store.setThread(thread);
+        });
+      return approvalId
+        ? this.options.agentChat.resumeWithExtension(approvalId, extension, onProgress, signal)
+        : this.options.agentChat.respondWithExtension(
+            {
+              messages: requestMessages,
+              voiceMode: false,
+              timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+              agentProvider: agent.agentProvider,
+            },
+            extension,
+            onProgress,
+            signal,
+          );
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const quick = await Promise.race([
+      result,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 250);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    const finish = async (outcome: TeamsGatewayJobResult<AgentChatResponse>): Promise<void> => {
+      try {
+        await withThread(async () => {
+          const job = thread.job!;
+          if (!agent.enabled || thread.operatorTakeover || !["queued", "running"].includes(job.status)) {
+            job.finishedAt ??= this.now().toISOString();
+            await this.options.store.setThread(thread);
+            await this.discardJobApprovals(outcome.value);
+            return;
+          }
+          const currentAgent = await this.options.store.getAgent(agent.id);
+          const enabled =
+            currentAgent?.enabled && (await this.isConversationEnabled(agent.id, descriptorFromThread(thread)));
+          job.finishedAt = this.now().toISOString();
+          job.updatedAt = job.finishedAt;
+          if (outcome.stopReason || !enabled || (outcome.error && !proposedPlan)) {
+            job.status = outcome.stopReason ?? (enabled ? "failed" : "cancelled");
+            await this.discardJobApprovals(outcome.value);
+            await this.options.store.setThread(thread);
+            if (outcome.error) this.logError(outcome.error, "Teams gateway job failed", { agentId: agent.id, jobId });
+            if (enabled)
+              await this.reply(
+                graphContext,
+                thread,
+                job.status === "timed_out"
+                  ? "This job reached its 65-minute execution limit. Completed actions remain recorded; they have not been replayed."
+                  : job.status === "failed"
+                    ? "I couldn’t finish this job. Completed actions remain recorded. Please review the conversation before asking me to try again."
+                    : "This job was stopped. Actions already sent to a connected service may still complete.",
+              );
+            return;
+          }
+          if (outcome.error && proposedPlan) {
+            // A captured plan is already complete; a later agent failure must not discard it.
+            this.options.logger?.warn(
+              { agentId: agent.id, chatId: thread.chatId, err: outcome.error },
+              "Teams gateway sending captured plan after agent response failed",
+            );
+          }
+          job.status = proposedPlan
+            ? "waiting_for_plan"
+            : outcome.value?.status === "waiting_for_approval"
+              ? "waiting_for_approval"
+              : outcome.value?.status === "failed"
+                ? "failed"
+                : "completed";
+          await this.finishAgentTurn(
+            agent,
+            graphContext,
+            thread,
+            requirePlan,
+            proposedPlan,
+            pendingPlan,
+            outcome.value,
+            originalRequest,
+          );
+        });
+      } catch (error) {
+        await this.discardJobApprovals(outcome.value);
+        throw error;
+      } finally {
+        this.jobs.forget(jobId);
+      }
+    };
+    if (quick) await finish(quick);
+    else {
+      background = true;
+      // Register finalization before sending the acknowledgement, so delivery failure cannot strand a job.
+      void result
+        .then(finish)
+        .catch((error: unknown) =>
+          this.logError(error, "Teams gateway job finalization failed", { agentId: agent.id, jobId }),
+        );
+      await this.reply(
+        graphContext,
+        thread,
+        "I’m working on this in the background and will reply here when it’s ready. Send ‘status’ to check progress or ‘cancel’ to stop.",
+      );
+    }
+  }
+
+  private async cancelAgentJobs(agentId: string): Promise<void> {
+    for (const thread of await this.options.store.listThreads(agentId, 500)) {
+      if (thread.job) this.jobs.cancel(thread.job.id);
+    }
+  }
+
+  private async reconcileInterruptedJobs(): Promise<void> {
+    for (const candidate of await this.options.store.listThreads(undefined, 500)) {
+      if (!candidate.job || !["queued", "running"].includes(candidate.job.status) || this.jobs.has(candidate.job.id))
+        continue;
+      await this.withOperationLock(candidate.id, async () => {
+        const thread = await this.options.store.getThread(candidate.agentId, candidate.chatId);
+        if (!thread?.job || !["queued", "running"].includes(thread.job.status) || this.jobs.has(thread.job.id)) return;
+        thread.job.status = "interrupted";
+        thread.job.finishedAt = this.now().toISOString();
+        thread.job.updatedAt = thread.job.finishedAt;
+        await this.options.store.setThread(thread);
+      });
+    }
+  }
+
+  private async discardJobApprovals(response?: AgentChatResponse): Promise<void> {
+    for (const id of response?.approvalIds ?? (response?.approvalId ? [response.approvalId] : [])) {
+      const approval = await this.options.approvals.getActionApproval(id);
+      if (approval?.status === "pending") await this.options.approvals.deny(id);
+    }
+  }
+
+  private async finishAgentTurn(
+    agent: TeamsGatewayAgent,
+    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
+    requirePlan: boolean,
+    proposedPlan: PlanCapture | undefined,
+    pendingPlan: TeamsGatewayPlan | undefined,
+    response: AgentChatResponse | undefined,
+    originalRequest: string,
+  ): Promise<void> {
     if (proposedPlan || (requirePlan && response?.toolActivity.some(isPlanRequiredActivity))) {
       const plan: TeamsGatewayPlan = {
         summary: proposedPlan?.summary ?? thread.messages.at(-1)?.content ?? "Complete the requested work",
@@ -1322,17 +1556,88 @@ export class TeamsGatewayService {
           ? proposedPlan.steps
           : ["Use the enabled provider connections to complete the request."],
         originalRequest: pendingPlan
-          ? `${pendingPlan.originalRequest}\n\nFollow-up from the user: ${thread.messages.filter((item) => item.role === "user").at(-1)?.content ?? ""}`
-          : (thread.messages.filter((item) => item.role === "user").at(-1)?.content ?? ""),
+          ? `${pendingPlan.originalRequest}\n\nFollow-up from the user: ${originalRequest}`
+          : originalRequest,
         createdAt: this.now().toISOString(),
       };
       thread.pendingPlan = plan;
+      thread.job!.status = "waiting_for_plan";
       const sent = await this.reply(graphContext, thread, formatPlan(plan));
       thread.pendingPlan = { ...plan, messageId: sent.id };
       await this.options.store.setThread(thread);
       return;
     }
     if (response) await this.applyAgentResponse(graphContext, thread, response);
+  }
+
+  private async handleJobCommand(
+    graphContext: TeamsGatewayGraphContext,
+    thread: TeamsGatewayThread,
+    text: string,
+  ): Promise<boolean> {
+    const command = text.trim().toLowerCase();
+    const job = thread.job;
+    if (!job) return false;
+    if (["queued", "running"].includes(job.status) && !this.jobs.has(job.id)) {
+      job.status = "interrupted";
+      job.finishedAt = this.now().toISOString();
+      job.updatedAt = job.finishedAt;
+      await this.options.store.setThread(thread);
+    }
+    if (command === "status" || command === "job status") {
+      await this.reply(
+        graphContext,
+        thread,
+        `Job status: ${job.status.replaceAll("_", " ")}. ${job.completedToolCount} tool steps completed.${job.progress ? `\nLatest progress: ${job.progress}` : ""}${job.status === "interrupted" ? "\nThe runtime restarted or stopped. This job was not automatically replayed." : ""}`,
+      );
+      return true;
+    }
+    if (
+      ["waiting_for_plan", "waiting_for_approval"].includes(job.status) &&
+      ["cancel", "cancel job", "stop"].includes(command)
+    ) {
+      for (const id of thread.pendingApprovalIds ?? []) {
+        const approval = await this.options.approvals.getActionApproval(id);
+        if (approval?.status === "pending") await this.options.approvals.deny(id);
+      }
+      thread.pendingPlan = undefined;
+      thread.pendingApprovalIds = undefined;
+      thread.pendingApprovalMessageId = undefined;
+      job.status = "cancelled";
+      job.finishedAt = this.now().toISOString();
+      job.updatedAt = job.finishedAt;
+      await this.reply(graphContext, thread, "I’ve cancelled this job and cleared its pending plan or approvals.");
+      return true;
+    }
+    if (["queued", "running"].includes(job.status)) {
+      if (["cancel", "cancel job", "stop"].includes(command)) {
+        this.jobs.cancel(job.id);
+        job.status = "cancelled";
+        job.finishedAt = this.now().toISOString();
+        job.updatedAt = job.finishedAt;
+        await this.reply(
+          graphContext,
+          thread,
+          "I’ve stopped this job. Actions already sent to a connected service may still complete.",
+        );
+      } else {
+        await this.reply(
+          graphContext,
+          thread,
+          "There’s already a job running in this conversation. Send ‘status’ for progress, or ‘cancel’ before starting another request.",
+        );
+      }
+      return true;
+    }
+    if (this.jobs.has(job.id)) {
+      await this.reply(
+        graphContext,
+        thread,
+        "The previous job is still stopping. Please wait before starting another request.",
+      );
+      return true;
+    }
+    return false;
   }
 
   private agentContextMessages(agent: TeamsGatewayAgent, thread: TeamsGatewayThread): AgentChatMessage[] {
@@ -1612,11 +1917,9 @@ export class TeamsGatewayService {
       await this.reply(graphContext, thread, approvalInstructions(remaining));
       return;
     }
-    const response = await this.options.agentChat.resumeWithExtension(
-      ids[0]!,
-      this.createExtension(agent, graphContext, thread, false, () => {}),
-    );
-    await this.applyAgentResponse(graphContext, thread, response);
+    thread.pendingApprovalIds = undefined;
+    thread.pendingApprovalMessageId = undefined;
+    await this.runAgentTurn(agent, graphContext, thread, false, ids[0]!);
   }
 
   private async resumeResolvedApprovals(
@@ -1644,11 +1947,19 @@ export class TeamsGatewayService {
       }
       if (approvals.some((approval) => approval?.status === "pending")) continue;
       try {
-        const response = await this.options.agentChat.resumeWithExtension(
-          thread.pendingApprovalIds![0]!,
-          this.createExtension(agent, graphContext, thread, false, () => {}),
-        );
-        await this.applyAgentResponse(graphContext, thread, response);
+        await this.withOperationLock(thread.id, async () => {
+          const current = await this.options.store.getThread(agent.id, thread.chatId);
+          if (
+            !current?.pendingApprovalIds?.length ||
+            current.operatorTakeover ||
+            (current.job && this.jobs.has(current.job.id))
+          )
+            return;
+          const id = current.pendingApprovalIds[0]!;
+          current.pendingApprovalIds = undefined;
+          current.pendingApprovalMessageId = undefined;
+          await this.runAgentTurn(agent, graphContext, current, false, id);
+        });
       } catch (error) {
         this.logError(error, "Teams gateway approval resume failed", { agentId: agent.id, threadId: thread.id });
       }
@@ -1684,7 +1995,7 @@ export class TeamsGatewayService {
   ): Promise<boolean> {
     return this.withOperationLock(candidate.id, async () => {
       const thread = await this.options.store.getThread(agent.id, candidate.chatId);
-      if (!thread?.pendingPlan || thread.operatorTakeover) return false;
+      if (!thread?.pendingPlan || thread.operatorTakeover || (thread.job && this.jobs.has(thread.job.id))) return false;
       const messageId =
         thread.pendingPlan.messageId ?? thread.messages.filter((message) => message.role === "assistant").at(-1)?.id;
       if (!messageId || !(await this.hasAuthorizedPlanLike(agent, graphContext, thread, messageId))) return false;
