@@ -1074,6 +1074,121 @@ describe("TeamsGatewayService", () => {
 });
 
 describe("Teams gateway background jobs", () => {
+  it("posts one delay notice after 30 seconds and still delivers the final result", async () => {
+    vi.useFakeTimers();
+    const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+    const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Prepare a report")]);
+    let release!: (response: AgentChatResponse) => void;
+    const chat = new FakeAgentChat([
+      () =>
+        new Promise<AgentChatResponse>((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const service = createService(store, graph, chat);
+    try {
+      const poll = service.pollNow();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(await poll).toMatchObject({ messages: 1, errors: 0 });
+      await vi.advanceTimersByTimeAsync(29_749);
+      expect(graph.sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(graph.sent).toEqual([
+        { chatId: "chat-1", text: "This is taking a bit longer than expected. I’ll reply here when it’s ready." },
+      ]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(graph.sent).toHaveLength(1);
+      release(completedResponse("Your report is ready."));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(graph.sent.at(-1)?.text).toBe("Your report is ready.");
+      expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe("completed");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(graph.sent).toHaveLength(2);
+    } finally {
+      service.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["completed", "waiting_for_approval", "failed"])(
+    "does not post a delay notice when a job becomes %s within 30 seconds",
+    async (status) => {
+      vi.useFakeTimers();
+      const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
+      const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Prepare a report")]);
+      let release!: (response: AgentChatResponse) => void;
+      let fail!: (error: Error) => void;
+      const chat = new FakeAgentChat([
+        () =>
+          new Promise<AgentChatResponse>((resolve, reject) => {
+            release = resolve;
+            fail = reject;
+          }),
+      ]);
+      const service = createService(store, graph, chat, new FakeApprovals([createApproval("approval")]));
+      try {
+        const poll = service.pollNow();
+        await vi.advanceTimersByTimeAsync(250);
+        await poll;
+        await vi.advanceTimersByTimeAsync(750);
+        if (status === "failed") fail(new Error("Agent failed"));
+        else
+          release(status === "completed" ? completedResponse("Your report is ready.") : waitingResponse(["approval"]));
+        await vi.advanceTimersByTimeAsync(0);
+        expect((await store.getThread("agent-1", "chat-1"))?.job?.status).toBe(status);
+        expect(graph.sent).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(graph.sent).toHaveLength(1);
+        expect(graph.sent[0]?.text).not.toContain("longer than expected");
+      } finally {
+        service.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["cancel", "operator takeover", "disabled agent", "shutdown"])(
+    "suppresses a delay notice after %s even if the model has not returned",
+    async (reason) => {
+      vi.useFakeTimers();
+      const agent = createAgent({ confirmBeforeTools: false });
+      const store = new MemoryTeamsGatewayStore([agent]);
+      const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Prepare a report")]);
+      let release!: (response: AgentChatResponse) => void;
+      const chat = new FakeAgentChat([
+        () =>
+          new Promise<AgentChatResponse>((resolve) => {
+            release = resolve;
+          }),
+      ]);
+      const service = createService(store, graph, chat);
+      try {
+        const poll = service.pollNow();
+        await vi.advanceTimersByTimeAsync(250);
+        await poll;
+        if (reason === "cancel") {
+          graph.messages.push(inboundMessage("cancel", "2026-09-01T02:01:00.000Z", "cancel"));
+          await service.pollNow();
+        } else if (reason === "operator takeover") {
+          const thread = (await store.getThread("agent-1", "chat-1"))!;
+          await service.setOperatorTakeover(thread.id, true);
+        } else if (reason === "disabled agent") {
+          await store.setAgent({ ...agent, enabled: false });
+        } else {
+          service.stop();
+        }
+        const sentCount = graph.sent.length;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(graph.sent).toHaveLength(sentCount);
+        release(completedResponse("Late result"));
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        service.stop();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("cancels a job paused for approval without executing its continuation", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent({ confirmBeforeTools: false })]);
     const graph = new FakeTeamsGraph([inboundMessage("request", "2026-09-01T01:00:00.000Z", "Do the work")]);
@@ -1100,7 +1215,7 @@ describe("Teams gateway background jobs", () => {
     ]);
     const service = createService(store, graph, chat);
     expect(await service.pollNow()).toMatchObject({ messages: 1, errors: 0 });
-    expect(graph.sent.at(-1)?.text).toContain("background");
+    expect(graph.sent).toEqual([]);
     expect(chat.respondExtensions[0]).toMatchObject({ maxToolSteps: 500, turnTimeoutMs: 300_000 });
     await chat.progressListeners[0]!({
       id: "step",

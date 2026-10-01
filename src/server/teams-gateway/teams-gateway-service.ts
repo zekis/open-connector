@@ -139,6 +139,7 @@ const maxAttachmentsPerMessage = 10;
 const maxConcurrentAgents = 4;
 const maxConcurrentChats = 4;
 const defaultPollIntervalMs = 30_000;
+const longRunningNoticeDelayMs = 30_000;
 const presenceRefreshIntervalMs = 4 * 60_000;
 const selfPostedRetentionMs = 6 * 60 * 60_000;
 const subscriptionLifetimeMs = 55 * 60_000;
@@ -1408,19 +1409,46 @@ export class TeamsGatewayService {
           }
           await this.options.store.setThread(thread);
         });
-      return approvalId
-        ? this.options.agentChat.resumeWithExtension(approvalId, extension, onProgress, signal)
-        : this.options.agentChat.respondWithExtension(
-            {
-              messages: requestMessages,
-              voiceMode: false,
-              timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-              agentProvider: agent.agentProvider,
-            },
-            extension,
-            onProgress,
-            signal,
+      let completed = false;
+      const noticeTimer = setTimeout(() => {
+        if (signal.aborted || completed) return;
+        void withThread(async () => {
+          if (signal.aborted || completed || thread.operatorTakeover || thread.job!.status !== "running") return;
+          const currentAgent = await this.options.store.getAgent(agent.id);
+          if (!currentAgent?.enabled || !(await this.isConversationEnabled(agent.id, descriptorFromThread(thread))))
+            return;
+          if (signal.aborted || completed) return;
+          await this.reply(
+            graphContext,
+            thread,
+            "This is taking a bit longer than expected. I’ll reply here when it’s ready.",
           );
+        }).catch((error: unknown) =>
+          this.logError(error, "Teams gateway long-running notice failed", { agentId: agent.id, jobId }),
+        );
+      }, longRunningNoticeDelayMs);
+      noticeTimer.unref?.();
+      const clearNoticeTimer = (): void => clearTimeout(noticeTimer);
+      signal.addEventListener("abort", clearNoticeTimer, { once: true });
+      try {
+        return await (approvalId
+          ? this.options.agentChat.resumeWithExtension(approvalId, extension, onProgress, signal)
+          : this.options.agentChat.respondWithExtension(
+              {
+                messages: requestMessages,
+                voiceMode: false,
+                timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+                agentProvider: agent.agentProvider,
+              },
+              extension,
+              onProgress,
+              signal,
+            ));
+      } finally {
+        completed = true;
+        clearNoticeTimer();
+        signal.removeEventListener("abort", clearNoticeTimer);
+      }
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const quick = await Promise.race([
@@ -1497,17 +1525,11 @@ export class TeamsGatewayService {
     if (quick) await finish(quick);
     else {
       background = true;
-      // Register finalization before sending the acknowledgement, so delivery failure cannot strand a job.
       void result
         .then(finish)
         .catch((error: unknown) =>
           this.logError(error, "Teams gateway job finalization failed", { agentId: agent.id, jobId }),
         );
-      await this.reply(
-        graphContext,
-        thread,
-        "I’m working on this in the background and will reply here when it’s ready. Send ‘status’ to check progress or ‘cancel’ to stop.",
-      );
     }
   }
 

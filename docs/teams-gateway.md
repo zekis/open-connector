@@ -81,8 +81,11 @@ after upgrading to attachment support so the new file scopes are granted.
 
 Teams agents can run jobs lasting 30–60 minutes in the Node/Docker runtime. Each execution has a
 65-minute deadline, a 500-tool-step budget, and a five-minute deadline for each model call. Jobs that
-do not finish within 250 milliseconds receive a background-work acknowledgement; Graph polling and
-other conversations continue while the job runs. Up to four jobs execute at once, with additional
+do not finish within 250 milliseconds continue in the background; Graph polling and
+other conversations continue while the job runs. After 30 seconds of execution, a job still running
+posts one “This is taking a bit longer than expected” message in the same conversation. Jobs that
+finish or pause for approval sooner stay quiet until their result or approval request is ready.
+Up to four jobs execute at once, with additional
 jobs queued. The execution deadline starts when a queued job begins running.
 
 Send `status` or `job status` in the same conversation to see the saved state, completed tool count,
