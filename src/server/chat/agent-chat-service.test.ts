@@ -56,6 +56,63 @@ const connection: ConnectionSummary = {
 };
 
 describe("AgentChatService", () => {
+  it("does not execute a tool returned by the empty-response retry", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "final" },
+      { kind: "tool_call", toolName: "send_message", arguments: {} },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+    let toolCalls = 0;
+    await expect(
+      service.respondWithExtension(
+        { messages: [{ role: "user", content: "hello" }] },
+        {
+          systemPrompt: "Reply briefly.",
+          tools: [{ name: "send_message", description: "Send a message", inputSchema: { type: "object" } }],
+          runTool: async () => {
+            toolCalls++;
+            return undefined;
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "invalid_agent_response" });
+    expect(toolCalls).toBe(0);
+  });
+  it("recovers an empty final reply without repeating a completed host tool", async () => {
+    const claude = new FakeClaudeCodeClient([
+      { kind: "tool_call", toolName: "propose_plan", arguments: {} },
+      { kind: "final" },
+      { kind: "final", text: "Waiting for your confirmation." },
+    ]);
+    const service = createService(claude, new FakeActionRunner());
+    let toolCalls = 0;
+    const response = await service.respondWithExtension(
+      { messages: [{ role: "user", content: "Check the assets" }] },
+      {
+        systemPrompt: "Propose a plan first.",
+        tools: [{ name: "propose_plan", description: "Propose a plan", inputSchema: { type: "object" } }],
+        runTool: async () => {
+          toolCalls++;
+          return { id: "plan", type: "action", label: "Plan", ok: true, input: {}, output: { plan: "Read assets" } };
+        },
+      },
+    );
+    expect(response.message.content).toBe("Waiting for your confirmation.");
+    expect(toolCalls).toBe(1);
+    expect(claude.inputs).toHaveLength(3);
+    expect(claude.inputs[2]?.prompt).toContain("Read assets");
+    expect(claude.inputs[2]?.prompt).toContain("Your previous final decision had no reply text");
+  });
+
+  it("stops after one retry when final replies remain empty", async () => {
+    const claude = new FakeClaudeCodeClient([{ kind: "final", text: " " }, { kind: "final" }]);
+    const service = createService(claude, new FakeActionRunner());
+    await expect(service.respond({ messages: [{ role: "user", content: "hello" }] })).rejects.toMatchObject({
+      code: "invalid_agent_response",
+    });
+    expect(claude.inputs).toHaveLength(2);
+  });
+
   it("feeds created card details back to the same investigator before its next tool decision", async () => {
     const claude = new FakeClaudeCodeClient([
       { kind: "tool_call", toolName: "synapse_add_artifacts", arguments: {} },

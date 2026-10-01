@@ -366,6 +366,27 @@ describe("TeamsGatewayService", () => {
     });
   });
 
+  it("delivers a captured plan when the following agent response fails", async () => {
+    const store = new MemoryTeamsGatewayStore([createAgent()]);
+    const graph = new FakeTeamsGraph([
+      inboundMessage("message-1", "2026-09-01T01:00:00.000Z", "Check tomorrow's calendar."),
+    ]);
+    const chat = new FakeAgentChat([
+      async (extension) => {
+        await extension.runTool("propose_teams_plan", {
+          summary: "Check tomorrow's calendar",
+          steps: ["Read tomorrow's events", "Summarize the schedule"],
+        });
+        throw new Error("The agent returned a final chat decision without text.");
+      },
+    ]);
+    const service = createService(store, graph, chat);
+    await service.pollNow();
+    expect(graph.sent).toHaveLength(1);
+    expect(graph.sent[0]?.text).toContain("Plan: Check tomorrow's calendar");
+    expect((await store.getThread("agent-1", "chat-1"))?.pendingPlan).toMatchObject({ messageId: "sent-1" });
+  });
+
   it("pauses provider work for a plan and continues after an authorized thumbs-up reaction", async () => {
     const store = new MemoryTeamsGatewayStore([createAgent()]);
     const graph = new FakeTeamsGraph([

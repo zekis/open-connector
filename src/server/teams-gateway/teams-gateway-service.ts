@@ -1296,16 +1296,26 @@ export class TeamsGatewayService {
     const extension = this.createExtension(agent, graphContext, thread, requirePlan, (plan) => {
       proposedPlan = plan;
     });
-    const response = await this.options.agentChat.respondWithExtension(
-      {
-        messages: this.agentContextMessages(agent, thread),
-        voiceMode: false,
-        timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-        agentProvider: agent.agentProvider,
-      },
-      extension,
-    );
-    if (proposedPlan || (requirePlan && response.toolActivity.some(isPlanRequiredActivity))) {
+    const response = await this.options.agentChat
+      .respondWithExtension(
+        {
+          messages: this.agentContextMessages(agent, thread),
+          voiceMode: false,
+          timeZone: this.options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+          agentProvider: agent.agentProvider,
+        },
+        extension,
+      )
+      .catch((error: unknown) => {
+        // A captured plan is already complete; a later agent failure must not discard it.
+        if (!proposedPlan) throw error;
+        this.options.logger?.warn(
+          { agentId: agent.id, chatId: thread.chatId, err: error },
+          "Teams gateway sending captured plan after agent response failed",
+        );
+        return undefined;
+      });
+    if (proposedPlan || (requirePlan && response?.toolActivity.some(isPlanRequiredActivity))) {
       const plan: TeamsGatewayPlan = {
         summary: proposedPlan?.summary ?? thread.messages.at(-1)?.content ?? "Complete the requested work",
         steps: proposedPlan?.steps.length
@@ -1322,7 +1332,7 @@ export class TeamsGatewayService {
       await this.options.store.setThread(thread);
       return;
     }
-    await this.applyAgentResponse(graphContext, thread, response);
+    if (response) await this.applyAgentResponse(graphContext, thread, response);
   }
 
   private agentContextMessages(agent: TeamsGatewayAgent, thread: TeamsGatewayThread): AgentChatMessage[] {

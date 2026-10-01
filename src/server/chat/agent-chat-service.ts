@@ -473,7 +473,7 @@ export class AgentChatService implements IAgentChatService {
     try {
       for (let step = 0; step <= toolStepLimit; step++) {
         assertChatNotCancelled(options.signal);
-        const result = await prepared.completeTurn({
+        const turn: AgentTurnRequest = {
           model: prepared.model,
           effort: "medium",
           systemPrompt: createSystemPrompt(options.voiceMode, options.extension?.systemPrompt),
@@ -489,8 +489,22 @@ export class AgentChatService implements IAgentChatService {
           outputSchema: createClaudeAgentDecisionSchema(availableTools.map((tool) => tool.name)),
           attachments,
           signal: options.signal,
-        });
-        const decision = readClaudeAgentDecision(result.structuredOutput);
+        };
+        let result = await prepared.completeTurn(turn);
+        let decision = readClaudeAgentDecision(result.structuredOutput);
+        if (decision.kind === "final" && !decision.text?.trim() && queuedApprovalIds.length === 0) {
+          assertChatNotCancelled(options.signal);
+          result = await prepared.completeTurn({
+            ...turn,
+            prompt: `${turn.prompt}\n\nYour previous final decision had no reply text. Return a nonempty text field with your final answer. Preserve the completed tool activity above; do not repeat completed actions.`,
+          });
+          decision = readClaudeAgentDecision(result.structuredOutput);
+          if (decision.kind !== "final") {
+            throw new ClaudeAgentDecisionError(
+              "The agent did not return a final reply after the empty-response retry.",
+            );
+          }
+        }
         if (decision.kind === "final") {
           if (queuedApprovalIds.length > 0) {
             return await this.pauseForApprovals(

@@ -19,9 +19,12 @@ export function createClaudeAgentDecisionSchema(toolNames: readonly string[]): J
       },
       text: {
         type: "string",
+        minLength: 1,
+        pattern: "\\S",
+        description: "The final reply, or a brief explanation of the next tool call. Must contain non-whitespace text.",
       },
     },
-    required: ["kind"],
+    required: ["kind", "text"],
     additionalProperties: false,
   };
 }
