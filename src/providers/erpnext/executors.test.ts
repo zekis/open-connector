@@ -125,6 +125,39 @@ describe("ERPNext attachments", () => {
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70, 255]));
   });
 
+  it.each([404, 417])("retries early v13's Invalid Method response (HTTP %s)", async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            exc_type: "ValidationError",
+            _server_messages: JSON.stringify([JSON.stringify({ message: "Invalid Method", raise_exception: 1 })]),
+          },
+          { status },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("%PDF-resume", { headers: { "content-type": "application/pdf" } }));
+    vi.stubGlobal("fetch", fetcher);
+    const fileUrl = "/private/files/Applicant Resume.pdf";
+    const result = await executors["erpnext.download_file"]!({ file_url: fileUrl }, createContext());
+    expect(result.ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const url = new URL(String(fetcher.mock.calls[1]![0]));
+    expect(url.pathname).toBe("/api/method/frappe.core.doctype.file.file.download_file");
+    expect(url.searchParams.get("file_url")).toBe(fileUrl);
+  });
+
+  it("does not loop if both download endpoints report Invalid Method", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ message: "Invalid Method" }, { status: 417 }));
+    vi.stubGlobal("fetch", fetcher);
+    const context = createContext();
+    const result = await executors["erpnext.download_file"]!({ file_url: "/private/files/resume.pdf" }, context);
+    expect(result.error?.message).toBe("Invalid Method");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(context.transitFiles!.create).not.toHaveBeenCalled();
+  });
+
   it.each([403, 404, 417, 429])("does not retry ordinary errors and exposes their detail (HTTP %s)", async (status) => {
     const message = status === 403 ? "Not permitted to read this file" : "The requested file is unavailable";
     const fetcher = vi.fn<typeof fetch>(async () =>

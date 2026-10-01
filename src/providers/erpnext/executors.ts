@@ -339,8 +339,10 @@ async function requestErpnextDownload(
   if (
     method === erpnextDownloadMethod &&
     (response.status === 404 || response.status === 417) &&
-    message.includes("frappe.handler") &&
-    (message.includes("Failed to get method for command") || /has no attribute ['"]download_file['"]/.test(message))
+    (message === "Invalid Method" ||
+      (message.includes("frappe.handler") &&
+        (message.includes("Failed to get method for command") ||
+          /has no attribute ['"]download_file['"]/.test(message))))
   ) {
     return requestErpnextDownload(fileUrl, context, erpnextLegacyDownloadMethod);
   }
