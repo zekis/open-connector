@@ -29,6 +29,8 @@ const erpnextLoggedUserMethod = "frappe.auth.get_logged_user";
 const erpnextGetCountMethod = "frappe.client.get_count";
 const erpnextGetValueMethod = "frappe.client.get_value";
 const erpnextSetValueMethod = "frappe.client.set_value";
+const erpnextDownloadMethod = "frappe.handler.download_file";
+const erpnextLegacyDownloadMethod = "frappe.core.doctype.file.file.download_file";
 
 type ErpnextRequestPhase = "validate" | "execute";
 
@@ -86,19 +88,7 @@ const erpnextActionHandlers: Record<string, ErpnextActionHandler> = {
     if (!/^\/(?:private\/)?files\/[^/\\\p{Cc}]+$/u.test(fileUrl) || name === "." || name === "..") {
       throw new ProviderRequestError(400, "file_url must be an attachment path under /files/ or /private/files/.");
     }
-    // Send the path as data to Frappe's permission-checked method, never as an egress URL.
-    const url = buildUrl(context.baseUrl, buildMethodPath("frappe.handler.download_file"), { file_url: fileUrl });
-    const headers = buildHeaders(context.apiKey, context.apiSecret, false);
-    headers.set("accept", "*/*");
-    const response = await context.fetcher(url, { method: "GET", headers, signal: context.signal, redirect: "error" });
-    if (!response.ok) {
-      const payload = await readProviderJsonBody(response, {
-        emptyBody: {},
-        invalidJsonMessage: "Invalid ERPNext download error response",
-        invalidJsonFallback: (text) => ({ message: text }),
-      });
-      throw createErpnextError(response.status, payload, "execute");
-    }
+    const response = await requestErpnextDownload(fileUrl, context);
     const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
     const bytes = await readBoundedResponseBytes(response, {
       maxBytes: context.transitFiles.maxBytes,
@@ -326,6 +316,37 @@ export const credentialValidators: CredentialValidators = {
   },
 };
 
+async function requestErpnextDownload(
+  fileUrl: string,
+  context: ErpnextActionContext,
+  method: string = erpnextDownloadMethod,
+): Promise<Response> {
+  // Keep file_url as data; Frappe resolves the File record and checks its read permission.
+  const url = buildUrl(context.baseUrl, buildMethodPath(method), { file_url: fileUrl });
+  const headers = buildHeaders(context.apiKey, context.apiSecret, false);
+  headers.set("accept", "*/*");
+  const response = await context.fetcher(url, { method: "GET", headers, signal: context.signal, redirect: "error" });
+  if (response.ok) return response;
+
+  const payload = await readProviderJsonBody(response, {
+    emptyBody: {},
+    invalidJsonMessage: "Invalid ERPNext download error response",
+    invalidJsonFallback: (text) => ({ message: text }),
+  });
+  const message = extractErpnextErrorMessage(payload) ?? "";
+  // Frappe v13 exposes the method on the File module. Retry only method lookup
+  // failures, never permission errors, missing files, or other validation errors.
+  if (
+    method === erpnextDownloadMethod &&
+    (response.status === 404 || response.status === 417) &&
+    message.includes("frappe.handler") &&
+    (message.includes("Failed to get method for command") || /has no attribute ['"]download_file['"]/.test(message))
+  ) {
+    return requestErpnextDownload(fileUrl, context, erpnextLegacyDownloadMethod);
+  }
+  throw createErpnextError(response.status, payload, "execute");
+}
+
 async function requestErpnext(input: ErpnextRequestOptions): Promise<unknown> {
   const url = buildUrl(input.baseUrl, input.path, input.query);
   let response: Response;
@@ -451,16 +472,13 @@ function extractErpnextErrorMessage(payload: unknown): string | undefined {
     return undefined;
   }
 
-  const directMessage =
-    optionalString(record.exception) ??
-    optionalString(record.exc_type) ??
+  return (
+    parseServerMessages(optionalString(record._server_messages)) ??
     optionalString(record._error_message) ??
-    optionalString(record.message);
-  if (directMessage) {
-    return directMessage;
-  }
-
-  return parseServerMessages(optionalString(record._server_messages));
+    optionalString(record.message) ??
+    optionalString(record.exception) ??
+    optionalString(record.exc_type)
+  );
 }
 
 function parseServerMessages(value: string | undefined): string | undefined {

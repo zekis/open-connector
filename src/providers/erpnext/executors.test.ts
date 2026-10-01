@@ -93,6 +93,80 @@ describe("ERPNext attachments", () => {
     expect(url.searchParams.get("limit_page_length")).toBe("10");
   });
 
+  it.each([404, 417])("uses the v13 download method after a method lookup failure (HTTP %s)", async (status) => {
+    const message =
+      "Failed to get method for command frappe.handler.download_file with module 'frappe.handler' has no attribute 'download_file'";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { exc_type: "ValidationError", _server_messages: JSON.stringify([JSON.stringify({ message })]) },
+          { status },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([37, 80, 68, 70, 255]), { headers: { "content-type": "application/pdf" } }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const context = createContext();
+    const fileUrl = "/private/files/Applicant  Résumé & CV.pdf";
+
+    const result = await executors["erpnext.download_file"]!({ file_url: fileUrl }, context);
+
+    expect(result.ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const [url, init] = fetcher.mock.calls[1]!;
+    expect(new URL(String(url)).pathname).toBe("/api/method/frappe.core.doctype.file.file.download_file");
+    expect(new URL(String(url)).searchParams.get("file_url")).toBe(fileUrl);
+    expect(new Headers(init?.headers).get("authorization")).toBe("token key:secret");
+    expect(init?.signal).toBe(context.signal);
+    expect(init?.redirect).toBe("error");
+    const file = vi.mocked(context.transitFiles!.create).mock.calls[0]![0];
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([37, 80, 68, 70, 255]));
+  });
+
+  it.each([403, 404, 417, 429])("does not retry ordinary errors and exposes their detail (HTTP %s)", async (status) => {
+    const message = status === 403 ? "Not permitted to read this file" : "The requested file is unavailable";
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        {
+          exc_type: "ValidationError",
+          _server_messages: JSON.stringify([JSON.stringify({ message })]),
+        },
+        { status },
+      ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const context = createContext();
+    const result = await executors["erpnext.download_file"]!({ file_url: "/private/files/resume.pdf" }, context);
+    expect(result.error?.message).toBe(message);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(context.transitFiles!.create).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a legacy endpoint failure without retrying again", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            exception:
+              "Failed to get method for command frappe.handler.download_file with module 'frappe.handler' has no attribute 'download_file'",
+          },
+          { status: 417 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ exception: "FileNotFoundError: File not found on disk" }, { status: 500 }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const context = createContext();
+    const result = await executors["erpnext.download_file"]!({ file_url: "/private/files/resume.pdf" }, context);
+    expect(result.error?.message).toBe("FileNotFoundError: File not found on disk");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(context.transitFiles!.create).not.toHaveBeenCalled();
+  });
+
   it("preserves Frappe permission errors without storing the response", async () => {
     vi.stubGlobal(
       "fetch",
