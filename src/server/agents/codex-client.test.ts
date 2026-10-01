@@ -78,8 +78,12 @@ describe("CodexClient", () => {
     await expect(access(runner.input!.cwd!)).rejects.toThrow();
   });
 
-  it("lists the current recommended subscription models", async () => {
+  it("lists current subscription models and retains previous selections", async () => {
     await expect(new CodexClient(new FakeCodexCommandRunner([])).listModels()).resolves.toEqual([
+      { id: "gpt-6-astra", displayName: "GPT-6 Astra" },
+      { id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol" },
+      { id: "gpt-6-sol", displayName: "GPT-6 Sol" },
+      { id: "gpt-6-luna", displayName: "GPT-6 Luna" },
       { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" },
       { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
       { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },

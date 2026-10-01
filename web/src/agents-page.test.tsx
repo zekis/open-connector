@@ -14,10 +14,10 @@ describe("AgentsPage", () => {
             agentSettings: [{ provider: "claude_code", model: "opus" }],
             agentModels: {
               claude_code: [
-                { id: "opus", displayName: "Opus 5" },
-                { id: "sonnet", displayName: "Sonnet 5" },
+                { id: "opus", displayName: "Claude Opus (latest)" },
+                { id: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5" },
               ],
-              openai_codex: [{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }],
+              openai_codex: [{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol" }],
             },
           }}
           onRefresh={() => {}}
@@ -33,12 +33,12 @@ describe("AgentsPage", () => {
     expect(html).toContain("Claude subscription OAuth");
     expect(html).toContain("Ready for Flows");
     expect(html).toContain("Agent model");
-    expect(html).toContain("Opus 5");
-    expect(html).toContain("Sonnet 5");
+    expect(html).toContain("Claude Opus (latest)");
+    expect(html).toContain("Claude Sonnet 5.5");
     expect(html).toContain('value="opus" selected=""');
     expect(html).toContain("codex login");
     expect(html).toContain("Verify local login");
-    expect(html).toContain("GPT-5.6 Sol");
+    expect(html).toContain("GPT-6.1 Sol");
     expect(html).toContain('href="/providers"');
   });
 });

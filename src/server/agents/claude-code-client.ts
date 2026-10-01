@@ -38,6 +38,19 @@ const maxCommandOutputBytes = 4 * 1024 * 1024;
 const maxPipedPromptBytes = 8 * 1024 * 1024;
 const fileBackedPromptMaxTurns = "8";
 const maximumTransientTurnAttempts = 2;
+// Explicit versions and rolling aliases supported by Claude Code's --model option.
+// https://code.claude.com/docs/en/model-config
+const claudeModels: AgentModelOption[] = [
+  { id: "best", displayName: "Claude Best available" },
+  { id: "fable", displayName: "Claude Fable (latest)" },
+  { id: "opus", displayName: "Claude Opus (latest)" },
+  { id: "sonnet", displayName: "Claude Sonnet (latest)" },
+  { id: "haiku", displayName: "Claude Haiku (latest)" },
+  { id: "claude-fable-5-1", displayName: "Claude Fable 5.1" },
+  { id: "claude-opus-5-5", displayName: "Claude Opus 5.5" },
+  { id: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5" },
+  { id: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5" },
+];
 
 interface ClaudeCodePromptTransport {
   stdin?: string;
@@ -69,11 +82,7 @@ export class ClaudeCodeClient implements IClaudeCodeClient {
   }
 
   async listModels(): Promise<AgentModelOption[]> {
-    const result = await this.runner.run({ args: ["--help"], oauthToken: "", timeoutMs: 15_000 });
-    if (result.exitCode !== 0) {
-      throw commandError("claude_models_unavailable", "Claude Code could not list Anthropic models.", result);
-    }
-    return parseModelOptions(result.stdout);
+    return structuredClone(claudeModels);
   }
 
   async completeTurn(input: ClaudeCodeTurnInput): Promise<ClaudeCodeTurnResult> {
@@ -349,23 +358,6 @@ function tryParseJsonRecord(value: string): Record<string, unknown> | undefined 
   } catch {
     return undefined;
   }
-}
-
-function parseModelOptions(help: string): AgentModelOption[] {
-  const modelSection = help.match(/--model <model>([\s\S]*?)(?:\n\s+-n, --name|\nCommands:)/)?.[1] ?? "";
-  const identifiers = [...modelSection.matchAll(/'([a-z][a-z0-9_-]*)'/g)].map((match) => match[1]!);
-  const aliases = [...new Set(identifiers.filter((identifier) => !identifier.startsWith("claude-")))];
-  const fullModel = identifiers.find((identifier) => identifier.startsWith("claude-"));
-  const generation = fullModel?.match(/-(\d+(?:\.\d+)?)$/)?.[1];
-
-  if (aliases.length === 0) {
-    throw new ClaudeCodeError("claude_models_unavailable", "Claude Code did not report any Anthropic model aliases.");
-  }
-
-  return aliases.map((id) => ({
-    id,
-    displayName: `${id.charAt(0).toUpperCase()}${id.slice(1)}${generation ? ` ${generation}` : ""}`,
-  }));
 }
 
 function redact(value: string, secret: string): string {

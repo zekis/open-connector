@@ -23,7 +23,12 @@ export interface CodexCommandRunner {
 
 const maxCommandOutputBytes = 4 * 1024 * 1024;
 const defaultCodexModel = "gpt-5.6-sol";
+// https://learn.chatgpt.com/docs/models (subscription access varies by account).
 const codexModels: AgentModelOption[] = [
+  { id: "gpt-6-astra", displayName: "GPT-6 Astra" },
+  { id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol" },
+  { id: "gpt-6-sol", displayName: "GPT-6 Sol" },
+  { id: "gpt-6-luna", displayName: "GPT-6 Luna" },
   { id: defaultCodexModel, displayName: "GPT-5.6 Sol" },
   { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
   { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },

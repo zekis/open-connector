@@ -6,29 +6,20 @@ import { describe, expect, it } from "vitest";
 import { ClaudeCodeClient } from "./claude-code-client.ts";
 
 describe("ClaudeCodeClient", () => {
-  it("reads current model aliases from the Anthropic CLI", async () => {
-    const runner = new FakeCommandRunner([
-      {
-        exitCode: 0,
-        stdout: `  --model <model>  Model for the current session. Provide an alias for the latest model
-                   (e.g. 'fable', 'opus', or 'sonnet') or a model's full name
-                   (e.g. 'claude-fable-5').
-  -n, --name <name>`,
-        stderr: "",
-      },
-    ]);
+  it("lists explicit models and aliases without depending on CLI help examples", async () => {
+    const runner = new FakeCommandRunner([]);
     const client = new ClaudeCodeClient(runner);
 
-    await expect(client.listModels()).resolves.toEqual([
-      { id: "fable", displayName: "Fable 5" },
-      { id: "opus", displayName: "Opus 5" },
-      { id: "sonnet", displayName: "Sonnet 5" },
-    ]);
-    expect(runner.calls[0]).toEqual({
-      args: ["--help"],
-      oauthToken: "",
-      timeoutMs: 15_000,
-    });
+    await expect(client.listModels()).resolves.toEqual(
+      expect.arrayContaining([
+        { id: "opus", displayName: "Claude Opus (latest)" },
+        { id: "haiku", displayName: "Claude Haiku (latest)" },
+        { id: "claude-fable-5-1", displayName: "Claude Fable 5.1" },
+        { id: "claude-opus-5-5", displayName: "Claude Opus 5.5" },
+        { id: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5" },
+      ]),
+    );
+    expect(runner.calls).toEqual([]);
   });
 
   it("recognizes a subscription OAuth token without putting it in command arguments", async () => {

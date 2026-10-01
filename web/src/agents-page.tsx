@@ -360,7 +360,7 @@ function AgentModelSettings(props: {
       await apiPut<AgentRuntimeSettings>(`/api/agent-settings/${props.provider}`, {
         model: model.trim(),
       });
-      setStatus("Agent model saved. Future Flow runs will use this model.");
+      setStatus("Agent model saved. Future Chat, Teams, and Flow runs will use this model.");
       props.onRefresh();
     } catch (caught) {
       setStatus(caught instanceof Error ? caught.message : "Could not save the agent model.");
@@ -374,7 +374,7 @@ function AgentModelSettings(props: {
       <div className="agent-model-heading">
         <div>
           <strong>Agent model</strong>
-          <p>Used by Chat and every new Flow run for this agent.</p>
+          <p>Used by Chat, Teams, and new Flow runs. Model access depends on your subscription.</p>
         </div>
       </div>
       <div className="agent-model-controls">
