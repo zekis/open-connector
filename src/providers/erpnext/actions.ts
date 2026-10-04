@@ -43,6 +43,19 @@ const getValueInputSchema = s.object(
   { optional: ["name", "filters"] },
 );
 
+const assignmentsOutputSchema = s.object("The open assignments on the document after the change.", {
+  assignments: s.array(
+    "The open assignments on the document, as returned by Frappe (up to five).",
+    s.object(
+      {
+        owner: s.string("The user the document is allocated to."),
+        name: s.string("The ToDo document identifier for this assignment."),
+      },
+      { required: ["owner", "name"] },
+    ),
+  ),
+});
+
 export const erpnextActions: ActionDefinition[] = [
   defineProviderAction(service, {
     name: "list_document_attachments",
@@ -216,5 +229,39 @@ export const erpnextActions: ActionDefinition[] = [
     outputSchema: s.object("The ERPNext document returned after the update.", {
       document: looseObjectSchema,
     }),
+  }),
+  defineProviderAction(service, {
+    name: "assign_document",
+    description:
+      "Assign one or more users to an ERPNext or Frappe document. This is the standard assignment mechanism: it creates a ToDo for each user and updates the document's _assign field. Prefer this over writing an assigned_to field, which most DocTypes do not have.",
+    inputSchema: s.object(
+      "The input payload for assigning users to a document.",
+      {
+        doctype: doctypeField,
+        name: documentNameField,
+        assign_to: s.stringArray("The users to assign, by user id (usually their email address).", {
+          minItems: 1,
+          itemDescription: "A user id to assign the document to.",
+        }),
+        description: s.nonEmptyString(
+          "The assignment description shown on the ToDo. Defaults to an assignment notice naming the document.",
+        ),
+        priority: s.stringEnum("The ToDo priority. Defaults to Medium.", ["Low", "Medium", "High"]),
+        date: s.date("The ToDo due date. Defaults to today."),
+      },
+      { optional: ["description", "priority", "date"] },
+    ),
+    outputSchema: assignmentsOutputSchema,
+  }),
+  defineProviderAction(service, {
+    name: "unassign_document",
+    description:
+      "Remove one user's assignment from an ERPNext or Frappe document, cancelling their ToDo and updating the document's _assign field. Removes a single user, so call it once per user.",
+    inputSchema: s.object("The input payload for removing one user's assignment from a document.", {
+      doctype: doctypeField,
+      name: documentNameField,
+      assign_to: s.nonEmptyString("The single user id whose assignment is removed."),
+    }),
+    outputSchema: assignmentsOutputSchema,
   }),
 ];

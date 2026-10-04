@@ -29,6 +29,8 @@ const erpnextLoggedUserMethod = "frappe.auth.get_logged_user";
 const erpnextGetCountMethod = "frappe.client.get_count";
 const erpnextGetValueMethod = "frappe.client.get_value";
 const erpnextSetValueMethod = "frappe.client.set_value";
+const erpnextAssignAddMethod = "frappe.desk.form.assign_to.add";
+const erpnextAssignRemoveMethod = "frappe.desk.form.assign_to.remove";
 const erpnextDownloadMethod = "frappe.handler.download_file";
 const erpnextLegacyDownloadMethod = "frappe.core.doctype.file.file.download_file";
 
@@ -229,6 +231,46 @@ const erpnextActionHandlers: Record<string, ErpnextActionHandler> = {
 
     return {
       document: readRequiredDocumentFromMethodResult(payload, "ERPNext set_document_value response"),
+    };
+  },
+  async assign_document(input, context) {
+    const payload = await requestErpnext({
+      ...context,
+      path: buildMethodPath(erpnextAssignAddMethod),
+      method: "POST",
+      body: compactObject({
+        doctype: readRequiredString(input.doctype, "doctype"),
+        name: readRequiredString(input.name, "name"),
+        // Frappe reads these from form_dict and parses assign_to with frappe.parse_json,
+        // so a JSON array is accepted here.
+        assign_to: readRequiredUserList(input.assign_to, "assign_to"),
+        description: optionalString(input.description),
+        priority: optionalString(input.priority),
+        date: optionalString(input.date),
+      }),
+      phase: "execute",
+    });
+
+    return {
+      assignments: readRequiredAssignmentsFromMethodResult(payload, "ERPNext assign_document response"),
+    };
+  },
+  async unassign_document(input, context) {
+    const payload = await requestErpnext({
+      ...context,
+      path: buildMethodPath(erpnextAssignRemoveMethod),
+      method: "POST",
+      body: {
+        doctype: readRequiredString(input.doctype, "doctype"),
+        name: readRequiredString(input.name, "name"),
+        // remove() takes a single user, not a list, unlike add().
+        assign_to: readRequiredString(input.assign_to, "assign_to"),
+      },
+      phase: "execute",
+    });
+
+    return {
+      assignments: readRequiredAssignmentsFromMethodResult(payload, "ERPNext unassign_document response"),
     };
   },
 };
@@ -553,6 +595,42 @@ function readRequiredMessageValue(payload: unknown, context: string): unknown {
     throw new ProviderRequestError(502, `${context} did not include a message value`);
   }
   return record.message;
+}
+
+function readRequiredUserList(value: unknown, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new ProviderRequestError(400, `${fieldName} must be an array of user ids`);
+  }
+  const users = value.map((entry, index) => {
+    const user = optionalString(entry);
+    if (!user) {
+      throw new ProviderRequestError(400, `${fieldName}[${index}] must be a non-empty user id`);
+    }
+    return user;
+  });
+  if (users.length === 0) {
+    throw new ProviderRequestError(400, `${fieldName} must include at least one user id`);
+  }
+  return users;
+}
+
+function readRequiredAssignmentsFromMethodResult(
+  payload: unknown,
+  context: string,
+): Array<{ owner: string; name: string }> {
+  const message = optionalRecord(payload)?.message;
+  if (!Array.isArray(message)) {
+    throw new ProviderRequestError(502, `${context} did not include an assignment list`);
+  }
+  return message.map((entry) => {
+    const record = optionalRecord(entry);
+    const owner = optionalString(record?.owner);
+    const name = optionalString(record?.name);
+    if (!owner || !name) {
+      throw new ProviderRequestError(502, `${context} included an assignment without owner and name`);
+    }
+    return { owner, name };
+  });
 }
 
 function readRequiredDocumentFromMethodResult(payload: unknown, context: string): Record<string, unknown> {
