@@ -258,3 +258,117 @@ describe("ERPNext attachments", () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 });
+
+describe("ERPNext assignment", () => {
+  it("assigns users through the standard assign_to.add method", async () => {
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: [{ owner: "zeke@tierneymorris.com.au", name: "todo-1" }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.assign_document"]!(
+      {
+        doctype: "Activity",
+        name: "g68cfomvvu",
+        assign_to: ["zeke@tierneymorris.com.au"],
+        description: "PO-0392 systems engineering support",
+        priority: "High",
+      },
+      createContext(),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      output: { assignments: [{ owner: "zeke@tierneymorris.com.au", name: "todo-1" }] },
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://8.8.8.8/api/method/frappe.desk.form.assign_to.add");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      doctype: "Activity",
+      name: "g68cfomvvu",
+      assign_to: ["zeke@tierneymorris.com.au"],
+      description: "PO-0392 systems engineering support",
+      priority: "High",
+    });
+  });
+
+  it("omits optional fields that were not supplied", async () => {
+    const fetcher = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ message: [] }), { headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.assign_document"]!(
+      { doctype: "Activity", name: "g68cfomvvu", assign_to: ["a@example.com"] },
+      createContext(),
+    );
+
+    expect(result).toEqual({ ok: true, output: { assignments: [] } });
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      doctype: "Activity",
+      name: "g68cfomvvu",
+      assign_to: ["a@example.com"],
+    });
+  });
+
+  it("unassigns a single user through assign_to.remove", async () => {
+    const fetcher = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ message: [] }), { headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.unassign_document"]!(
+      { doctype: "Activity", name: "g68cfomvvu", assign_to: "zeke@tierneymorris.com.au" },
+      createContext(),
+    );
+
+    expect(result).toEqual({ ok: true, output: { assignments: [] } });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://8.8.8.8/api/method/frappe.desk.form.assign_to.remove");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      doctype: "Activity",
+      name: "g68cfomvvu",
+      assign_to: "zeke@tierneymorris.com.au",
+    });
+  });
+
+  it("rejects an empty assign_to list without calling ERPNext", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.assign_document"]!(
+      { doctype: "Activity", name: "g68cfomvvu", assign_to: [] },
+      createContext(),
+    );
+
+    expect(result).toMatchObject({ ok: false });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("fails loudly when the response is not an assignment list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(JSON.stringify({ message: { success: true } }), {
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const result = await executors["erpnext.assign_document"]!(
+      { doctype: "Activity", name: "g68cfomvvu", assign_to: ["a@example.com"] },
+      createContext(),
+    );
+
+    expect(result).toMatchObject({ ok: false });
+  });
+});
