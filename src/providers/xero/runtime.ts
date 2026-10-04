@@ -547,12 +547,29 @@ function createXeroApiError(
   details: unknown = payload,
 ): ProviderRequestError {
   const providerMessage = extractXeroError(payload) ?? `Xero request failed with status ${status}`;
+  const detailRecord = optionalRecord(details);
   const message =
-    status === 401 && optionalRecord(details)?.accessTokenRefreshAttempted === true
-      ? `Xero rejected the access token after an automatic refresh: ${providerMessage}`
+    status === 401 && detailRecord?.accessTokenRefreshAttempted === true
+      ? refreshedTokenRejectedMessage(providerMessage, detailRecord)
       : providerMessage;
   if (validation && (status === 401 || status === 403)) return new ProviderRequestError(400, message, details);
   return new ProviderRequestError(status || 502, message, details);
+}
+
+// A 401 here has already survived a token refresh, so the client credentials are good and the
+// old wording ("Xero rejected the access token") sent people off checking a credential that was
+// never the problem. The scopes the token actually carries are already collected in the error
+// details, so name them: a missing scope is the usual cause and is then obvious at a glance.
+function refreshedTokenRejectedMessage(providerMessage: string, details: Record<string, unknown>): string {
+  const tokenScopes = Array.isArray(details.tokenScopes)
+    ? details.tokenScopes.filter((scope): scope is string => typeof scope === "string")
+    : [];
+  const scopeNote = tokenScopes.length > 0 ? ` The connection is authorised for: ${tokenScopes.join(", ")}.` : "";
+  return (
+    `Xero refused this request as unauthorised: ${providerMessage}. A fresh access token was obtained first, ` +
+    `so the client credentials are valid: this is usually an endpoint the connection has not been granted a ` +
+    `scope for, or a disconnected Xero organisation, rather than an expired token.${scopeNote}`
+  );
 }
 
 function extractXeroError(payload: unknown): string | undefined {
