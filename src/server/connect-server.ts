@@ -38,7 +38,7 @@ import { compress } from "hono/compress";
 import { ConnectionError, defaultConnectionName } from "../connection-service.ts";
 import { ActionPolicyService, emptyPolicyRules } from "../core/action-policy.ts";
 import { DEFAULT_ACTION_SEARCH_LIMIT, createActionSearchIndexProvider, searchActions } from "../core/action-search.ts";
-import { optionalRecord, optionalString, requiredString } from "../core/cast.ts";
+import { optionalRecord, optionalString, requiredRecord, requiredString } from "../core/cast.ts";
 import { createMcpServer, listMcpToolSummaries } from "../mcp.ts";
 import { OAuthClientConfigError, OAuthClientConfigService } from "../oauth/oauth-client-config-service.ts";
 import { OAuthFlowError, OAuthFlowService } from "../oauth/oauth-flow-service.ts";
@@ -1961,7 +1961,14 @@ export class ConnectServer {
       };
       this.options.logger?.info(logContext, "oauth authorization started");
 
-      const authorization = await this.options.oauthFlow.startAuthorization({ service, connectionName });
+      const authorization = await this.options.oauthFlow.startAuthorization({
+        service,
+        connectionName,
+        values:
+          body.values === undefined
+            ? undefined
+            : requiredRecord(body.values, "values", (message) => new OAuthFlowError("invalid_input", message)),
+      });
       const authorizationUrl = new URL(authorization.authorizationUrl);
       this.options.logger?.info(
         {

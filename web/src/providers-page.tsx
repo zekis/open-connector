@@ -1097,8 +1097,12 @@ export function credentialConnectionRequestBody(
   return authType === "no_auth" ? { authType, connectionName } : { authType, connectionName, values };
 }
 
-export function oauthAuthorizationRequestBody(service: string, connectionName: string): Record<string, string> {
-  return { service, connectionName };
+export function oauthAuthorizationRequestBody(
+  service: string,
+  connectionName: string,
+  values: Record<string, string> = {},
+): Record<string, unknown> {
+  return Object.keys(values).length ? { service, connectionName, values } : { service, connectionName };
 }
 
 function ConnectionManager(props: ConnectionManagerProps): ReactNode {
@@ -1232,7 +1236,7 @@ function UnavailableProviderConnection(props: {
 
 function ConnectionForm(props: ConnectionFormProps): ReactNode {
   const t = useTranslate();
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(props.connection?.connectionValues ?? {});
   const [status, setStatus] = useState<string | null>(null);
   const stopOAuthRefreshPolling = useRef<(() => void) | undefined>(undefined);
   const fields = credentialFieldsFor(props.auth);
@@ -1299,7 +1303,7 @@ function ConnectionForm(props: ConnectionFormProps): ReactNode {
       } else {
         const result = await apiPost<{ authorizationUrl?: string }>(
           `/api/oauth/authorizations`,
-          oauthAuthorizationRequestBody(props.provider.service, connectionName),
+          oauthAuthorizationRequestBody(props.provider.service, connectionName, values),
         );
         if (result.authorizationUrl) {
           window.open(

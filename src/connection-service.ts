@@ -30,6 +30,8 @@ export interface ConnectionSummary {
   virtual: boolean;
   default: boolean;
   profile: CredentialProfile;
+  /** Non-secret OAuth options used to edit this connection. */
+  connectionValues?: Record<string, string>;
 }
 
 /**
@@ -358,7 +360,10 @@ export class ConnectionService {
     try {
       validation = await this.validateOAuthCredential(service, credential);
     } catch (error) {
-      if (!(error instanceof ConnectionError && error.code === "credential_verification_failed")) {
+      if (
+        Object.keys(credential.connectionValues ?? {}).length > 0 ||
+        !(error instanceof ConnectionError && error.code === "credential_verification_failed")
+      ) {
         throw error;
       }
     }
@@ -416,6 +421,15 @@ export class ConnectionService {
       virtual: false,
       default: connectionName === defaultConnectionName,
       profile: credential.profile,
+      ...(credential.authType === "oauth2" && credential.connectionValues
+        ? {
+            connectionValues: Object.fromEntries(
+              (provider.auth.find((auth) => auth.type === "oauth2")?.connectionFields ?? [])
+                .filter((field) => !field.secret && credential.connectionValues?.[field.key] !== undefined)
+                .map((field) => [field.key, credential.connectionValues![field.key]]),
+            ),
+          }
+        : {}),
     };
   }
 

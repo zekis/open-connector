@@ -45,6 +45,11 @@ const bodyContentType = s.stringEnum(["text", "html"], {
   description: "Preferred Outlook body content type for the response.",
 });
 const importance = s.stringEnum(["low", "normal", "high"], { description: "Message importance." });
+const mailbox = s.string({
+  minLength: 1,
+  description:
+    "Shared or delegated mailbox email address (user principal name). Omit for your own mailbox. Requires Mail.ReadWrite.Shared for reading or editing, and Mail.Send.Shared plus Exchange Full Access and Send As or Send on Behalf for sending. Reuse the same mailbox with message IDs and nextLink pagination.",
+});
 const messageId = nonEmptyString("Outlook message ID.");
 const mailFolderId = nonEmptyString("Outlook mail folder ID.");
 const nextLink = s.url("Opaque pagination URL returned by a previous Outlook response.");
@@ -192,10 +197,11 @@ const actions: OutlookActionSource[] = [
   ),
   action(
     "list_mail_folders",
-    "List the root-level Outlook mail folders for the connected mailbox, with optional hidden folders and field selection.",
+    "List the root-level Outlook mail folders for your own or a shared mailbox, with optional hidden folders and field selection.",
     outlookReadScopes,
     [outlookProviderScopes.mailReadWrite],
     input({
+      mailbox,
       nextLink,
       includeHiddenFolders: s.boolean({ description: "Whether to include hidden mail folders." }),
       top: s.integer({ minimum: 1, maximum: 1000, description: "Maximum number of mail folders to return." }),
@@ -209,6 +215,7 @@ const actions: OutlookActionSource[] = [
     outlookReadScopes,
     [outlookProviderScopes.mailReadWrite],
     input({
+      mailbox,
       mailFolderId,
       top: s.integer({ minimum: 1, maximum: 1000, description: "Maximum number of messages to return." }),
       filter: s.string({ description: "OData filter expression for the messages query." }),
@@ -224,9 +231,10 @@ const actions: OutlookActionSource[] = [
     "Get a single Outlook message by message ID, including message metadata and optional body formatting.",
     outlookReadScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId, select: stringArray("Message fields to request from Microsoft Graph."), bodyContentType }, [
-      "messageId",
-    ]),
+    input(
+      { mailbox, messageId, select: stringArray("Message fields to request from Microsoft Graph."), bodyContentType },
+      ["messageId"],
+    ),
     outlookMessage,
   ),
   action(
@@ -234,7 +242,7 @@ const actions: OutlookActionSource[] = [
     "List attachment metadata for an Outlook message without downloading attachment content.",
     outlookReadScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId }, ["messageId"]),
+    input({ mailbox, messageId }, ["messageId"]),
     listAttachmentsOutput,
   ),
   action(
@@ -242,7 +250,10 @@ const actions: OutlookActionSource[] = [
     "Download the raw content of one Outlook message attachment.",
     outlookReadScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId, attachmentId: nonEmptyString("Outlook attachment ID.") }, ["messageId", "attachmentId"]),
+    input({ mailbox, messageId, attachmentId: nonEmptyString("Outlook attachment ID.") }, [
+      "messageId",
+      "attachmentId",
+    ]),
     downloadedAttachment,
   ),
   action(
@@ -252,6 +263,7 @@ const actions: OutlookActionSource[] = [
     [outlookProviderScopes.mailReadWrite],
     input(
       {
+        mailbox,
         messageId,
         file: s.transitFile("File uploaded through POST /api/files."),
       },
@@ -264,7 +276,7 @@ const actions: OutlookActionSource[] = [
     "Create a new Outlook draft message with subject, body, recipients, and other writable message properties.",
     outlookWriteScopes,
     [outlookProviderScopes.mailReadWrite],
-    input(messageWriteFields, ["subject", "body"]),
+    input({ mailbox, ...messageWriteFields }, ["subject", "body"]),
     outlookMessage,
   ),
   action(
@@ -274,6 +286,7 @@ const actions: OutlookActionSource[] = [
     [outlookProviderScopes.mailReadWrite],
     input(
       {
+        mailbox,
         messageId,
         comment: s.string({
           description: "Comment to prepend to the reply. Do not provide body when using comment.",
@@ -296,7 +309,7 @@ const actions: OutlookActionSource[] = [
     "Update an existing Outlook draft message before sending.",
     outlookWriteScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId, ...messageWriteFields }, ["messageId"]),
+    input({ mailbox, messageId, ...messageWriteFields }, ["messageId"]),
     outlookMessage,
   ),
   action(
@@ -304,7 +317,7 @@ const actions: OutlookActionSource[] = [
     "Mark an Outlook message as read or unread.",
     outlookWriteScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId, isRead: s.boolean({ description: "Whether the message should be marked as read." }) }, [
+    input({ mailbox, messageId, isRead: s.boolean({ description: "Whether the message should be marked as read." }) }, [
       "messageId",
       "isRead",
     ]),
@@ -315,7 +328,7 @@ const actions: OutlookActionSource[] = [
     "Delete an Outlook message or draft by message ID. This action is irreversible.",
     outlookWriteScopes,
     [outlookProviderScopes.mailReadWrite],
-    input({ messageId }, ["messageId"]),
+    input({ mailbox, messageId }, ["messageId"]),
     success,
   ),
   action(
@@ -323,7 +336,7 @@ const actions: OutlookActionSource[] = [
     "Send an existing Outlook draft message by message ID.",
     outlookSendScopes,
     [outlookProviderScopes.mailSend],
-    input({ messageId }, ["messageId"]),
+    input({ mailbox, messageId }, ["messageId"]),
     success,
   ),
   action(
@@ -333,6 +346,7 @@ const actions: OutlookActionSource[] = [
     [outlookProviderScopes.mailSend],
     input(
       {
+        mailbox,
         ...messageWriteFields,
         saveToSentItems: s.boolean({ description: "Whether to save the sent message in Sent Items." }),
       },
@@ -347,6 +361,7 @@ const actions: OutlookActionSource[] = [
     [outlookProviderScopes.mailSend],
     input(
       {
+        mailbox,
         messageId,
         comment: s.string({ description: "Comment to include with the reply." }),
         body: s.string({ description: "Reply body content." }),

@@ -248,6 +248,36 @@ describe("ProvidersPage route shell", () => {
     expect(markup).not.toContain("Configured");
   });
 
+  it("renders provider-specific OAuth connection fields and submits them separately from client config", () => {
+    const provider: ProviderDefinition = {
+      ...oauthProvider,
+      auth: [
+        {
+          type: "oauth2",
+          scopes: [],
+          connectionFields: [
+            {
+              key: "mailbox",
+              label: "Shared mailbox address",
+              inputType: "text",
+              required: false,
+              secret: false,
+              placeholder: "support@example.com",
+            },
+          ],
+        },
+      ],
+    };
+    const markup = renderProvidersPage({ ...providerData, providers: [provider], connections: [] }, "/providers/gmail");
+    expect(markup).toContain("Shared mailbox address");
+    expect(markup).toContain("support@example.com");
+    expect(oauthAuthorizationRequestBody("outlook", "support", { mailbox: "support@example.com" })).toEqual({
+      service: "outlook",
+      connectionName: "support",
+      values: { mailbox: "support@example.com" },
+    });
+  });
+
   it("shows an OAuth client warning when OAuth config is missing", () => {
     const markup = renderProvidersPage({ ...providerData, oauthConfigs: [] }, "/providers/gmail");
 

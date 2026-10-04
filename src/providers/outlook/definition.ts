@@ -27,6 +27,18 @@ export const provider: ProviderDefinition = {
         prompt: "select_account",
         response_mode: "query",
       },
+      connectionFields: [
+        {
+          key: "mailbox",
+          label: "Shared mailbox address",
+          inputType: "text",
+          required: false,
+          secret: false,
+          placeholder: "support@example.com",
+          description:
+            "Leave blank for your own mailbox. For a shared mailbox, enter its principal email address and sign in as a user with access. Mail actions on this connection always use this mailbox.",
+        },
+      ],
       clientConfigFields: [
         {
           key: "tenant",

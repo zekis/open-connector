@@ -2,6 +2,7 @@ import type { ConnectionService } from "../connection-service.ts";
 import type { OAuthClientConfigService } from "./oauth-client-config-service.ts";
 
 import { createHash, randomBytes } from "node:crypto";
+import { normalizeCredentialValues } from "../core/credential-fields.ts";
 import { requestAuthorizationCodeToken } from "./oauth-token.ts";
 
 /**
@@ -15,6 +16,7 @@ export type OAuthAuthorizationStart = {
 export interface OAuthAuthorizationStartInput {
   service: string;
   connectionName?: string;
+  values?: Record<string, unknown>;
 }
 
 export interface OAuthAuthorizationCompleteInput {
@@ -28,6 +30,7 @@ export interface OAuthAuthorizationCompleteInput {
 export type OAuthAuthorizationState = {
   service: string;
   connectionName?: string;
+  values?: Record<string, string>;
   state: string;
   createdAt: string;
   pkceCodeVerifier?: string;
@@ -71,6 +74,16 @@ export class OAuthFlowService {
       throw new OAuthFlowError("oauth_client_config_required", `Configure an OAuth client for ${service} first.`);
     }
 
+    for (const [key, value] of Object.entries(input.values ?? {})) {
+      if (typeof value !== "string" || !auth.connectionFields?.some((field) => field.key === key)) {
+        throw new OAuthFlowError("invalid_input", `Invalid OAuth connection field: ${key}.`);
+      }
+    }
+    const values = normalizeCredentialValues({
+      fields: auth.connectionFields ?? [],
+      values: input.values ?? {},
+      createError: (message) => new OAuthFlowError("invalid_input", message),
+    });
     const state = crypto.randomUUID();
     const pkceCodeVerifier = auth.pkce ? createPkceCodeVerifier() : undefined;
     await this.states.set({
@@ -79,6 +92,7 @@ export class OAuthFlowService {
       state,
       createdAt: new Date().toISOString(),
       pkceCodeVerifier,
+      values,
     });
 
     const authorizationUrl = new URL(this.clientConfigs.resolveEndpointUrl(service, auth.authorizationUrl, config));
@@ -144,6 +158,7 @@ export class OAuthFlowService {
     });
     const oauthCredential = {
       ...tokenResponse,
+      connectionValues: pending.values,
       metadata: {
         ...tokenResponse.metadata,
         oauthClientId: config.clientId,

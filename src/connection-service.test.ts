@@ -308,6 +308,33 @@ describe("ConnectionService", () => {
     });
   });
 
+  it("does not save an OAuth connection with unverified connection options", async () => {
+    const store = new MemoryConnectionStore();
+    const service = createService([oauthProvider], {
+      store,
+      providerLoader: new FakeProviderLoader({
+        oauth2: async () => {
+          throw new Error("Shared mailbox access denied");
+        },
+      }),
+    });
+    await expect(
+      service.setOAuthCredential(
+        "example",
+        {
+          authType: "oauth2",
+          accessToken: "token",
+          tokenType: "Bearer",
+          profile: testProfile,
+          metadata: {},
+          connectionValues: { mailbox: "support@example.com" },
+        },
+        "support",
+      ),
+    ).rejects.toMatchObject({ code: "credential_verification_failed" });
+    expect(await store.get("example", "support")).toBeUndefined();
+  });
+
   it("passes the runtime logger to credential validators", async () => {
     const logger = createTestLogger();
     const validators: CredentialValidators = {
@@ -448,6 +475,7 @@ describe("ConnectionService", () => {
     await store.set("example", "default", {
       authType: "oauth2",
       accessToken: "expired-token",
+      connectionValues: { mailbox: "support@example.com" },
       tokenType: "Bearer",
       refreshToken: "refresh-token",
       expiresAt: "2026-01-01T00:00:00.000Z",
@@ -470,6 +498,7 @@ describe("ConnectionService", () => {
     await expect(service.getCredential("example")).resolves.toMatchObject({
       authType: "oauth2",
       accessToken: "fresh-token",
+      connectionValues: { mailbox: "support@example.com" },
       refreshToken: "refresh-token",
       metadata: {
         original: true,
@@ -480,6 +509,7 @@ describe("ConnectionService", () => {
       credential: {
         authType: "oauth2",
         accessToken: "fresh-token",
+        connectionValues: { mailbox: "support@example.com" },
       },
     });
     expect(fetch).toHaveBeenCalledWith(

@@ -338,6 +338,9 @@ export function createOpenApiDocument(
         ),
         ConnectionSummary: jsonSchema.object(
           {
+            connectionValues: jsonSchema.record(jsonSchema.string(), {
+              description: "Non-secret OAuth connection options.",
+            }),
             id: jsonSchema.string({ description: "Stable local connection identifier." }),
             service: jsonSchema.string({ description: "Provider service identifier." }),
             authType: jsonSchema.string({ description: "Connection authentication type." }),
@@ -1768,6 +1771,9 @@ function createOAuthAuthorizationPath(): Record<string, unknown> {
           "application/json": {
             schema: jsonSchema.object(
               {
+                values: jsonSchema.record(jsonSchema.string(), {
+                  description: "Provider-declared OAuth connection options.",
+                }),
                 service: jsonSchema.string({ description: "Provider service identifier." }),
                 connectionName: jsonSchema.string({
                   description: "Optional local connection name. Defaults to default.",

@@ -12,6 +12,7 @@ export type AuthDefinition =
       type: "oauth2";
       scopes: string[];
       clientConfigFields?: CredentialField[];
+      connectionFields?: CredentialField[];
     };
 
 export interface CredentialField {
@@ -111,6 +112,7 @@ export interface ConnectionRecord {
   default?: boolean;
   profile?: Record<string, unknown> | null;
   metadata: Record<string, unknown>;
+  connectionValues?: Record<string, string>;
 }
 
 export interface OAuthConfig {
@@ -1288,6 +1290,7 @@ export function credentialFieldsFor(auth: AuthDefinition): CredentialField[] {
     ];
   }
   if (auth.type === "custom_credential") return auth.fields;
+  if (auth.type === "oauth2") return auth.connectionFields ?? [];
   return [];
 }
 

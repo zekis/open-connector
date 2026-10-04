@@ -2,6 +2,8 @@ export const outlookProviderScopes = {
   userRead: "User.Read",
   mailReadWrite: "Mail.ReadWrite",
   mailSend: "Mail.Send",
+  mailReadWriteShared: "Mail.ReadWrite.Shared",
+  mailSendShared: "Mail.Send.Shared",
   mailboxSettingsReadWrite: "MailboxSettings.ReadWrite",
   mailRead: "Mail.Read",
   mailReadBasic: "Mail.ReadBasic",
@@ -19,5 +21,7 @@ export const outlookOAuthScopes: string[] = [
   outlookProviderScopes.mailReadWrite,
   outlookProviderScopes.mailSend,
   outlookProviderScopes.mailboxSettingsReadWrite,
+  outlookProviderScopes.mailReadWriteShared,
+  outlookProviderScopes.mailSendShared,
   outlookProviderScopes.offlineAccess,
 ];

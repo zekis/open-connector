@@ -4,14 +4,21 @@ import type { OAuthProviderContext } from "../provider-runtime.ts";
 import { Buffer } from "node:buffer";
 import { compactObject, optionalString, requiredRecord } from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
-import { defineOAuthProviderExecutors, ProviderRequestError, readTransitFileInput } from "../provider-runtime.ts";
+import {
+  defineProviderExecutors,
+  requireOAuthCredential,
+  ProviderRequestError,
+  readTransitFileInput,
+} from "../provider-runtime.ts";
 
 const outlookGraphBaseUrl = "https://graph.microsoft.com/v1.0";
 const graphHost = "graph.microsoft.com";
 const maximumOutlookAttachmentBytes = 20 * 1024 * 1024;
 const maximumSimpleOutlookAttachmentBytes = 3 * 1024 * 1024;
 
-type OutlookRuntimeDeps = OAuthProviderContext;
+interface OutlookRuntimeDeps extends OAuthProviderContext {
+  mailbox?: string;
+}
 
 type OutlookActionHandler = (input: Record<string, unknown>, deps: OutlookRuntimeDeps) => Promise<unknown>;
 
@@ -20,6 +27,7 @@ type OutlookRequestInput = {
   fetcher: typeof fetch;
   method?: string;
   query?: Record<string, string | undefined>;
+  mailboxPath?: string;
   absoluteUrlPolicy?: "mailFolders" | "messages";
   headers?: Record<string, string>;
   body?: unknown;
@@ -88,7 +96,45 @@ export const outlookActionHandlers: Record<string, OutlookActionHandler> = {
   },
 };
 
-export const executors: ProviderExecutors = defineOAuthProviderExecutors("outlook", outlookActionHandlers);
+export const executors: ProviderExecutors = defineProviderExecutors<OutlookRuntimeDeps>({
+  service: "outlook",
+  handlers: Object.fromEntries(
+    Object.entries(outlookActionHandlers).map(([name, handler]) => [
+      name,
+      (input: Record<string, unknown>, deps: OutlookRuntimeDeps) => {
+        if (!deps.mailbox) return handler(input, deps);
+        if (name === "get_mailbox_settings" || name === "update_mailbox_settings") {
+          throw new ProviderRequestError(400, "Mailbox settings are only available on a personal Outlook connection.");
+        }
+        if (name === "get_profile") {
+          return Promise.resolve({
+            id: deps.mailbox,
+            mail: deps.mailbox,
+            userPrincipalName: deps.mailbox,
+            displayName: deps.mailbox,
+          });
+        }
+        if (input.mailbox !== undefined && String(input.mailbox).trim().toLowerCase() !== deps.mailbox.toLowerCase()) {
+          throw new ProviderRequestError(400, "This connection is scoped to its configured shared mailbox.");
+        }
+        return handler({ ...input, mailbox: deps.mailbox }, deps);
+      },
+    ]),
+  ),
+  async createContext(context, fetcher): Promise<OutlookRuntimeDeps> {
+    const credential = await requireOAuthCredential(context, "outlook");
+    const mailbox = optionalString(credential.connectionValues?.mailbox);
+    if (mailbox) outlookMailboxPath({ mailbox });
+    return {
+      accessToken: credential.accessToken,
+      tokenType: credential.tokenType,
+      mailbox,
+      fetcher,
+      signal: context.signal,
+      transitFiles: context.transitFiles,
+    };
+  },
+});
 
 export const credentialValidators: CredentialValidators = {
   async oauth2(input, { fetcher }) {
@@ -104,6 +150,18 @@ export const credentialValidators: CredentialValidators = {
         $select: ["id", "displayName", "mail", "userPrincipalName"].join(","),
       },
     });
+    const mailbox = optionalString(input.connectionValues?.mailbox);
+    if (mailbox) {
+      await outlookJsonRequest(`${outlookMailboxPath({ mailbox })}/mailFolders/inbox`, {
+        accessToken: input.accessToken,
+        fetcher,
+        query: { $select: "id" },
+      });
+      return {
+        profile: { accountId: mailbox, displayName: mailbox },
+        metadata: { currentAccount: profile },
+      };
+    }
     const accountId = requiredString(profile.id, "outlook current account id");
     const displayName = typeof profile.displayName === "string" ? profile.displayName : undefined;
     const mail = typeof profile.mail === "string" ? profile.mail : undefined;
@@ -126,7 +184,7 @@ export async function outlookJsonRequest<T>(pathOrUrl: string, input: OutlookReq
 }
 
 async function outlookRequest(pathOrUrl: string, input: OutlookRequestInput) {
-  const target = buildOutlookUrl(pathOrUrl, input.query, input.absoluteUrlPolicy);
+  const target = buildOutlookUrl(pathOrUrl, input.query, input.absoluteUrlPolicy, input.mailboxPath);
   const hasJsonBody = input.body !== undefined;
   const method = (input.method ?? (hasJsonBody ? "POST" : "GET")).toUpperCase();
   const headers = {
@@ -158,6 +216,7 @@ function buildOutlookUrl(
   pathOrUrl: string,
   query?: Record<string, string | undefined>,
   absoluteUrlPolicy: "mailFolders" | "messages" = "messages",
+  mailboxPath?: string,
 ) {
   const isAbsolutePath = isAbsoluteUrl(pathOrUrl);
   const target = isAbsolutePath ? new URL(pathOrUrl) : new URL(pathOrUrl, `${outlookGraphBaseUrl}/`);
@@ -165,8 +224,8 @@ function buildOutlookUrl(
   if (target.hostname !== graphHost) {
     throw new ProviderRequestError(400, "nextLink must target graph.microsoft.com");
   }
-  if (isAbsolutePath) {
-    assertAllowedOutlookNextLink(target, absoluteUrlPolicy);
+  if (isAbsolutePath || mailboxPath !== undefined) {
+    assertAllowedOutlookNextLink(target, absoluteUrlPolicy, mailboxPath ?? "me");
   }
 
   for (const [key, value] of Object.entries(query ?? {})) {
@@ -184,42 +243,43 @@ function isAbsoluteUrl(value: string) {
   return value.startsWith("https://") || value.startsWith("http://");
 }
 
-function assertAllowedOutlookNextLink(target: URL, absoluteUrlPolicy: "mailFolders" | "messages") {
-  if (target.protocol !== "https:") {
-    throw new ProviderRequestError(400, "nextLink must use https");
+function outlookMailboxPath(input: Record<string, unknown>): string {
+  if (input.mailbox === undefined) return "me";
+  const mailbox = requiredString(input.mailbox, "mailbox").trim();
+  if (!/^[^\s/@?#]+@[^\s/@?#]+$/.test(mailbox)) {
+    throw new ProviderRequestError(400, "mailbox must be an email address or user principal name");
   }
-  if (absoluteUrlPolicy === "messages" && !isAllowedOutlookMessageNextLinkPath(target.pathname)) {
-    throw new ProviderRequestError(400, "nextLink must target Outlook message pagination endpoints");
-  }
-  if (absoluteUrlPolicy === "mailFolders" && !isAllowedOutlookMailFolderNextLinkPath(target.pathname)) {
-    throw new ProviderRequestError(400, "nextLink must target Outlook mail folder pagination endpoints");
-  }
+  return `users/${encodeURIComponent(mailbox)}`;
 }
 
-function isAllowedOutlookMessageNextLinkPath(pathname: string) {
-  const normalizedPath = trimTrailingSlash(pathname);
-  const segments = normalizedPath.split("/").filter(Boolean);
-
-  if (segments[0] !== "v1.0") {
-    return false;
+function assertAllowedOutlookNextLink(
+  target: URL,
+  absoluteUrlPolicy: "mailFolders" | "messages",
+  mailboxPath: string,
+): void {
+  if (target.protocol !== "https:" || target.port || target.username || target.password || target.hash) {
+    throw new ProviderRequestError(400, "nextLink must use https without credentials, a custom port, or a fragment");
   }
-  if (segments[1] !== "me") {
-    return false;
+  const segments = trimTrailingSlash(target.pathname).split("/");
+  const prefix = `/v1.0/${mailboxPath}`.split("/");
+  let matchesMailbox = false;
+  try {
+    matchesMailbox = prefix.every(
+      (segment, index) =>
+        decodeURIComponent(segments[index] ?? "").toLowerCase() === decodeURIComponent(segment).toLowerCase(),
+    );
+  } catch {
+    // Malformed URL encoding is not a valid pagination cursor.
   }
-  if (segments.length === 3 && segments[2] === "messages") {
-    return true;
+  const resource = segments.slice(prefix.length);
+  const allowed =
+    absoluteUrlPolicy === "mailFolders"
+      ? resource.length === 1 && resource[0] === "mailFolders"
+      : (resource.length === 1 && resource[0] === "messages") ||
+        (resource.length === 3 && resource[0] === "mailFolders" && Boolean(resource[1]) && resource[2] === "messages");
+  if (!matchesMailbox || !allowed) {
+    throw new ProviderRequestError(400, "nextLink must target the selected Outlook mailbox and pagination endpoint");
   }
-  return segments.length === 5 && segments[2] === "mailFolders" && segments[3] !== "" && segments[4] === "messages";
-}
-
-function isAllowedOutlookMailFolderNextLinkPath(pathname: string) {
-  const normalizedPath = trimTrailingSlash(pathname);
-  const segments = normalizedPath.split("/").filter(Boolean);
-
-  if (segments[0] !== "v1.0") {
-    return false;
-  }
-  return segments[1] === "me" && segments.length === 3 && segments[2] === "mailFolders";
 }
 
 function trimTrailingSlash(value: string) {
@@ -309,7 +369,7 @@ async function getProfile({ accessToken, fetcher }: OutlookRuntimeDeps) {
 }
 
 async function listMailFolders(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  const pathOrUrl = typeof input.nextLink === "string" ? input.nextLink : "me/mailFolders";
+  const pathOrUrl = typeof input.nextLink === "string" ? input.nextLink : `${outlookMailboxPath(input)}/mailFolders`;
   const query =
     typeof input.nextLink === "string"
       ? undefined
@@ -327,6 +387,7 @@ async function listMailFolders(input: Record<string, unknown>, { accessToken, fe
     accessToken,
     fetcher,
     query,
+    mailboxPath: outlookMailboxPath(input),
     absoluteUrlPolicy: "mailFolders",
   });
 
@@ -341,8 +402,8 @@ async function listMessages(input: Record<string, unknown>, { accessToken, fetch
     typeof input.nextLink === "string"
       ? input.nextLink
       : typeof input.mailFolderId === "string"
-        ? `me/mailFolders/${encodeURIComponent(input.mailFolderId)}/messages`
-        : "me/messages";
+        ? `${outlookMailboxPath(input)}/mailFolders/${encodeURIComponent(input.mailFolderId)}/messages`
+        : `${outlookMailboxPath(input)}/messages`;
   const query =
     typeof input.nextLink === "string"
       ? undefined
@@ -366,6 +427,7 @@ async function listMessages(input: Record<string, unknown>, { accessToken, fetch
     accessToken,
     fetcher,
     query,
+    mailboxPath: outlookMailboxPath(input),
     headers,
   });
 
@@ -386,7 +448,7 @@ async function getMessage(input: Record<string, unknown>, { accessToken, fetcher
         }
       : undefined;
 
-  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+  return outlookJsonRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}`, {
     accessToken,
     fetcher,
     query,
@@ -396,20 +458,23 @@ async function getMessage(input: Record<string, unknown>, { accessToken, fetcher
 
 async function listAttachments(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
   const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
-  const payload = await outlookJsonRequest<{ value?: unknown[] }>(`me/messages/${messageId}/attachments`, {
-    accessToken,
-    fetcher,
-    query: {
-      $select: ["id", "name", "contentType", "size", "isInline", "lastModifiedDateTime"].join(","),
+  const payload = await outlookJsonRequest<{ value?: unknown[] }>(
+    `${outlookMailboxPath(input)}/messages/${messageId}/attachments`,
+    {
+      accessToken,
+      fetcher,
+      query: {
+        $select: ["id", "name", "contentType", "size", "isInline", "lastModifiedDateTime"].join(","),
+      },
     },
-  });
+  );
   return { attachments: Array.isArray(payload.value) ? payload.value : [] };
 }
 
 async function downloadAttachment(input: Record<string, unknown>, deps: OutlookRuntimeDeps) {
   const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
   const attachmentId = encodeURIComponent(requiredString(input.attachmentId, "attachmentId"));
-  const attachmentPath = `me/messages/${messageId}/attachments/${attachmentId}`;
+  const attachmentPath = `${outlookMailboxPath(input)}/messages/${messageId}/attachments/${attachmentId}`;
   const metadata = await outlookJsonRequest<Record<string, unknown>>(attachmentPath, {
     accessToken: deps.accessToken,
     fetcher: deps.fetcher,
@@ -454,7 +519,7 @@ async function addAttachment(input: Record<string, unknown>, deps: OutlookRuntim
     );
   }
   const bytes = new Uint8Array(await file.file.arrayBuffer());
-  return outlookJsonRequest(`me/messages/${messageId}/attachments`, {
+  return outlookJsonRequest(`${outlookMailboxPath(input)}/messages/${messageId}/attachments`, {
     accessToken: deps.accessToken,
     fetcher: deps.fetcher,
     method: "POST",
@@ -468,7 +533,7 @@ async function addAttachment(input: Record<string, unknown>, deps: OutlookRuntim
 }
 
 async function createDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  return outlookJsonRequest("me/messages", {
+  return outlookJsonRequest(`${outlookMailboxPath(input)}/messages`, {
     accessToken,
     fetcher,
     body: buildMessageWritePayload(input, {
@@ -489,16 +554,19 @@ async function createReplyDraft(input: Record<string, unknown>, { accessToken, f
     message: Object.keys(messagePayload).length > 0 ? messagePayload : undefined,
   });
 
-  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}/createReply`, {
-    accessToken,
-    fetcher,
-    method: "POST",
-    body: Object.keys(payload).length > 0 ? payload : undefined,
-  });
+  return outlookJsonRequest(
+    `${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}/createReply`,
+    {
+      accessToken,
+      fetcher,
+      method: "POST",
+      body: Object.keys(payload).length > 0 ? payload : undefined,
+    },
+  );
 }
 
 async function updateDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+  return outlookJsonRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}`, {
     accessToken,
     fetcher,
     method: "PATCH",
@@ -510,7 +578,7 @@ async function updateDraft(input: Record<string, unknown>, { accessToken, fetche
 }
 
 async function setMessageRead(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  return outlookJsonRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+  return outlookJsonRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}`, {
     accessToken,
     fetcher,
     method: "PATCH",
@@ -519,7 +587,7 @@ async function setMessageRead(input: Record<string, unknown>, { accessToken, fet
 }
 
 async function deleteMessage(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  await outlookRequest(`me/messages/${encodeURIComponent(String(input.messageId))}`, {
+  await outlookRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}`, {
     accessToken,
     fetcher,
     method: "DELETE",
@@ -529,7 +597,7 @@ async function deleteMessage(input: Record<string, unknown>, { accessToken, fetc
 }
 
 async function sendDraft(input: Record<string, unknown>, { accessToken, fetcher }: OutlookRuntimeDeps) {
-  await outlookRequest(`me/messages/${encodeURIComponent(String(input.messageId))}/send`, {
+  await outlookRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}/send`, {
     accessToken,
     fetcher,
     method: "POST",
@@ -547,7 +615,7 @@ async function sendEmail(input: Record<string, unknown>, { accessToken, fetcher 
     saveToSentItems: input.saveToSentItems === false ? false : undefined,
   });
 
-  await outlookRequest("me/sendMail", {
+  await outlookRequest(`${outlookMailboxPath(input)}/sendMail`, {
     accessToken,
     fetcher,
     method: "POST",
@@ -564,7 +632,7 @@ async function replyEmail(input: Record<string, unknown>, { accessToken, fetcher
     message: Object.keys(messagePayload).length > 0 ? messagePayload : undefined,
   });
 
-  await outlookRequest(`me/messages/${encodeURIComponent(String(input.messageId))}/reply`, {
+  await outlookRequest(`${outlookMailboxPath(input)}/messages/${encodeURIComponent(String(input.messageId))}/reply`, {
     accessToken,
     fetcher,
     method: "POST",
@@ -598,6 +666,10 @@ function buildMessageWritePayload(
   },
 ) {
   const payload = compactObject({
+    from:
+      input.mailbox === undefined
+        ? undefined
+        : { emailAddress: { address: requiredString(input.mailbox, "mailbox").trim() } },
     subject:
       typeof input.subject === "string"
         ? input.subject

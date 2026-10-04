@@ -44,6 +44,7 @@ export class OAuthCredentialRefreshService implements IOAuthCredentialRefresher 
 
     return {
       ...refreshed,
+      connectionValues: credential.connectionValues,
       refreshToken: refreshed.refreshToken ?? credential.refreshToken,
       profile: credential.profile,
       metadata: {

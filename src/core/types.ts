@@ -145,6 +145,8 @@ export type OAuth2AuthDefinition = {
   };
   /** Extra local OAuth app fields required before starting authorization. */
   clientConfigFields?: OAuthClientConfigFieldDefinition[];
+  /** Per-connection options collected before OAuth authorization. */
+  connectionFields?: CredentialDefinition[];
 };
 
 /**
@@ -292,6 +294,8 @@ export type ResolvedCredential =
       authType: "oauth2";
       /** OAuth access token sent to provider APIs. */
       accessToken: string;
+      /** Provider-declared options scoped to this OAuth connection. */
+      connectionValues?: Record<string, string>;
       /** Token type used in Authorization headers, usually `Bearer`. */
       tokenType: string;
       /** ISO timestamp when the access token expires, if the provider returned one. */

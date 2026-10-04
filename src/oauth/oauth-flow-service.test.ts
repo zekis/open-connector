@@ -21,6 +21,10 @@ const oauthProvider: ProviderDefinition = {
       authorizationUrl: "https://example.com/oauth/authorize",
       tokenUrl: "https://example.com/oauth/token",
       scopes: ["read", "write"],
+      connectionFields: [
+        { key: "mailbox", label: "Mailbox", inputType: "text", required: false, secret: false },
+        { key: "secretOption", label: "Secret", inputType: "password", required: false, secret: true },
+      ],
       tokenEndpointAuthMethod: "client_secret_post",
       clientConfigFields: [
         {
@@ -254,7 +258,11 @@ describe("OAuthFlowService", () => {
       vi.fn(async () => Response.json({ access_token: "access-token", token_type: "Bearer" })),
     );
 
-    const started = await services.flow.startAuthorization({ service: "example", connectionName: "work" });
+    const started = await services.flow.startAuthorization({
+      service: "example",
+      connectionName: "work",
+      values: { mailbox: " support@example.com ", secretOption: "hidden" },
+    });
     await expect(services.flow.completeAuthorization({ state: started.state, code: "code" })).resolves.toEqual({
       service: "example",
       connected: true,
@@ -263,8 +271,16 @@ describe("OAuthFlowService", () => {
     await expect(services.connections.getCredential("example", "work")).resolves.toMatchObject({
       authType: "oauth2",
       accessToken: "access-token",
+      connectionValues: { mailbox: "support@example.com", secretOption: "hidden" },
     });
     await expect(services.connections.getCredential("example")).resolves.toBeUndefined();
+    const summary = await services.connections.getConnectionSummary("example", "work");
+    expect(summary?.connectionValues).toEqual({ mailbox: "support@example.com" });
+    expect(started.authorizationUrl).not.toContain("support");
+    expect(started.authorizationUrl).not.toContain("hidden");
+    await expect(
+      services.flow.startAuthorization({ service: "example", values: { undeclared: "value" } }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
   });
 
   it("rejects expired OAuth authorization states", async () => {
