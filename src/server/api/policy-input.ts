@@ -57,6 +57,14 @@ function readRules(value: unknown, fieldName: string, kind: "action" | "proxy", 
 }
 
 function assertRuleSyntax(rule: string, fieldName: string, kind: "action" | "proxy"): void {
+  if (kind === "action" && rule.includes("@")) {
+    const parts = rule.split("@");
+    if (parts.length !== 2 || !/^[a-zA-Z0-9:_-]+$/.test(parts[1])) {
+      throw invalidInput(`${fieldName} contains an invalid connection-scoped rule: ${rule}.`);
+    }
+    assertRuleSyntax(parts[0], fieldName, kind);
+    return;
+  }
   if (rule === "*") {
     return;
   }

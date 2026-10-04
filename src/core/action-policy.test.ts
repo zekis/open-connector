@@ -15,6 +15,36 @@ const action: ActionDefinition = {
 };
 
 describe("ActionPolicyService", () => {
+  it("limits scoped grants to the resolved connection while preserving provider-wide grants", () => {
+    const policy = new ActionPolicyService().createSnapshot(undefined, {
+      allowedActions: ["xero.*", "github.*@shared-id"],
+      blockedActions: [],
+      allowedProxies: [],
+    });
+    expect(policy.evaluate(action).allowed).toBe(true);
+    expect(policy.evaluate(action, "shared-id").allowed).toBe(true);
+    expect(policy.evaluate(action, "personal-id")).toMatchObject({ allowed: false, code: "action_not_allowed" });
+    expect(policy.evaluate(action, null).allowed).toBe(false);
+    expect(policy.evaluate({ ...action, id: "xero.list_contacts", service: "xero" }, "any-id").allowed).toBe(true);
+    expect(policy.evaluateProxy("github").allowed).toBe(false);
+  });
+
+  it("applies connection-specific blocks only to that connection and keeps global blocks dominant", () => {
+    const policy = new ActionPolicyService({
+      allowedActions: ["github.*"],
+      blockedActions: ["github.*@personal-id"],
+    }).createSnapshot();
+    expect(policy.evaluate(action).allowed).toBe(true);
+    expect(policy.evaluate(action, "shared-id").allowed).toBe(true);
+    expect(policy.evaluate(action, "personal-id")).toMatchObject({ allowed: false, code: "action_blocked" });
+    const blocked = new ActionPolicyService({ blockedActions: ["github.*"] }).createSnapshot(undefined, {
+      allowedActions: ["github.*@shared-id"],
+      blockedActions: [],
+      allowedProxies: [],
+    });
+    expect(blocked.evaluate(action, "shared-id").allowed).toBe(false);
+  });
+
   it("allows actions by default", () => {
     expect(new ActionPolicyService().evaluate(action)).toEqual({ allowed: true, checks: [] });
   });

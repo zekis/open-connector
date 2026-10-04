@@ -325,3 +325,26 @@ npm run dev
 Action policy entries are comma-separated action ids. A provider-wide wildcard such as `gmail.*`
 matches all actions for that provider, and a bare `*` matches every action. Proxy policy entries are
 comma-separated provider service names, or `*` for all provider proxies.
+
+### Restrict a token to one connection
+
+In **Access > Edit token policy**, choose **Allow the rules below**, add an action
+rule such as `outlook.*`, then choose the shared mailbox in that rule's connection
+picker. Keep `xero.*` set to **All connections** if the token should access all
+configured Xero accounts. Save the policy and use the shared connection's name
+when making Outlook calls.
+
+The API and advanced editor encode a connection-specific rule as
+`outlook.*@<connection-id>`. Use the stable `id` from `GET /api/connections`, not the
+connection name or mailbox email. Exact actions, such as
+`outlook.list_messages@<connection-id>`, and connection-specific block rules are
+supported too.
+
+Unqualified rules still match every connection. For example, keeping an additional
+`outlook.*` or `*` allow rule grants all Outlook connections even if another rule
+selects just one mailbox. Block rules take priority. Deleted connections remain
+restricted to their old IDs; creating a new connection with the same name does not
+grant it access. Update the token's selection if you replace a connection.
+
+Connection restrictions apply to Action execution. Proxy grants remain independent
+and provider-wide; an empty token `allowedProxies` list grants no proxy access.

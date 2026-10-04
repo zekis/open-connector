@@ -47,6 +47,7 @@ export interface ActionPolicyConfig {
 
 interface CompiledRule {
   pattern: string;
+  connectionId?: string;
   matches(value: string): boolean;
 }
 
@@ -86,9 +87,12 @@ export class ActionPolicySnapshot {
     }
   }
 
-  evaluate(action: ActionDefinition): ActionPolicyDecision {
+  /** Omit connectionId for discovery; execution must pass the resolved ID or null. */
+  evaluate(action: ActionDefinition, connectionId?: string | null): ActionPolicyDecision {
     for (const layer of this.layers) {
-      const blocked = layer.blockedActions.find((rule) => rule.matches(action.id));
+      const blocked = layer.blockedActions.find(
+        (rule) => rule.matches(action.id) && (!rule.connectionId || rule.connectionId === connectionId),
+      );
       if (blocked) {
         return {
           allowed: false,
@@ -104,7 +108,11 @@ export class ActionPolicySnapshot {
       if (layer.allowedActions.length === 0) {
         continue;
       }
-      const allowed = layer.allowedActions.find((rule) => rule.matches(action.id));
+      const allowed = layer.allowedActions.find(
+        (rule) =>
+          rule.matches(action.id) &&
+          (!rule.connectionId || connectionId === undefined || rule.connectionId === connectionId),
+      );
       if (!allowed) {
         return {
           allowed: false,
@@ -243,14 +251,19 @@ function compileLayer(source: PolicySource, rules: PolicyRules): CompiledLayer {
 }
 
 function compileActionRule(pattern: string): CompiledRule {
-  if (pattern === "*") {
-    return { pattern, matches: () => true };
+  const parts = pattern.split("@");
+  const [actionPattern, connectionId] = parts;
+  if (parts.length > 2 || (parts.length === 2 && !/^[a-zA-Z0-9:_-]+$/.test(connectionId ?? ""))) {
+    return { pattern, matches: () => false };
   }
-  if (pattern.endsWith(".*")) {
-    const prefix = pattern.slice(0, -1);
-    return { pattern, matches: (actionId) => actionId.startsWith(prefix) };
+  if (actionPattern === "*") {
+    return { pattern, connectionId, matches: () => true };
   }
-  return { pattern, matches: (actionId) => actionId === pattern };
+  if (actionPattern.endsWith(".*")) {
+    const prefix = actionPattern.slice(0, -1);
+    return { pattern, connectionId, matches: (actionId) => actionId.startsWith(prefix) };
+  }
+  return { pattern, connectionId, matches: (actionId) => actionId === actionPattern };
 }
 
 function compileProxyRule(pattern: string): CompiledRule {

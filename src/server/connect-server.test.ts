@@ -2043,6 +2043,58 @@ describe("ConnectServer", () => {
     expect(executions).toBe(1);
   });
 
+  it("enforces saved connection scopes and rechecks them before replaying cached responses", async () => {
+    const runtimeTokens = new RuntimeTokenService(new MemoryRuntimeTokenStore());
+    let executions = 0;
+    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
+      runtimeTokens,
+      providerLoader: new ActionProviderLoader(async (value) => {
+        executions += 1;
+        return { ok: true, output: value };
+      }),
+    }).createApp();
+    const createConnection = async (connectionName: string): Promise<{ id: string }> => {
+      const response = await app.request("/api/connections/example", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ authType: "api_key", connectionName, values: { apiKey: "key" } }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as { id: string };
+    };
+    const personal = await createConnection("default");
+    const shared = await createConnection("shared");
+    const created = await runtimeTokens.createToken("Shared only", {
+      allowedActions: ["xero.*", `example.*@${shared.id}`],
+      blockedActions: [],
+      allowedProxies: [],
+    });
+    const request = (connectionName: string, key: string) =>
+      app.request("/v1/actions/example.echo", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${created.token}`,
+          "content-type": "application/json",
+          "idempotency-key": key,
+        },
+        body: JSON.stringify({ connectionName, input: { message: "hello" } }),
+      });
+    const denied = await request("default", "denied-personal");
+    expect(denied.status).toBe(400);
+    expect(await denied.json()).toMatchObject({ errorCode: "action_not_allowed" });
+    expect((await request("shared", "shared-request")).status).toBe(200);
+    expect(executions).toBe(1);
+    await runtimeTokens.updateTokenPolicy(created.record.id, {
+      allowedActions: [`example.*@${personal.id}`],
+      blockedActions: [],
+      allowedProxies: [],
+    });
+    const deniedReplay = await request("shared", "shared-request");
+    expect(deniedReplay.status).toBe(400);
+    expect(await deniedReplay.json()).toMatchObject({ errorCode: "action_not_allowed" });
+    expect(executions).toBe(1);
+  });
+
   it("does not replay legacy unscoped records to stored tokens and allows them after expiry", async () => {
     let executions = 0;
     const idempotency = new MemoryIdempotencyStore();

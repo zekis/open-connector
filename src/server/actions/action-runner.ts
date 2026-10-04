@@ -82,9 +82,8 @@ export class ActionRunner implements IActionRunner {
     this.options.logger?.info(logContext, "action run started");
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
-    const policy: ActionPolicyDecision = (input.policy ?? this.options.actionPolicy?.createSnapshot())?.evaluate(
-      action,
-    ) ?? { allowed: true, checks: [] };
+    const policySnapshot = input.policy ?? this.options.actionPolicy?.createSnapshot();
+    let policy: ActionPolicyDecision = policySnapshot?.evaluate(action) ?? { allowed: true, checks: [] };
     let connection: ExecutionConnection | undefined;
     let result: ExecutionResult;
     if (!policy.allowed) {
@@ -94,45 +93,50 @@ export class ActionRunner implements IActionRunner {
         connection = input.connectionId
           ? await this.options.connections.resolveForExecutionById(action.service, input.connectionId)
           : await this.options.connections.resolveForExecution(action.service, input.connectionName);
-        const approval =
-          input.approvalPolicy === "bypass" || !connection.summary
-            ? { allowed: true as const }
-            : await this.options.approvals?.requestAction({
-                actionId: action.id,
-                connection: connection.summary,
-                caller: input.caller,
-                input: input.input,
-                runtimeTokenId: input.runtimeTokenId,
-              });
-        if (approval && !approval.allowed) {
-          result = {
-            ok: false,
-            error: {
-              code: "approval_pending",
-              message: `${action.id} was queued and is pending approval for ${connection.summary?.profile.displayName ?? "this connection"}.`,
-              details: {
-                approvalId: approval.approval.id,
-                status: "pending",
-                queued: true,
-                actionId: action.id,
-                connectionId: connection.summary?.id,
-              },
-            },
-          };
+        policy = policySnapshot?.evaluate(action, connection.summary?.id ?? null) ?? policy;
+        if (!policy.allowed) {
+          result = { ok: false, error: { code: policy.code, message: policy.message } };
         } else {
-          const executor = action.execution.locallyExecutable
-            ? await this.options.providerLoader.loadActionExecutor(
-                action.service,
-                action.id,
-                this.options.catalog.providers.find((provider) => provider.service === action.service)?.displayName,
-              )
-            : undefined;
-          result = await executeProviderAction(
-            action,
-            executor,
-            input.input,
-            this.createExecutionContext(connection.getCredential, input.signal),
-          );
+          const approval =
+            input.approvalPolicy === "bypass" || !connection.summary
+              ? { allowed: true as const }
+              : await this.options.approvals?.requestAction({
+                  actionId: action.id,
+                  connection: connection.summary,
+                  caller: input.caller,
+                  input: input.input,
+                  runtimeTokenId: input.runtimeTokenId,
+                });
+          if (approval && !approval.allowed) {
+            result = {
+              ok: false,
+              error: {
+                code: "approval_pending",
+                message: `${action.id} was queued and is pending approval for ${connection.summary?.profile.displayName ?? "this connection"}.`,
+                details: {
+                  approvalId: approval.approval.id,
+                  status: "pending",
+                  queued: true,
+                  actionId: action.id,
+                  connectionId: connection.summary?.id,
+                },
+              },
+            };
+          } else {
+            const executor = action.execution.locallyExecutable
+              ? await this.options.providerLoader.loadActionExecutor(
+                  action.service,
+                  action.id,
+                  this.options.catalog.providers.find((provider) => provider.service === action.service)?.displayName,
+                )
+              : undefined;
+            result = await executeProviderAction(
+              action,
+              executor,
+              input.input,
+              this.createExecutionContext(connection.getCredential, input.signal),
+            );
+          }
         }
       } catch (error) {
         result = input.signal?.aborted

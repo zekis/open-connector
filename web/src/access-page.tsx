@@ -1,4 +1,5 @@
 import type {
+  ConnectionRecord,
   PolicyRules,
   ProviderDefinition,
   RuntimePolicyState,
@@ -57,6 +58,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 interface AccessPageProps {
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   tokens: RuntimeTokenSummary[];
   policy: RuntimePolicyState;
   onRefresh(): void;
@@ -69,6 +71,7 @@ interface CreateTokenDialogProps {
   copied: boolean;
   draft: PolicyEditorDraft;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   onNameChange(name: string): void;
   onDraftChange(draft: PolicyEditorDraft): void;
   onSubmit(event: FormEvent): Promise<void>;
@@ -265,8 +268,13 @@ export function AccessPage(props: AccessPageProps): ReactNode {
           </div>
         </div>
 
-        <PolicyBaseline policy={policy} providers={props.providers} />
-        <PolicyTester policy={policy} providers={props.providers} tokens={props.tokens} />
+        <PolicyBaseline policy={policy} providers={props.providers} connections={props.connections} />
+        <PolicyTester
+          policy={policy}
+          providers={props.providers}
+          connections={props.connections}
+          tokens={props.tokens}
+        />
         <PolicyLayerDisclosure rules={policy.deployment} />
 
         {runtimeEditing ? (
@@ -274,6 +282,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
             draft={runtimeDraft}
             draftState={runtimeDraftState}
             providers={props.providers}
+            connections={props.connections}
             dirty={runtimeDirty}
             risk={runtimeRisk}
             saving={runtimeSaving}
@@ -362,6 +371,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
           copied={copied}
           draft={createDraft}
           providers={props.providers}
+          connections={props.connections}
           onNameChange={setName}
           onDraftChange={setCreateDraft}
           onSubmit={submitToken}
@@ -374,6 +384,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
           token={editingToken}
           draft={editTokenDraft}
           providers={props.providers}
+          connections={props.connections}
           status={tokenStatus}
           onDraftChange={setEditTokenDraft}
           onSubmit={saveTokenPolicy}
@@ -406,7 +417,11 @@ export function AccessPage(props: AccessPageProps): ReactNode {
   );
 }
 
-function PolicyBaseline(props: { policy: RuntimePolicyState; providers: ProviderDefinition[] }): ReactNode {
+function PolicyBaseline(props: {
+  policy: RuntimePolicyState;
+  providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
+}): ReactNode {
   const t = useTranslate();
   const titleId = useId();
   const { actions, proxies } = useMemo(() => {
@@ -458,6 +473,7 @@ function PolicyBaseline(props: { policy: RuntimePolicyState; providers: Provider
 function PolicyTester(props: {
   policy: RuntimePolicyState;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   tokens: RuntimeTokenSummary[];
   compact?: boolean;
 }): ReactNode {
@@ -473,13 +489,29 @@ function PolicyTester(props: {
   );
   const [input, setInput] = useState("");
   const [testedValue, setTestedValue] = useState("");
+  const [connectionId, setConnectionId] = useState("");
   const suggestions = useMemo(
     () => (input.trim() ? filterPolicyRuleCandidates(candidates, input, 6) : []),
     [candidates, input],
   );
   const token = props.tokens.find((item) => item.id === tokenId);
   const layers = policyLayers(props.policy, token);
-  const result = testedValue ? evaluatePolicy(testedValue, resource, layers) : null;
+  const result = testedValue
+    ? evaluatePolicy(
+        testedValue,
+        resource,
+        layers,
+        resource === "action"
+          ? connectionId ||
+              props.connections?.find(
+                (connection) =>
+                  connection.service === testedValue.split(".")[0] &&
+                  (connection.default || connection.connectionName === "default"),
+              )?.id ||
+              null
+          : undefined,
+      )
+    : null;
   const listId = `policy-tester-${props.compact ? "compact" : "default"}-${resource}`;
 
   function changeResource(next: PolicyResource): void {
@@ -549,6 +581,22 @@ function PolicyTester(props: {
           placeholder={t(`access.policy.tester.${resource}Placeholder`)}
           onChange={setInput}
         />
+        {resource === "action" ? (
+          <label className="field">
+            <span>Connection</span>
+            <select value={connectionId} onChange={(event) => setConnectionId(event.target.value)}>
+              <option value="">Default connection</option>
+              {props.connections
+                ?.filter((connection) => connection.id && input.startsWith(`${connection.service}.`))
+                .map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {connection.connectionName ?? "default"} ·{" "}
+                    {String(connection.profile?.displayName ?? connection.service)}
+                  </option>
+                ))}
+            </select>
+          </label>
+        ) : null}
         <Button type="submit" disabled={!input.trim()}>
           <Play size={15} />
           {t("access.policy.tester.test")}
@@ -627,6 +675,7 @@ function RuntimePolicyEditor(props: {
   draft: PolicyEditorDraft;
   draftState: RuntimePolicyState;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   dirty: boolean;
   risk: "actions" | "proxies" | "all" | null;
   saving: boolean;
@@ -650,12 +699,24 @@ function RuntimePolicyEditor(props: {
         </Badge>
       </div>
       <div className="runtime-policy-editor-grid">
-        <PolicyEditor draft={props.draft} providers={props.providers} includeProxies onChange={props.onDraftChange} />
+        <PolicyEditor
+          draft={props.draft}
+          providers={props.providers}
+          connections={props.connections}
+          includeProxies
+          onChange={props.onDraftChange}
+        />
         <aside className="policy-impact-panel" id="runtime-policy-impact">
           <h3>{t("access.policy.impact.title")}</h3>
           <p>{t("access.policy.impact.description")}</p>
-          <PolicyBaseline policy={props.draftState} providers={props.providers} />
-          <PolicyTester policy={props.draftState} providers={props.providers} tokens={[]} compact />
+          <PolicyBaseline policy={props.draftState} providers={props.providers} connections={props.connections} />
+          <PolicyTester
+            policy={props.draftState}
+            providers={props.providers}
+            connections={props.connections}
+            tokens={[]}
+            compact
+          />
           {props.risk ? (
             <div className="policy-risk-warning" role="alert">
               <AlertTriangle size={16} />
@@ -780,6 +841,7 @@ function CreateTokenDialog(props: CreateTokenDialogProps): ReactNode {
               <PolicyEditor
                 draft={props.draft}
                 providers={props.providers}
+                connections={props.connections}
                 includeProxies
                 proxyAccess="grant"
                 onChange={props.onDraftChange}
@@ -806,6 +868,7 @@ interface EditTokenPolicyDialogProps {
   token: RuntimeTokenSummary;
   draft: PolicyEditorDraft;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   status: string | null;
   onDraftChange(draft: PolicyEditorDraft): void;
   onSubmit(event: FormEvent): Promise<void>;
@@ -827,6 +890,7 @@ function EditTokenPolicyDialog(props: EditTokenPolicyDialogProps): ReactNode {
           <PolicyEditor
             draft={props.draft}
             providers={props.providers}
+            connections={props.connections}
             includeProxies
             proxyAccess="grant"
             onChange={props.onDraftChange}

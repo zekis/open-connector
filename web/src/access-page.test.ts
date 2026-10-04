@@ -4,6 +4,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AccessPage, policyDraftFromRules, policyRulesFromDraft } from "./access-page";
+import { createPolicyEditorDraft } from "./policy";
+import { PolicyEditor } from "./policy-editor";
 
 vi.mock("@embra/i18n/react", () => ({
   useTranslate() {
@@ -12,6 +14,38 @@ vi.mock("@embra/i18n/react", () => ({
 }));
 
 describe("AccessPage", () => {
+  it("shows the selected account beside scoped rules and preserves missing connection IDs", () => {
+    const markup = renderToStaticMarkup(
+      createElement(PolicyEditor, {
+        providers: [],
+        includeProxies: false,
+        draft: createPolicyEditorDraft({
+          allowedActions: ["outlook.*@shared-id", "xero.*", "outlook.get_message@deleted-id"],
+          blockedActions: [],
+          allowedProxies: [],
+          blockedProxies: [],
+        }),
+        connections: [
+          {
+            id: "shared-id",
+            service: "outlook",
+            connectionName: "office",
+            authType: "oauth2",
+            profile: { displayName: "office@example.com" },
+            metadata: {},
+          },
+          { id: "personal-id", service: "outlook", connectionName: "personal", authType: "oauth2", metadata: {} },
+        ],
+        onChange() {},
+      }),
+    );
+    expect(markup).toContain('value="shared-id" selected=""');
+    expect(markup).toContain("office@example.com");
+    expect(markup).toContain("Connection for outlook.*");
+    expect(markup).toContain("Unavailable connection (deleted-id)");
+    expect(markup).toContain("All connections");
+  });
+
   it("shows deployment, Runtime, and token policy state", () => {
     const providers: ProviderDefinition[] = [
       {

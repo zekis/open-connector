@@ -18,6 +18,16 @@ describe("policy input", () => {
     });
   });
 
+  it("accepts connection-scoped actions and rejects malformed scopes", () => {
+    expect(
+      readTokenPolicy({ allowedActions: ["xero.*", "outlook.*@shared-id"], blockedActions: [], allowedProxies: [] })
+        .allowedActions,
+    ).toEqual(["xero.*", "outlook.*@shared-id"]);
+    for (const rule of ["outlook.*@", "outlook.*@*", "outlook.*@one@two", "outlook.*@two words"]) {
+      expect(() => readTokenPolicy({ allowedActions: [rule], blockedActions: [], allowedProxies: [] })).toThrow();
+    }
+  });
+
   it("allows omitted token rules only during creation", () => {
     expect(readTokenPolicy({}, true)).toEqual({ allowedActions: [], blockedActions: [], allowedProxies: [] });
     expect(() => readTokenPolicy({})).toThrow("allowedActions must be an array of strings");

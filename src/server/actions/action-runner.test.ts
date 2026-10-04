@@ -150,6 +150,41 @@ describe("ActionRunner", () => {
     });
   });
 
+  it.each(["http", "mcp"] as const)(
+    "enforces connection-scoped rules before approval and execution for %s",
+    async (caller) => {
+      const runs = new MemoryRunLogStore();
+      const { logger } = createTestLogger();
+      const requestAction = vi.fn().mockResolvedValue({ allowed: true });
+      const executor = vi.fn(async () => ({ ok: true as const, output: {} }));
+      const runner = createRunner({
+        runs,
+        logger,
+        providerLoader: new TestProviderLoader(executor),
+        approvals: { requestAction },
+      });
+      const policy = new ActionPolicyService().createSnapshot(undefined, {
+        allowedActions: ["example.*@example:shared"],
+        blockedActions: [],
+        allowedProxies: [],
+      });
+      const denied = await runner.run({ actionId: echoAction.id, input: {}, caller, policy });
+      expect(denied?.result).toMatchObject({ ok: false, error: { code: "action_not_allowed" } });
+      expect(requestAction).not.toHaveBeenCalled();
+      expect(executor).not.toHaveBeenCalled();
+      const allowed = await runner.run({
+        actionId: echoAction.id,
+        input: {},
+        caller,
+        policy,
+        connectionName: "shared",
+      });
+      expect(allowed?.result.ok).toBe(true);
+      expect(executor).toHaveBeenCalledOnce();
+      expect(runs.items[0]?.policy).toMatchObject({ allowed: false });
+    },
+  );
+
   it("queues globally gated actions before loading an executor and exposes the pending approval", async () => {
     const runs = new MemoryRunLogStore();
     const { logger } = createTestLogger();

@@ -116,12 +116,20 @@ export function policyLayers(policy: RuntimePolicyState, token?: RuntimeTokenSum
   return layers;
 }
 
-export function evaluatePolicy(value: string, resource: PolicyResource, layers: PolicyLayer[]): PolicyEvaluation {
+export function evaluatePolicy(
+  value: string,
+  resource: PolicyResource,
+  layers: PolicyLayer[],
+  connectionId?: string | null,
+): PolicyEvaluation {
   const allowedField = resource === "action" ? "allowedActions" : "allowedProxies";
   const blockedField = resource === "action" ? "blockedActions" : "blockedProxies";
   const matches = resource === "action" ? matchesActionRule : matchesProxyRule;
   const trace = layers.map((layer): PolicyTrace => {
-    const blocked = layer.rules[blockedField].find((rule) => matches(rule, value));
+    const blocked = layer.rules[blockedField].find(
+      (rule) =>
+        matches(rule, value) && (resource !== "action" || !rule.includes("@") || rule.split("@")[1] === connectionId),
+    );
     if (blocked) {
       return { source: layer.source, outcome: "block_match", rule: blocked };
     }
@@ -130,7 +138,14 @@ export function evaluatePolicy(value: string, resource: PolicyResource, layers: 
         ? { source: layer.source, outcome: "allow_miss" }
         : { source: layer.source, outcome: "unrestricted" };
     }
-    const allowed = layer.rules[allowedField].find((rule) => matches(rule, value));
+    const allowed = layer.rules[allowedField].find(
+      (rule) =>
+        matches(rule, value) &&
+        (resource !== "action" ||
+          !rule.includes("@") ||
+          connectionId === undefined ||
+          rule.split("@")[1] === connectionId),
+    );
     return allowed
       ? { source: layer.source, outcome: "allow_match", rule: allowed }
       : { source: layer.source, outcome: "allow_miss" };
@@ -202,6 +217,7 @@ export function filterPolicyRuleCandidates(candidates: string[], query: string, 
 }
 
 export function isKnownPolicyRule(rule: string, resource: PolicyResource, providers: ProviderDefinition[]): boolean {
+  if (resource === "action") rule = rule.split("@")[0];
   if (rule === "*") {
     return true;
   }
@@ -232,6 +248,11 @@ export function policyRuleIssue(rule: string, resource: PolicyResource): "invali
   if (new TextEncoder().encode(rule).byteLength > 256) {
     return "too_long";
   }
+  if (resource === "action" && rule.includes("@")) {
+    const parts = rule.split("@");
+    if (parts.length !== 2 || !/^[a-zA-Z0-9:_-]+$/.test(parts[1])) return "invalid";
+    return policyRuleIssue(parts[0], resource);
+  }
   if (rule === "*") {
     return undefined;
   }
@@ -248,6 +269,7 @@ export function policyRuleIssue(rule: string, resource: PolicyResource): "invali
 }
 
 function matchesActionRule(pattern: string, actionId: string): boolean {
+  pattern = pattern.split("@")[0];
   if (pattern === "*") {
     return true;
   }

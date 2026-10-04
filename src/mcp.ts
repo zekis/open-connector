@@ -379,13 +379,17 @@ async function describeActionCapability(
   policy?: ActionPolicySnapshot,
 ): Promise<ActionCapability> {
   const provider = options.catalog.providers.find((candidate) => candidate.service === action.service);
+  const connection = await getSelectedConnectionSummary(options, action.service, connectionName);
   return {
     execution: action.execution,
     authTypes: provider?.authTypes ?? [],
     requiredScopes: action.requiredScopes,
     providerPermissions: action.providerPermissions,
-    policy: (policy ?? (await getPolicySnapshot(options))).evaluate(action),
-    connection: await getSelectedConnectionSummary(options, action.service, connectionName),
+    policy: (policy ?? (await getPolicySnapshot(options))).evaluate(
+      action,
+      connectionName ? (connection?.id ?? null) : undefined,
+    ),
+    connection,
   };
 }
 
@@ -395,10 +399,14 @@ async function describeActionMarkdownContext(
   connectionName?: string,
   policy?: ActionPolicySnapshot,
 ): Promise<{ connection?: ConnectionSummary; providerPermissions: string[]; policy: ActionPolicyDecision }> {
+  const connection = await getSelectedConnectionSummary(options, action.service, connectionName);
   return {
-    connection: await getSelectedConnectionSummary(options, action.service, connectionName),
+    connection,
     providerPermissions: action.providerPermissions,
-    policy: (policy ?? (await getPolicySnapshot(options))).evaluate(action),
+    policy: (policy ?? (await getPolicySnapshot(options))).evaluate(
+      action,
+      connectionName ? (connection?.id ?? null) : undefined,
+    ),
   };
 }
 

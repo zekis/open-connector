@@ -1,4 +1,4 @@
-import type { PolicyRules, ProviderDefinition } from "./model";
+import type { ConnectionRecord, PolicyRules, ProviderDefinition } from "./model";
 import type { AllowMode, PolicyEditorDraft, PolicyResource } from "./policy";
 import type { ReactNode } from "react";
 
@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 interface PolicyEditorProps {
   draft: PolicyEditorDraft;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   includeProxies: boolean;
   proxyAccess?: "constraint" | "grant";
   onChange(draft: PolicyEditorDraft): void;
@@ -32,7 +33,13 @@ export function PolicyEditor(props: PolicyEditorProps): ReactNode {
   const t = useTranslate();
   const issues = validatePolicyEditorDraft(props.draft, props.includeProxies);
   const actionEditor = (
-    <PolicyResourceEditor resource="action" draft={props.draft} providers={props.providers} onChange={props.onChange} />
+    <PolicyResourceEditor
+      resource="action"
+      draft={props.draft}
+      providers={props.providers}
+      connections={props.connections}
+      onChange={props.onChange}
+    />
   );
 
   return (
@@ -49,6 +56,7 @@ export function PolicyEditor(props: PolicyEditorProps): ReactNode {
               resource="proxy"
               draft={props.draft}
               providers={props.providers}
+              connections={props.connections}
               proxyAccess={props.proxyAccess}
               onChange={props.onChange}
             />
@@ -71,6 +79,7 @@ interface PolicyResourceEditorProps {
   resource: PolicyResource;
   draft: PolicyEditorDraft;
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   proxyAccess?: "constraint" | "grant";
   onChange(draft: PolicyEditorDraft): void;
 }
@@ -139,6 +148,7 @@ function PolicyResourceEditor(props: PolicyResourceEditorProps): ReactNode {
           effect="allow"
           values={props.draft.rules[fields.allowed]}
           providers={props.providers}
+          connections={props.connections}
           onChange={(values) => setRules(fields.allowed, values)}
         />
       ) : null}
@@ -149,6 +159,7 @@ function PolicyResourceEditor(props: PolicyResourceEditorProps): ReactNode {
           effect="block"
           values={props.draft.rules[fields.blocked]}
           providers={props.providers}
+          connections={props.connections}
           onChange={(values) => setRules(fields.blocked, values)}
         />
       ) : null}
@@ -193,6 +204,7 @@ interface RuleListEditorProps {
   effect: "allow" | "block";
   values: string[];
   providers: ProviderDefinition[];
+  connections?: ConnectionRecord[];
   onChange(values: string[]): void;
 }
 
@@ -281,6 +293,12 @@ function RuleListEditor(props: RuleListEditorProps): ReactNode {
           <Plus size={16} />
         </Button>
       </div>
+      {props.resource === "action" && props.connections ? (
+        <p>
+          Choose a connection for each rule. An “All connections” allow rule also grants access to every matching
+          account.
+        </p>
+      ) : null}
       {error ? <p className="policy-rule-error">{error}</p> : null}
       {props.values.length > 0 ? (
         <div className="policy-rule-list">
@@ -288,7 +306,40 @@ function RuleListEditor(props: RuleListEditorProps): ReactNode {
             const known = isKnownPolicyRule(rule, props.resource, props.providers);
             return (
               <div className="policy-rule-row" key={rule}>
-                <code>{rule}</code>
+                <code>{props.resource === "action" && props.connections ? rule.split("@")[0] : rule}</code>
+                {props.resource === "action" && props.connections ? (
+                  <label className="field policy-rule-connection">
+                    <span className="sr-only">Connection for {rule.split("@")[0]}</span>
+                    <select
+                      aria-label={`Connection for ${rule.split("@")[0]}`}
+                      value={rule.split("@")[1] ?? ""}
+                      onChange={(event) => {
+                        const actionRule = rule.split("@")[0];
+                        const updated = event.target.value ? `${actionRule}@${event.target.value}` : actionRule;
+                        props.onChange([...new Set(props.values.map((value) => (value === rule ? updated : value)))]);
+                      }}
+                    >
+                      <option value="">All connections</option>
+                      {rule.includes("@") &&
+                      !props.connections.some((connection) => connection.id === rule.split("@")[1]) ? (
+                        <option value={rule.split("@")[1]}>Unavailable connection ({rule.split("@")[1]})</option>
+                      ) : null}
+                      {props.connections
+                        .filter(
+                          (connection) =>
+                            connection.id &&
+                            connection.configured !== false &&
+                            (rule.split("@")[0] === "*" || rule.startsWith(`${connection.service}.`)),
+                        )
+                        .map((connection) => (
+                          <option key={connection.id} value={connection.id}>
+                            {connection.connectionName ?? "default"} ·{" "}
+                            {String(connection.profile?.displayName ?? connection.service)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                ) : null}
                 {!known ? <span className="policy-rule-unknown">{t("access.policy.editor.unknownRule")}</span> : null}
                 <Badge tone={props.effect === "allow" ? "success" : "error"}>
                   {t(`access.policy.editor.${props.effect}`)}

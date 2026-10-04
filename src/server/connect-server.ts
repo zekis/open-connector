@@ -737,7 +737,16 @@ export class ConnectServer {
         meta: { actionId },
       });
     }
-    if (!policy.evaluate(action).allowed) {
+    let selectedPolicy = policy.evaluate(action);
+    if (selectedPolicy.allowed) {
+      try {
+        const connection = await this.options.connections.getConnectionSummary(action.service, connectionName);
+        selectedPolicy = policy.evaluate(action, connection?.id ?? null);
+      } catch {
+        selectedPolicy = policy.evaluate(action, null);
+      }
+    }
+    if (!selectedPolicy.allowed) {
       return writeRuntimeActionHttpResult(
         context,
         await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant),

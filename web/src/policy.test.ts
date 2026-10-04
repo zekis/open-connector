@@ -8,6 +8,7 @@ import {
   filterPolicyRuleCandidates,
   policyLayers,
   policyRuleCandidates,
+  policyRuleIssue,
   policyRulesFromEditorDraft,
   validatePolicyEditorDraft,
 } from "./policy";
@@ -15,6 +16,18 @@ import {
 const emptyRules = { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
 
 describe("web policy evaluation", () => {
+  it("previews a scoped allow rule against the selected connection", () => {
+    const layers = [
+      { source: "token" as const, rules: { ...emptyRules, allowedActions: ["xero.*", "outlook.*@shared-id"] } },
+    ];
+    expect(evaluatePolicy("outlook.list_messages", "action", layers, "shared-id").allowed).toBe(true);
+    expect(evaluatePolicy("outlook.list_messages", "action", layers, "personal-id").allowed).toBe(false);
+    expect(evaluatePolicy("outlook.list_messages", "action", layers, null).allowed).toBe(false);
+    expect(evaluatePolicy("xero.list_contacts", "action", layers, "any-id").allowed).toBe(true);
+    expect(policyRuleIssue("outlook.*@shared-id", "action")).toBeUndefined();
+    expect(policyRuleIssue("outlook.*@", "action")).toBe("invalid");
+  });
+
   it("applies block rules before allowlist misses across layers", () => {
     const result = evaluatePolicy("github.delete_repository", "action", [
       {

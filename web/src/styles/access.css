@@ -685,3 +685,19 @@
     gap: 3px;
   }
 }
+
+.policy-rule-connection {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+}
+
+.policy-rule-connection select {
+  width: 100%;
+  min-width: 0;
+}
+
+.policy-rule-row:has(.policy-rule-connection) .policy-rule-unknown {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
