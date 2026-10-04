@@ -71,7 +71,7 @@
 
 .provider-card-main {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex: 1;
   min-width: 0;
   gap: 12px;
@@ -80,18 +80,17 @@
 }
 
 .provider-card-title-row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   flex: 1;
   min-width: 0;
-  gap: 8px;
+  gap: 6px;
 }
 
 .provider-card-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
   font-size: 14px;
   font-weight: 560;
 }
@@ -99,6 +98,7 @@
 .provider-status-badges {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   gap: 6px;
   max-width: 100%;
@@ -115,7 +115,7 @@
   flex: 0 0 auto;
   gap: 5px;
   min-width: 72px;
-  max-width: 168px;
+  max-width: 30%;
   border-radius: var(--radius-sm);
   color: var(--foreground);
   text-decoration: none;
@@ -132,9 +132,9 @@
 }
 
 .provider-card-action span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .provider-show-more {
@@ -153,6 +153,7 @@
 }
 
 .provider-icon {
+  flex-shrink: 0;
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -641,7 +642,7 @@
   margin-bottom: 14px;
 }
 
-@media (min-width: 760px) {
+@media (min-width: 960px) {
   .provider-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -655,7 +656,7 @@
   }
 }
 
-@media (min-width: 1180px) {
+@media (min-width: 1600px) {
   .provider-card-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -697,18 +698,8 @@
     align-items: flex-start;
   }
 
-  .provider-card-title-row {
-    display: grid;
-    gap: 6px;
-  }
-
-  .provider-status-badges {
-    flex-wrap: wrap;
-  }
-
   .provider-card-action {
     min-width: 0;
-    max-width: 112px;
     padding-top: 8px;
   }
 
