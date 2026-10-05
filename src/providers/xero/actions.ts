@@ -10,6 +10,8 @@ const service = "xero";
 const noInputSchema = s.object("No input is required.", {});
 const pageSchema = s.positiveInteger("Page number to return.");
 const pageSizeSchema = s.positiveInteger("Number of records to return per page.");
+const reportPeriodsSchema = s.positiveInteger("Number of comparative periods to include, from 1 to 11.");
+const reportTimeframeSchema = s.stringEnum("Length of each comparative period.", ["MONTH", "QUARTER", "YEAR"]);
 const xeroApiFamilyDescription = xeroApiFamilyNames
   .map((name) => `${name}: ${xeroApiFamilies[name]!.description}`)
   .join(" ");
@@ -603,6 +605,52 @@ export const xeroActions: readonly ActionDefinition[] = [
     ),
     outputSchema: s.actionOutput({ report: reportSchema }, "Xero Bank Summary report."),
     requiredScopes: [xeroScopes.bankSummaryRead],
+  }),
+  defineProviderAction(service, {
+    name: "get_profit_and_loss",
+    description:
+      "Get Xero's Profit and Loss report of income, expenses and net profit for a reporting period. Request several comparative columns with periods and timeframe.",
+    inputSchema: s.object(
+      "Optional Profit and Loss reporting period and comparative columns.",
+      {
+        fromDate: s.date("Inclusive report start date; Xero defaults to the start of the current month."),
+        toDate: s.date("Inclusive report end date; Xero defaults to the end of the current month."),
+        periods: reportPeriodsSchema,
+        timeframe: reportTimeframeSchema,
+      },
+      { optional: ["fromDate", "toDate", "periods", "timeframe"] },
+    ),
+    outputSchema: s.actionOutput({ report: reportSchema }, "Xero Profit and Loss report."),
+    requiredScopes: [xeroScopes.profitAndLossRead],
+  }),
+  defineProviderAction(service, {
+    name: "get_balance_sheet",
+    description:
+      "Get Xero's Balance Sheet report of assets, liabilities and equity as at a date. Request several comparative columns with periods and timeframe.",
+    inputSchema: s.object(
+      "Optional Balance Sheet date and comparative columns.",
+      {
+        date: s.date("Balance date to report as at; Xero defaults to the end of the current month."),
+        periods: reportPeriodsSchema,
+        timeframe: reportTimeframeSchema,
+      },
+      { optional: ["date", "periods", "timeframe"] },
+    ),
+    outputSchema: s.actionOutput({ report: reportSchema }, "Xero Balance Sheet report."),
+    requiredScopes: [xeroScopes.balanceSheetRead],
+  }),
+  defineProviderAction(service, {
+    name: "get_trial_balance",
+    description: "Get Xero's Trial Balance report of debit and credit balances for every account as at a date.",
+    inputSchema: s.object(
+      "Optional Trial Balance date.",
+      {
+        date: s.date("Balance date to report as at; Xero defaults to the end of the current month."),
+      },
+      { optional: ["date"] },
+    ),
+    outputSchema: s.actionOutput({ report: reportSchema }, "Xero Trial Balance report."),
+    requiredScopes: [xeroScopes.trialBalanceRead],
   }),
   defineProviderAction(service, {
     name: "get_cash_validation",

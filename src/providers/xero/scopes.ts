@@ -7,6 +7,10 @@ export const xeroScopes: Readonly<Record<string, string>> = {
   paymentsRead: "accounting.payments.read",
   bankTransactionsRead: "accounting.banktransactions.read",
   bankSummaryRead: "accounting.reports.banksummary.read",
+  profitAndLossRead: "accounting.reports.profitandloss.read",
+  balanceSheetRead: "accounting.reports.balancesheet.read",
+  trialBalanceRead: "accounting.reports.trialbalance.read",
+  agedReportsRead: "accounting.reports.aged.read",
   cashValidationRead: "finance.cashvalidation.read",
   bankStatementsPlusRead: "finance.bankstatementsplus.read",
 };
@@ -18,4 +22,8 @@ export const xeroDefaultCustomConnectionScopes: readonly string[] = [
   xeroScopes.paymentsRead,
   xeroScopes.bankTransactionsRead,
   xeroScopes.bankSummaryRead,
+  xeroScopes.profitAndLossRead,
+  xeroScopes.balanceSheetRead,
+  xeroScopes.trialBalanceRead,
+  xeroScopes.agedReportsRead,
 ];
