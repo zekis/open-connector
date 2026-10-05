@@ -3,7 +3,14 @@ import type { XeroContext } from "./runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
-import { createXeroCredential, validateXeroCredential, xeroActionHandlers } from "./runtime.ts";
+import { validateActionInput } from "../../core/validation.ts";
+import { xeroActions } from "./actions.ts";
+import {
+  createXeroCredential,
+  validateXeroCredential,
+  xeroActionHandlers,
+  xeroModifiedSinceValue,
+} from "./runtime.ts";
 
 describe("Xero Custom Connection runtime", () => {
   it("defaults new connections to every standard Accounting scope used by dedicated actions", () => {
@@ -208,7 +215,8 @@ describe("Xero Custom Connection runtime", () => {
       includeDeleted: "true",
       unitdp: "4",
     });
-    expect(new Headers(bankTransactionCall[1]?.headers).get("if-modified-since")).toBe("2026-08-01T00:00:00Z");
+    // Sent without the offset, which is the spelling Xero's If-Modified-Since documents.
+    expect(new Headers(bankTransactionCall[1]?.headers).get("if-modified-since")).toBe("2026-08-01T00:00:00");
 
     const paymentCall = apiCalls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Payments")!;
     expect(Object.fromEntries(requestUrl(paymentCall[0]).searchParams)).toEqual({
@@ -662,3 +670,102 @@ function jsonResponse(payload: unknown, status = 200, headers?: HeadersInit): Re
     headers: { "content-type": "application/json", ...Object.fromEntries(new Headers(headers)) },
   });
 }
+
+describe("Xero modified-since timestamps", () => {
+  const retrieveEndpoint = xeroActions.find((action) => action.id === "xero.retrieve_endpoint");
+
+  it("keeps the spelling Xero's If-Modified-Since documents", () => {
+    expect(xeroModifiedSinceValue("2026-08-01T00:00:00")).toBe("2026-08-01T00:00:00");
+  });
+
+  it("converts the forms a caller is likely to try into Xero's offset-free UTC", () => {
+    expect(xeroModifiedSinceValue("2026-08-01T00:00:00Z")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-08-01T08:00:00+08:00")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-08-01T08:00:00+0800")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-07-31T20:00:00-04:00")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-08-01T00:00:00.123Z")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-08-01 00:00")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("2026-08-01")).toBe("2026-08-01T00:00:00");
+    expect(xeroModifiedSinceValue("  2026-08-01T00:00:00  ")).toBe("2026-08-01T00:00:00");
+  });
+
+  it("reads a timestamp with no offset as UTC, not the gateway's local zone", () => {
+    const original = process.env.TZ;
+    try {
+      process.env.TZ = "Asia/Tokyo";
+      expect(xeroModifiedSinceValue("2026-08-01T00:00:00")).toBe("2026-08-01T00:00:00");
+      expect(xeroModifiedSinceValue("2026-08-01")).toBe("2026-08-01T00:00:00");
+    } finally {
+      process.env.TZ = original;
+    }
+  });
+
+  it("refuses a date that does not exist rather than rolling it forward", () => {
+    expect(() => xeroModifiedSinceValue("2026-02-30")).toThrow(/no day 30 in 2026-02 \(that month ends on 28\)/u);
+    expect(() => xeroModifiedSinceValue("2026-13-01")).toThrow(/no month 13/u);
+    expect(() => xeroModifiedSinceValue("2026-08-00")).toThrow(/no day 00/u);
+    expect(() => xeroModifiedSinceValue("2026-08-01T25:00:00")).toThrow(/not a real time of day/u);
+  });
+
+  it("still accepts a real leap day", () => {
+    expect(xeroModifiedSinceValue("2024-02-29T00:00:00")).toBe("2024-02-29T00:00:00");
+  });
+
+  it("names the input and what it expected when the shape is wrong", () => {
+    expect(() => xeroModifiedSinceValue("last Tuesday")).toThrow(
+      /^ifModifiedSince must be a UTC timestamp such as 2026-08-01T00:00:00, optionally with an offset/u,
+    );
+    expect(() => xeroModifiedSinceValue("01/08/2026")).toThrow(/received 01\/08\/2026/u);
+  });
+
+  it("declares a schema that accepts every form the runtime accepts", () => {
+    expect(retrieveEndpoint).toBeDefined();
+    const accepted = [
+      "2026-08-01T00:00:00",
+      "2026-08-01T00:00:00Z",
+      "2026-08-01T08:00:00+08:00",
+      "2026-08-01T08:00:00+0800",
+      "2026-08-01T00:00:00.123Z",
+      "2026-08-01 00:00",
+      "2026-08-01",
+    ];
+
+    for (const ifModifiedSince of accepted) {
+      const result = validateActionInput(retrieveEndpoint!, {
+        api: "accounting",
+        endpoint: "/Contacts",
+        ifModifiedSince,
+      });
+      expect(result.valid, `schema rejected ${ifModifiedSince}: ${JSON.stringify(result.errors)}`).toBe(true);
+    }
+  });
+
+  it("still rejects something that is not a timestamp at all", () => {
+    const result = validateActionInput(retrieveEndpoint!, {
+      api: "accounting",
+      endpoint: "/Contacts",
+      ifModifiedSince: "last Tuesday",
+    });
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("sends the normalised header on retrieve_endpoint", async () => {
+    const fetcher = createXeroFetch();
+    const context = createContext(
+      { clientId: "retrieve-client", clientSecret: "secret", scopes: "accounting.transactions.read" },
+      fetcher,
+    );
+
+    await xeroActionHandlers.retrieve_endpoint!(
+      { api: "accounting", endpoint: "/Invoices", ifModifiedSince: "2026-08-01T08:00:00+08:00" },
+      context,
+    );
+
+    const call = vi
+      .mocked(fetcher)
+      .mock.calls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Invoices")!;
+
+    expect(new Headers(call[1]?.headers).get("if-modified-since")).toBe("2026-08-01T00:00:00");
+  });
+});

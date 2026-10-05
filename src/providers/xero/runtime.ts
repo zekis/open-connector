@@ -103,7 +103,7 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
 
     const headers: Record<string, string> = { accept };
     const ifModifiedSince = optionalString(input.ifModifiedSince);
-    if (ifModifiedSince) headers["if-modified-since"] = ifModifiedSince;
+    if (ifModifiedSince) headers["if-modified-since"] = xeroModifiedSinceValue(ifModifiedSince);
     const tenantId = optionalString(input.tenantId);
     if (tenantId) headers["xero-tenant-id"] = tenantId;
 
@@ -653,9 +653,50 @@ function combineXeroWhere(...clauses: Array<string | undefined>): string | undef
   return defined.map((clause) => `(${clause})`).join(" AND ");
 }
 
+const modifiedSincePattern =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,9})?(Z|[+-]\d{2}:?\d{2})?)?$/u;
+
+/**
+ * Normalise a modified-since input to the spelling Xero's If-Modified-Since
+ * header documents: a plain UTC timestamp with no offset, 2026-08-01T00:00:00.
+ *
+ * Accepts that form, one carrying an offset, and a bare date. A form with no
+ * offset is read as UTC, because `new Date("2026-08-01T00:00:00")` would read
+ * it in the gateway's local zone and shift the window.
+ */
+export function xeroModifiedSinceValue(raw: string, field = "ifModifiedSince"): string {
+  const match = modifiedSincePattern.exec(raw.trim());
+  if (!match) {
+    throw providerInputError(
+      `${field} must be a UTC timestamp such as 2026-08-01T00:00:00, optionally with an offset such as ` +
+        `2026-08-01T00:00:00Z or 2026-08-01T08:00:00+08:00, or a bare date such as 2026-08-01; received ${raw}`,
+    );
+  }
+  const [, year, month, day, hour = "00", minute = "00", second = "00", offset] = match;
+  if (Number(month) < 1 || Number(month) > 12) {
+    throw providerInputError(`${field} has no month ${month}: ${raw}`);
+  }
+  // Date rolls an impossible day forward (30 February becomes 2 March) rather
+  // than failing, which would silently move the window, so check it here.
+  const lastDay = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  if (Number(day) < 1 || Number(day) > lastDay) {
+    throw providerInputError(`${field} has no day ${day} in ${year}-${month} (that month ends on ${lastDay}): ${raw}`);
+  }
+  const suffix = offset === undefined || offset === "Z" ? "Z" : withOffsetColon(offset);
+  const parsed = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}${suffix}`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw providerInputError(`${field} is not a real time of day: ${raw}`);
+  }
+  return parsed.toISOString().slice(0, 19);
+}
+
+function withOffsetColon(offset: string): string {
+  return offset.includes(":") ? offset : `${offset.slice(0, 3)}:${offset.slice(3)}`;
+}
+
 function modifiedAfterHeaders(value: unknown): Record<string, string> | undefined {
   const modifiedAfter = optionalString(value);
-  return modifiedAfter ? { "if-modified-since": modifiedAfter } : undefined;
+  return modifiedAfter ? { "if-modified-since": xeroModifiedSinceValue(modifiedAfter) } : undefined;
 }
 
 function idempotencyHeaders(value: unknown): Record<string, string> | undefined {
