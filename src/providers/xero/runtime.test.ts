@@ -14,6 +14,10 @@ describe("Xero Custom Connection runtime", () => {
       "accounting.payments.read",
       "accounting.banktransactions.read",
       "accounting.reports.banksummary.read",
+      "accounting.reports.profitandloss.read",
+      "accounting.reports.balancesheet.read",
+      "accounting.reports.trialbalance.read",
+      "accounting.reports.aged.read",
     ]);
   });
 
@@ -250,6 +254,94 @@ describe("Xero Custom Connection runtime", () => {
     );
 
     expect(result).toEqual({ report: { ReportID: "BankSummary", ReportName: "Bank Summary", Rows: [] } });
+  });
+
+  it("retrieves the Profit and Loss report with comparative columns", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "report-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.pathname).toBe("/api.xro/2.0/Reports/ProfitAndLoss");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        fromDate: "2026-07-01",
+        toDate: "2026-09-30",
+        periods: "3",
+        timeframe: "MONTH",
+      });
+      return jsonResponse({ Reports: [{ ReportID: "ProfitAndLoss", ReportName: "Profit and Loss", Rows: [] }] });
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "report-client", clientSecret: "secret", scopes: "accounting.reports.profitandloss.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.get_profit_and_loss!(
+      { fromDate: "2026-07-01", toDate: "2026-09-30", periods: 3, timeframe: "MONTH" },
+      context,
+    );
+
+    expect(result).toEqual({
+      report: { ReportID: "ProfitAndLoss", ReportName: "Profit and Loss", Rows: [] },
+    });
+  });
+
+  it("retrieves the Balance Sheet report as at a date", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "report-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.pathname).toBe("/api.xro/2.0/Reports/BalanceSheet");
+      expect(Object.fromEntries(url.searchParams)).toEqual({ date: "2026-09-30" });
+      return jsonResponse({ Reports: [{ ReportID: "BalanceSheet", ReportName: "Balance Sheet", Rows: [] }] });
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "report-client", clientSecret: "secret", scopes: "accounting.reports.balancesheet.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.get_balance_sheet!({ date: "2026-09-30" }, context);
+
+    expect(result).toEqual({ report: { ReportID: "BalanceSheet", ReportName: "Balance Sheet", Rows: [] } });
+  });
+
+  it("retrieves the Trial Balance report as at a date", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "report-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      expect(url.pathname).toBe("/api.xro/2.0/Reports/TrialBalance");
+      expect(Object.fromEntries(url.searchParams)).toEqual({ date: "2026-09-30" });
+      return jsonResponse({ Reports: [{ ReportID: "TrialBalance", ReportName: "Trial Balance", Rows: [] }] });
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "report-client", clientSecret: "secret", scopes: "accounting.reports.trialbalance.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.get_trial_balance!({ date: "2026-09-30" }, context);
+
+    expect(result).toEqual({ report: { ReportID: "TrialBalance", ReportName: "Trial Balance", Rows: [] } });
+  });
+
+  it("rejects report comparative columns Xero will not accept", async () => {
+    const fetcher = vi.fn(async (): Promise<Response> => {
+      throw new Error("no request should be made");
+    }) as ProviderFetch;
+    const context = createContext(
+      { clientId: "report-client", clientSecret: "secret", scopes: "accounting.reports.profitandloss.read" },
+      fetcher,
+    );
+
+    await expect(xeroActionHandlers.get_profit_and_loss!({ periods: 12 }, context)).rejects.toThrow(
+      "periods must be between 1 and 11",
+    );
+    await expect(xeroActionHandlers.get_profit_and_loss!({ timeframe: "WEEK" }, context)).rejects.toThrow(
+      "timeframe must be MONTH, QUARTER, or YEAR",
+    );
+    expect(vi.mocked(fetcher)).not.toHaveBeenCalled();
   });
 
   it("retrieves partner Finance API reconciliation summaries and statement matches", async () => {

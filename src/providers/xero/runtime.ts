@@ -33,6 +33,7 @@ export const xeroTokenUrl = "https://identity.xero.com/connect/token";
 
 const requestTimeoutMs = 30_000;
 const tokenExpiryLeewayMs = 60_000;
+const allowedReportTimeframes = new Set(["MONTH", "QUARTER", "YEAR"]);
 const allowedRetrievalAcceptHeaders = new Set([
   "application/json",
   "application/xml",
@@ -233,6 +234,41 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
       query: {
         fromDate: optionalString(input.fromDate),
         toDate: optionalString(input.toDate),
+      },
+    });
+    return { report: firstCollectionItem(payload, "Reports") };
+  },
+  async get_profit_and_loss(input, context) {
+    const payload = await requestXeroJson({
+      path: "/Reports/ProfitAndLoss",
+      context,
+      query: {
+        fromDate: optionalString(input.fromDate),
+        toDate: optionalString(input.toDate),
+        periods: optionalReportPeriods(input.periods),
+        timeframe: optionalReportTimeframe(input.timeframe),
+      },
+    });
+    return { report: firstCollectionItem(payload, "Reports") };
+  },
+  async get_balance_sheet(input, context) {
+    const payload = await requestXeroJson({
+      path: "/Reports/BalanceSheet",
+      context,
+      query: {
+        date: optionalString(input.date),
+        periods: optionalReportPeriods(input.periods),
+        timeframe: optionalReportTimeframe(input.timeframe),
+      },
+    });
+    return { report: firstCollectionItem(payload, "Reports") };
+  },
+  async get_trial_balance(input, context) {
+    const payload = await requestXeroJson({
+      path: "/Reports/TrialBalance",
+      context,
+      query: {
+        date: optionalString(input.date),
       },
     });
     return { report: firstCollectionItem(payload, "Reports") };
@@ -580,6 +616,22 @@ function extractXeroError(payload: unknown): string | undefined {
 function optionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
   const result = optionalIntegerLike(value, fieldName, providerInputError);
   if (result !== undefined && result < 1) throw providerInputError(`${fieldName} must be a positive integer`);
+  return result;
+}
+
+function optionalReportPeriods(value: unknown): number | undefined {
+  const result = optionalIntegerLike(value, "periods", providerInputError);
+  if (result !== undefined && (result < 1 || result > 11)) {
+    throw providerInputError("periods must be between 1 and 11");
+  }
+  return result;
+}
+
+function optionalReportTimeframe(value: unknown): string | undefined {
+  const result = optionalString(value);
+  if (result !== undefined && !allowedReportTimeframes.has(result)) {
+    throw providerInputError("timeframe must be MONTH, QUARTER, or YEAR");
+  }
   return result;
 }
 
