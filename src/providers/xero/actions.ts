@@ -394,6 +394,21 @@ const invoiceSchema = s.looseObject(
   { description: "Xero sales invoice or purchase bill." },
 );
 
+/**
+ * Xero's If-Modified-Since header takes a plain UTC timestamp with no offset,
+ * such as 2026-08-01T00:00:00, so `format: "date-time"` (RFC 3339, which
+ * requires an offset) rejected the one spelling Xero documents. Accept both,
+ * plus a bare date; the runtime converts to UTC and drops the offset.
+ */
+const modifiedSinceSchema = s.string(
+  "Only return records created or modified at or after this timestamp. Give a UTC timestamp such as 2026-08-01T00:00:00 (the format Xero documents), or one carrying an offset such as 2026-08-01T00:00:00Z or 2026-08-01T08:00:00+08:00, which is converted to UTC. A bare date such as 2026-08-01 means midnight UTC.",
+  {
+    minLength: 10,
+    maxLength: 40,
+    pattern: "^\\d{4}-\\d{2}-\\d{2}(?:[T ]\\d{2}:\\d{2}(?::\\d{2})?(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:?\\d{2})?)?$",
+  },
+);
+
 const listInputFields = {
   page: pageSchema,
   pageSize: pageSizeSchema,
@@ -406,7 +421,7 @@ const listInputOptional = ["page", "pageSize", "orderBy", "searchTerm", "summary
 const reconciliationFilterFields = {
   where: s.nonEmptyString("Additional Xero filter expression."),
   orderBy: s.nonEmptyString("Xero order expression, such as UpdatedDateUTC DESC."),
-  ifModifiedSince: s.dateTime("Only return records created or modified after this timestamp."),
+  ifModifiedSince: modifiedSinceSchema,
 };
 
 export const xeroActions: readonly ActionDefinition[] = [
@@ -447,7 +462,7 @@ export const xeroActions: readonly ActionDefinition[] = [
           "application/octet-stream",
           "*/*",
         ]),
-        ifModifiedSince: s.dateTime("Only retrieve Accounting API records modified after this timestamp."),
+        ifModifiedSince: modifiedSinceSchema,
         tenantId: s.uuid(
           "Optional Xero tenant ID for partner endpoints that explicitly require the xero-tenant-id header.",
         ),
