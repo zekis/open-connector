@@ -1,6 +1,6 @@
 import type { ActionDefinition, ActionExecutor, ExecutionContext, ExecutionResult } from "./types.ts";
 
-import { validateActionInput } from "./validation.ts";
+import { describeActionInputErrors, validateActionInput } from "./validation.ts";
 
 /**
  * Validate input and run a local executor for an action.
@@ -26,11 +26,14 @@ export async function executeAction(
 
   const validation = validateActionInput(action, input);
   if (!validation.valid) {
+    const named = describeActionInputErrors(action.inputSchema, validation.errors);
     return {
       ok: false,
       error: {
         code: "invalid_input",
-        message: "Action input does not match the action schema.",
+        message: named
+          ? `Action input does not match the action schema: ${named}`
+          : "Action input does not match the action schema.",
         details: validation.errors,
       },
     };
