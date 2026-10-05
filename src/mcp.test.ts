@@ -263,7 +263,7 @@ describe("MCP server", () => {
         ok: false,
         error: {
           code: "invalid_input",
-          message: "Action input does not match the action schema.",
+          message: "Action input does not match the action schema: unexpected is not an input of this action",
         },
         executionId: expect.any(String),
         auditPersisted: true,
@@ -421,7 +421,7 @@ describe("MCP server", () => {
         },
         error: {
           code: "invalid_input",
-          message: "Action input does not match the action schema.",
+          message: "Action input does not match the action schema: message is required (expected string)",
         },
       });
     });
