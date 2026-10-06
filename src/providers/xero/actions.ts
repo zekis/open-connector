@@ -394,6 +394,84 @@ const invoiceSchema = s.looseObject(
   { description: "Xero sales invoice or purchase bill." },
 );
 
+const quoteStatuses = ["DRAFT", "SENT", "DECLINED", "ACCEPTED", "INVOICED", "DELETED"];
+
+const quoteLineSchema = s.looseObject(
+  {
+    LineItemID: s.uuid("Unique line item ID."),
+    Description: s.nullableString("Line item description."),
+    Quantity: s.number("Line item quantity."),
+    UnitAmount: s.number("Amount per unit."),
+    ItemCode: s.nullableString("Xero item code used on the line."),
+    AccountCode: s.nullableString("Account code assigned to the line."),
+    TaxType: s.nullableString("Tax type applied to the line."),
+    TaxAmount: s.number("Tax amount for the line."),
+    DiscountRate: s.number("Percentage discount applied to the line."),
+    LineAmount: s.number("Line total before or including tax according to LineAmountTypes."),
+  },
+  { description: "Xero quote line item." },
+);
+
+const quoteSchema = s.looseObject(
+  {
+    QuoteID: s.uuid("Unique Xero quote ID."),
+    QuoteNumber: s.nullableString("Quote number."),
+    Status: s.stringEnum("Quote status.", quoteStatuses),
+    Contact: invoiceContactSchema,
+    DateString: s.nullableString("Quote date."),
+    ExpiryDateString: s.nullableString("Quote expiry date."),
+    Reference: s.nullableString("Quote reference."),
+    Title: s.nullableString("Quote title."),
+    Summary: s.nullableString("Quote summary."),
+    Terms: s.nullableString("Quote terms."),
+    CurrencyCode: s.nullableString("Quote currency code."),
+    LineAmountTypes: s.nullableString("How line amounts treat tax."),
+    BrandingThemeID: s.nullableString("Branding theme applied to the quote."),
+    SubTotal: s.number("Quote subtotal."),
+    TotalTax: s.number("Total quote tax."),
+    Total: s.number("Quote total."),
+    UpdatedDateUTC: s.string("Xero quote update timestamp."),
+    LineItems: s.array("Quote line items when returned by Xero.", quoteLineSchema),
+  },
+  { description: "Xero sales quote." },
+);
+
+const quoteLineItemsInputSchema = s.array(
+  "Quote line items. On update, the lines given replace every existing line.",
+  s.object(
+    "One quote line item.",
+    {
+      description: s.nonEmptyString("Line item description."),
+      quantity: s.number("Quantity."),
+      unitAmount: s.number("Amount per unit."),
+      accountCode: s.nonEmptyString("Optional Xero account code."),
+      taxType: s.nonEmptyString("Optional Xero tax type code."),
+      itemCode: s.nonEmptyString("Optional Xero item code."),
+      discountRate: s.number("Optional percentage discount for the line, from 0 to 100.", {
+        minimum: 0,
+        maximum: 100,
+      }),
+    },
+    {
+      required: ["description", "quantity", "unitAmount"],
+      optional: ["accountCode", "taxType", "itemCode", "discountRate"],
+    },
+  ),
+  { minItems: 1 },
+);
+
+const quoteDetailFields = {
+  expiryDate: s.date("Date the quote expires."),
+  reference: s.nonEmptyString("Quote reference."),
+  title: s.nonEmptyString("Quote title."),
+  summary: s.nonEmptyString("Quote summary shown under the title."),
+  terms: s.nonEmptyString("Quote terms and conditions."),
+  currencyCode: s.nonEmptyString("Three-letter quote currency code."),
+  lineAmountTypes: s.stringEnum("How line amounts treat tax.", ["Exclusive", "Inclusive", "NoTax"]),
+  brandingThemeId: s.uuid("Xero branding theme ID."),
+  idempotencyKey: s.string("Optional retry-safe Xero idempotency key.", { maxLength: 128 }),
+};
+
 /**
  * Xero's If-Modified-Since header takes a plain UTC timestamp with no offset,
  * such as 2026-08-01T00:00:00, so `format: "date-time"` (RFC 3339, which
@@ -803,6 +881,94 @@ export const xeroActions: readonly ActionDefinition[] = [
     outputSchema: s.actionOutput({ invoice: invoiceSchema }, "Created draft Xero invoice."),
     requiredScopes: [xeroScopes.invoicesWrite],
     followUpActions: ["xero.get_invoice"],
+  }),
+  defineProviderAction(service, {
+    name: "list_quotes",
+    description: "List or filter sales quotes in Xero.",
+    inputSchema: s.object(
+      "Quote filters and pagination.",
+      {
+        page: pageSchema,
+        orderBy: s.nonEmptyString("Xero order expression, such as UpdatedDateUTC DESC."),
+        status: s.stringEnum("Only return quotes with this status.", quoteStatuses),
+        contactId: s.uuid("Only return quotes for this Xero contact ID."),
+        quoteNumber: s.nonEmptyString("Only return the quote with this number."),
+        dateFrom: s.date("Only return quotes dated on or after this date."),
+        dateTo: s.date("Only return quotes dated on or before this date."),
+        expiryDateFrom: s.date("Only return quotes expiring on or after this date."),
+        expiryDateTo: s.date("Only return quotes expiring on or before this date."),
+        ifModifiedSince: modifiedSinceSchema,
+      },
+      {
+        optional: [
+          "page",
+          "orderBy",
+          "status",
+          "contactId",
+          "quoteNumber",
+          "dateFrom",
+          "dateTo",
+          "expiryDateFrom",
+          "expiryDateTo",
+          "ifModifiedSince",
+        ],
+      },
+    ),
+    outputSchema: listOutputSchema("quotes", "Quotes returned by Xero.", quoteSchema),
+    requiredScopes: [xeroScopes.invoicesWrite],
+    followUpActions: ["xero.get_quote", "xero.create_quote", "xero.update_quote"],
+  }),
+  defineProviderAction(service, {
+    name: "get_quote",
+    description: "Get one Xero sales quote with its line items.",
+    inputSchema: s.actionInput({ quoteId: s.uuid("Unique Xero quote ID.") }, ["quoteId"]),
+    outputSchema: s.actionOutput({ quote: quoteSchema }, "Selected Xero quote."),
+    requiredScopes: [xeroScopes.invoicesWrite],
+    followUpActions: ["xero.update_quote"],
+  }),
+  defineProviderAction(service, {
+    name: "create_quote",
+    description:
+      "Create one sales quote in Xero, as DRAFT by default or as SENT. SENT only marks the quote as sent; Xero does not email it. A quote cannot be created as ACCEPTED, DECLINED or INVOICED.",
+    inputSchema: s.actionInput(
+      {
+        contactId: s.uuid("Existing Xero contact ID."),
+        date: s.date("Quote date. Xero requires it."),
+        ...quoteDetailFields,
+        status: s.stringEnum("Status to create the quote in. Defaults to DRAFT.", ["DRAFT", "SENT"]),
+        lineItems: quoteLineItemsInputSchema,
+      },
+      ["contactId", "date", "lineItems"],
+      "Quote details. Xero assigns the quote number.",
+    ),
+    outputSchema: s.actionOutput({ quote: quoteSchema }, "Created Xero quote."),
+    requiredScopes: [xeroScopes.invoicesWrite],
+    followUpActions: ["xero.get_quote", "xero.update_quote"],
+  }),
+  defineProviderAction(service, {
+    name: "update_quote",
+    description:
+      "Update an existing Xero sales quote: its details, its lines, or its status. Xero requires the contact and date on every quote update, so when contactId or date is omitted the quote is read first and its current values are sent back unchanged. Fields left out keep their current values; lineItems, when given, replace every existing line. Xero only allows some status changes (such as DRAFT to SENT, or SENT to ACCEPTED or DECLINED) and rejects the rest with a validation error, which is returned as is. INVOICED and DELETED cannot be set here.",
+    inputSchema: s.actionInput(
+      {
+        quoteId: s.uuid("Unique Xero quote ID to update."),
+        contactId: s.uuid("Xero contact ID. Omit to keep the quote's current contact."),
+        date: s.date("Quote date. Omit to keep the quote's current date."),
+        ...quoteDetailFields,
+        status: s.stringEnum("New quote status. Omit to keep the current status.", [
+          "DRAFT",
+          "SENT",
+          "DECLINED",
+          "ACCEPTED",
+        ]),
+        lineItems: quoteLineItemsInputSchema,
+      },
+      ["quoteId"],
+      "Quote to update and the fields to change.",
+    ),
+    outputSchema: s.actionOutput({ quote: quoteSchema }, "Updated Xero quote."),
+    requiredScopes: [xeroScopes.invoicesWrite],
+    followUpActions: ["xero.get_quote"],
   }),
 ];
 

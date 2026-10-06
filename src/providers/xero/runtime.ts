@@ -358,7 +358,138 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
     });
     return { invoice: firstCollectionItem(payload, "Invoices") };
   },
+  async list_quotes(input, context) {
+    return listXeroCollection(
+      context,
+      "/Quotes",
+      "Quotes",
+      "quotes",
+      {
+        page: optionalPositiveInteger(input.page, "page"),
+        order: optionalString(input.orderBy),
+        Status: optionalString(input.status),
+        ContactID: optionalString(input.contactId),
+        QuoteNumber: optionalString(input.quoteNumber),
+        DateFrom: optionalString(input.dateFrom),
+        DateTo: optionalString(input.dateTo),
+        ExpiryDateFrom: optionalString(input.expiryDateFrom),
+        ExpiryDateTo: optionalString(input.expiryDateTo),
+      },
+      modifiedAfterHeaders(input.ifModifiedSince),
+    );
+  },
+  async get_quote(input, context) {
+    const quoteId = requiredString(input.quoteId, "quoteId", providerInputError);
+    return { quote: await getQuote(context, quoteId) };
+  },
+  async create_quote(input, context) {
+    const status = optionalString(input.status) ?? "DRAFT";
+    if (!allowedCreateQuoteStatuses.has(status)) {
+      throw providerInputError(`status must be DRAFT or SENT when creating a quote; received ${status}`);
+    }
+    const quote = compactObject({
+      Contact: { ContactID: requiredString(input.contactId, "contactId", providerInputError) },
+      Date: requiredString(input.date, "date", providerInputError),
+      ...quoteDetailBody(input),
+      Status: status,
+      LineItems: quoteLineItemsBody(input.lineItems),
+    });
+    const payload = await requestXeroJson({
+      path: "/Quotes",
+      context,
+      method: "PUT",
+      body: { Quotes: [quote] },
+      headers: idempotencyHeaders(input.idempotencyKey),
+    });
+    return { quote: firstCollectionItem(payload, "Quotes") };
+  },
+  async update_quote(input, context) {
+    const quoteId = requiredString(input.quoteId, "quoteId", providerInputError);
+    const requestedStatus = optionalString(input.status);
+    if (requestedStatus !== undefined && !allowedUpdateQuoteStatuses.has(requestedStatus)) {
+      throw providerInputError(
+        `status must be DRAFT, SENT, DECLINED or ACCEPTED when updating a quote; received ${requestedStatus}`,
+      );
+    }
+    let contactId = optionalString(input.contactId);
+    let date = optionalString(input.date);
+    let status = requestedStatus;
+    // Xero requires Contact and Date on every quote update, and resending the current Status
+    // keeps an edit from being read as a status change. Read the quote for whichever is missing.
+    if (contactId === undefined || date === undefined || status === undefined) {
+      const existing = await getQuote(context, quoteId);
+      contactId ??= requiredString(
+        optionalRecord(existing.Contact)?.ContactID,
+        "existing quote Contact.ContactID",
+        providerResponseError,
+      );
+      date ??= xeroQuoteDate(existing);
+      status ??= optionalString(existing.Status);
+    }
+    const quote = compactObject({
+      QuoteID: quoteId,
+      Contact: { ContactID: contactId },
+      Date: date,
+      ...quoteDetailBody(input),
+      Status: status,
+      LineItems: input.lineItems === undefined ? undefined : quoteLineItemsBody(input.lineItems),
+    });
+    const payload = await requestXeroJson({
+      path: `/Quotes/${encodeURIComponent(quoteId)}`,
+      context,
+      method: "POST",
+      body: { Quotes: [quote] },
+      headers: idempotencyHeaders(input.idempotencyKey),
+    });
+    return { quote: firstCollectionItem(payload, "Quotes") };
+  },
 };
+
+const allowedCreateQuoteStatuses = new Set(["DRAFT", "SENT"]);
+const allowedUpdateQuoteStatuses = new Set(["DRAFT", "SENT", "DECLINED", "ACCEPTED"]);
+
+async function getQuote(context: XeroContext, quoteId: string): Promise<Record<string, unknown>> {
+  const payload = await requestXeroJson({ path: `/Quotes/${encodeURIComponent(quoteId)}`, context });
+  return firstCollectionItem(payload, "Quotes");
+}
+
+function quoteDetailBody(input: Record<string, unknown>): Record<string, unknown> {
+  return compactObject({
+    ExpiryDate: optionalString(input.expiryDate),
+    Reference: optionalString(input.reference),
+    Title: optionalString(input.title),
+    Summary: optionalString(input.summary),
+    Terms: optionalString(input.terms),
+    CurrencyCode: optionalString(input.currencyCode),
+    LineAmountTypes: optionalString(input.lineAmountTypes),
+    BrandingThemeID: optionalString(input.brandingThemeId),
+  });
+}
+
+function quoteLineItemsBody(value: unknown): Array<Record<string, unknown>> {
+  const lines = objectArray(value, "lineItems", providerInputError);
+  if (lines.length === 0) throw providerInputError("lineItems must contain at least one line");
+  return lines.map((line, index) =>
+    compactObject({
+      Description: requiredString(line.description, `lineItems[${index}].description`, providerInputError),
+      Quantity: requiredNumber(line.quantity, `lineItems[${index}].quantity`, providerInputError),
+      UnitAmount: requiredNumber(line.unitAmount, `lineItems[${index}].unitAmount`, providerInputError),
+      AccountCode: optionalString(line.accountCode),
+      TaxType: optionalString(line.taxType),
+      ItemCode: optionalString(line.itemCode),
+      DiscountRate: optionalNumber(line.discountRate),
+    }),
+  );
+}
+
+/** The quote date as YYYY-MM-DD, from DateString or Xero's /Date(ms+0000)/ form. */
+function xeroQuoteDate(quote: Record<string, unknown>): string {
+  const dateString = optionalString(quote.DateString);
+  if (dateString && /^\d{4}-\d{2}-\d{2}/u.test(dateString)) return dateString.slice(0, 10);
+  const msDate = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/u.exec(optionalString(quote.Date) ?? "");
+  if (msDate) return new Date(Number(msDate[1])).toISOString().slice(0, 10);
+  throw providerResponseError("Xero quote response missing its date");
+}
 
 export function createXeroCredential(values: Record<string, unknown>): XeroCustomConnectionCredential {
   const scopes = (optionalString(values.scopes) ?? xeroDefaultCustomConnectionScopes.join(" "))
