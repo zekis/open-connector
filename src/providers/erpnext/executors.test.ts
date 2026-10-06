@@ -372,3 +372,137 @@ describe("ERPNext assignment", () => {
     expect(result).toMatchObject({ ok: false });
   });
 });
+
+describe("ERPNext file upload", () => {
+  function uploadResponse(file: Record<string, unknown>) {
+    return vi.fn<typeof fetch>(async () => Response.json({ message: file }));
+  }
+
+  it("uploads multipart form data attached to a document", async () => {
+    const fetcher = uploadResponse({
+      name: "file-abc",
+      file_name: "report.pdf",
+      file_url: "/private/files/report.pdf",
+      is_private: 1,
+      attached_to_doctype: "Project",
+      attached_to_name: "Example Project",
+      file_size: 4,
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const bytes = new Uint8Array([37, 80, 68, 70]);
+    const context = createContext();
+
+    const result = await executors["erpnext.upload_file"]!(
+      {
+        fileName: "report.pdf",
+        contentBase64: Buffer.from(bytes).toString("base64"),
+        doctype: "Project",
+        name: "Example Project",
+        folder: "Home/Attachments",
+      },
+      context,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      output: {
+        file: {
+          name: "file-abc",
+          file_name: "report.pdf",
+          file_url: "/private/files/report.pdf",
+          is_private: 1,
+          attached_to_doctype: "Project",
+          attached_to_name: "Example Project",
+        },
+      },
+    });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://8.8.8.8/api/method/upload_file");
+    expect(init?.method).toBe("POST");
+    expect(init?.signal).toBe(context.signal);
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("token key:secret");
+    expect(headers.get("content-type")).not.toBe("application/json");
+    const form = init?.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get("is_private")).toBe("1");
+    expect(form.get("doctype")).toBe("Project");
+    expect(form.get("docname")).toBe("Example Project");
+    expect(form.get("folder")).toBe("Home/Attachments");
+    const file = form.get("file") as File;
+    expect(file.name).toBe("report.pdf");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("uploads privately by default and can upload a public unattached file", async () => {
+    const fetcher = uploadResponse({
+      name: "file-1",
+      file_name: "notes.txt",
+      file_url: "/private/files/notes.txt",
+      is_private: 1,
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.upload_file"]!(
+      { fileName: "notes.txt", contentBase64: Buffer.from("hello").toString("base64") },
+      createContext(),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      output: { file: { is_private: 1, attached_to_doctype: null, attached_to_name: null } },
+    });
+    const form = fetcher.mock.calls[0]![1]?.body as FormData;
+    expect(form.get("is_private")).toBe("1");
+    expect(form.has("doctype")).toBe(false);
+    expect(form.has("docname")).toBe(false);
+    expect(form.has("folder")).toBe(false);
+
+    await executors["erpnext.upload_file"]!(
+      { fileName: "notes.txt", contentBase64: Buffer.from("hello").toString("base64"), isPrivate: false },
+      createContext(),
+    );
+    expect((fetcher.mock.calls[1]![1]!.body as FormData).get("is_private")).toBe("0");
+  });
+
+  it.each([
+    [{ fileName: "a.txt", contentBase64: "not base64!" }, "contentBase64 must be valid base64"],
+    [{ fileName: "../a.txt", contentBase64: "aGVsbG8=" }, "fileName must be a plain filename"],
+    [{ fileName: "a.txt", contentBase64: "aGVsbG8=", doctype: "Project" }, "Provide both doctype and name"],
+  ])("rejects invalid input without calling ERPNext (%#)", async (input, message) => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.upload_file"]!(input, createContext());
+
+    expect(result).toMatchObject({ ok: false, error: { message: expect.stringContaining(message) } });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects content larger than 25 MB before decoding it", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await executors["erpnext.upload_file"]!(
+      { fileName: "big.bin", contentBase64: Buffer.alloc(25 * 1024 * 1024 + 1).toString("base64") },
+      createContext(),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { message: expect.stringContaining("25 MB") } });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("surfaces Frappe errors from the upload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => Response.json({ exc_type: "PermissionError" }, { status: 403 })),
+    );
+
+    const result = await executors["erpnext.upload_file"]!(
+      { fileName: "a.txt", contentBase64: "aGVsbG8=", doctype: "Project", name: "Example Project" },
+      createContext(),
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "authorization_failed" } });
+  });
+});
