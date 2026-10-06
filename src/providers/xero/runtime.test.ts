@@ -140,6 +140,167 @@ describe("Xero Custom Connection runtime", () => {
     });
   });
 
+  it("maps quote filters to Xero's documented query parameters", async () => {
+    const fetcher = createXeroFetch();
+    const context = createContext(
+      { clientId: "quote-list-client", clientSecret: "secret", scopes: "accounting.invoices.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.list_quotes!(
+      {
+        page: 1,
+        orderBy: "UpdatedDateUTC DESC",
+        status: "DECLINED",
+        contactId: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd",
+        dateFrom: "2026-08-01",
+        dateTo: "2026-10-06",
+      },
+      context,
+    );
+
+    // Xero sends no pagination object for quotes, unlike invoices.
+    expect(result).toEqual({ quotes: [liveQuote], pagination: null });
+    const apiCall = vi
+      .mocked(fetcher)
+      .mock.calls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Quotes")!;
+    expect(apiCall[1]?.method ?? "GET").toBe("GET");
+    expect(Object.fromEntries(requestUrl(apiCall[0]).searchParams)).toEqual({
+      page: "1",
+      order: "UpdatedDateUTC DESC",
+      Status: "DECLINED",
+      ContactID: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd",
+      DateFrom: "2026-08-01",
+      DateTo: "2026-10-06",
+    });
+  });
+
+  it("creates quotes as drafts with Xero field names", async () => {
+    const fetcher = createXeroFetch();
+    const context = createContext(
+      { clientId: "quote-client", clientSecret: "secret", scopes: "accounting.invoices" },
+      fetcher,
+    );
+
+    await xeroActionHandlers.create_quote!(
+      {
+        contactId: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd",
+        date: "2026-10-06",
+        expiryDate: "2026-11-05",
+        title: "Managed Services",
+        terms: "Net 14",
+        lineAmountTypes: "Exclusive",
+        idempotencyKey: "quote-run-1",
+        lineItems: [{ description: "Retainer", quantity: 12, unitAmount: 4000, accountCode: "200", taxType: "OUTPUT" }],
+      },
+      context,
+    );
+
+    const apiCall = vi
+      .mocked(fetcher)
+      .mock.calls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Quotes")!;
+    expect(apiCall[1]?.method).toBe("PUT");
+    expect(new Headers(apiCall[1]?.headers).get("idempotency-key")).toBe("quote-run-1");
+    expect(JSON.parse(String(apiCall[1]?.body))).toEqual({
+      Quotes: [
+        {
+          Contact: { ContactID: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd" },
+          Date: "2026-10-06",
+          ExpiryDate: "2026-11-05",
+          Title: "Managed Services",
+          Terms: "Net 14",
+          LineAmountTypes: "Exclusive",
+          Status: "DRAFT",
+          LineItems: [
+            { Description: "Retainer", Quantity: 12, UnitAmount: 4000, AccountCode: "200", TaxType: "OUTPUT" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("creates a quote as SENT when asked, and accepts a line with no account code", async () => {
+    const fetcher = createXeroFetch();
+    const context = createContext(
+      { clientId: "quote-sent-client", clientSecret: "secret", scopes: "accounting.invoices" },
+      fetcher,
+    );
+
+    await xeroActionHandlers.create_quote!(
+      {
+        contactId: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd",
+        status: "SENT",
+        lineItems: [{ description: "Discovery", quantity: 1, unitAmount: 950 }],
+      },
+      context,
+    );
+
+    const apiCall = vi
+      .mocked(fetcher)
+      .mock.calls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Quotes")!;
+    expect(JSON.parse(String(apiCall[1]?.body))).toEqual({
+      Quotes: [
+        {
+          Contact: { ContactID: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd" },
+          Status: "SENT",
+          LineItems: [{ Description: "Discovery", Quantity: 1, UnitAmount: 950 }],
+        },
+      ],
+    });
+  });
+
+  it("reads one quote by id", async () => {
+    const fetcher = createXeroFetch();
+    const context = createContext(
+      { clientId: "quote-get-client", clientSecret: "secret", scopes: "accounting.invoices.read" },
+      fetcher,
+    );
+
+    const result = await xeroActionHandlers.get_quote!({ quoteId: liveQuote.QuoteID }, context);
+
+    expect(result).toEqual({ quote: liveQuote });
+    const apiCall = vi
+      .mocked(fetcher)
+      .mock.calls.find(([input]) => requestUrl(input).pathname.includes("/Quotes/"))!;
+    expect(requestUrl(apiCall[0]).pathname).toBe(`/api.xro/2.0/Quotes/${liveQuote.QuoteID}`);
+  });
+
+  it("rejects a quote with no line items, and one whose line has no price", () => {
+    const createQuote = xeroActions.find((action) => action.id === "xero.create_quote")!;
+    const base = { contactId: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd" };
+
+    expect(validateActionInput(createQuote, { ...base, lineItems: [] }).valid).toBe(false);
+    expect(
+      validateActionInput(createQuote, { ...base, lineItems: [{ description: "Retainer", quantity: 1 }] }).valid,
+    ).toBe(false);
+    expect(
+      validateActionInput(createQuote, {
+        ...base,
+        lineItems: [{ description: "Retainer", quantity: 1, unitAmount: 4000 }],
+      }).valid,
+    ).toBe(true);
+  });
+
+  it("does not constrain a read quote's LineAmountTypes to the create input spelling", () => {
+    const quote = quoteOutputProperties("xero.get_quote");
+
+    // The create input spells it "Exclusive"; the live read returns "EXCLUSIVE"
+    // (liveQuote above is copied from the org). Reusing the input enum here
+    // would reject every quote Xero sends back, so assert it stays unconstrained.
+    expect(JSON.stringify(quote.LineAmountTypes)).not.toContain("enum");
+    expect(liveQuote.LineAmountTypes).toBe("EXCLUSIVE");
+  });
+
+  it("declares every quote status the live org actually holds", () => {
+    const status = quoteOutputProperties("xero.get_quote").Status as { enum?: string[] };
+
+    // Statuses read off Tierney Morris's 46 quotes, plus DELETED which Xero
+    // documents. A missing one would reject that quote on the way out.
+    for (const observed of ["DRAFT", "SENT", "ACCEPTED", "DECLINED", "INVOICED"]) {
+      expect(status.enum).toContain(observed);
+    }
+  });
+
   it("retrieves the reconciliation flags Xero exposes across accounting resources", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
       const url = requestUrl(input);
@@ -665,6 +826,22 @@ function createContext(values: Record<string, string>, fetcher: ProviderFetch): 
   };
 }
 
+const liveQuote = {
+  QuoteID: "eeae02aa-e83b-4813-914a-bd8170b0ca67",
+  QuoteNumber: "QU-0046",
+  Status: "SENT",
+  Contact: { ContactID: "894b6066-b584-4c1a-888d-9a2f2eb5b0fd", Name: "Example Contact" },
+  Terms: "Quoted prices remain valid until the expiry date shown on the quote.",
+  DateString: "2026-09-01T00:00:00",
+  ExpiryDateString: "2026-10-01T00:00:00",
+  LineAmountTypes: "EXCLUSIVE",
+  CurrencyCode: "AUD",
+  SubTotal: 14000,
+  TotalTax: 1400,
+  Total: 15400,
+  UpdatedDateUTC: "/Date(1788258553170)/",
+};
+
 function createXeroFetch(): ProviderFetch {
   return vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
     const url = requestUrl(input);
@@ -687,6 +864,12 @@ function createXeroFetch(): ProviderFetch {
         ],
       });
     }
+    if (url.pathname.includes("/Quotes/")) {
+      return jsonResponse({ Quotes: [liveQuote] });
+    }
+    if (url.pathname.endsWith("/Quotes")) {
+      return jsonResponse({ Quotes: [liveQuote] });
+    }
     if (url.pathname.endsWith("/Invoices")) {
       return jsonResponse({
         Invoices: [{ InvoiceID: "3c9a5d13-e20d-43f1-937d-a2265642eb14", Status: "DRAFT" }],
@@ -695,6 +878,12 @@ function createXeroFetch(): ProviderFetch {
     }
     throw new Error(`Unexpected Xero URL: ${url}`);
   }) as ProviderFetch;
+}
+
+function quoteOutputProperties(actionId: string): Record<string, unknown> {
+  const action = xeroActions.find((candidate) => candidate.id === actionId)!;
+  const output = action.outputSchema as { properties: { quote: { properties: Record<string, unknown> } } };
+  return output.properties.quote.properties;
 }
 
 function requestUrl(input: RequestInfo | URL): URL {

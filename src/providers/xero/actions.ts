@@ -349,13 +349,13 @@ const itemSchema = s.looseObject(
   { description: "Xero product or service item." },
 );
 
-const invoiceContactSchema = s.looseObject(
+const transactionContactSchema = s.looseObject(
   {
     ContactID: s.uuid("Unique Xero contact ID."),
     Name: s.nonEmptyString("Contact name."),
     EmailAddress: s.nullableString("Contact email address."),
   },
-  { description: "Contact associated with an invoice." },
+  { description: "Contact associated with an invoice or quote." },
 );
 
 const invoiceLineSchema = s.looseObject(
@@ -378,7 +378,7 @@ const invoiceSchema = s.looseObject(
     InvoiceNumber: s.nullableString("Sales invoice or bill number."),
     Type: s.stringEnum("Invoice direction.", ["ACCREC", "ACCPAY"]),
     Status: s.stringEnum("Invoice status.", ["DRAFT", "SUBMITTED", "DELETED", "AUTHORISED", "PAID", "VOIDED"]),
-    Contact: invoiceContactSchema,
+    Contact: transactionContactSchema,
     DateString: s.nullableString("Invoice date."),
     DueDateString: s.nullableString("Invoice due date."),
     Reference: s.nullableString("Invoice reference."),
@@ -392,6 +392,52 @@ const invoiceSchema = s.looseObject(
     LineItems: s.array("Invoice line items when returned by Xero.", invoiceLineSchema),
   },
   { description: "Xero sales invoice or purchase bill." },
+);
+
+const quoteLineSchema = s.looseObject(
+  {
+    LineItemID: s.uuid("Unique line item ID."),
+    Description: s.nullableString("Line item description."),
+    Quantity: s.number("Line item quantity."),
+    UnitAmount: s.number("Amount per unit."),
+    AccountCode: s.nullableString("Account code assigned to the line."),
+    TaxType: s.nullableString("Tax type applied to the line."),
+    TaxAmount: s.number("Tax amount for the line."),
+    LineAmount: s.number("Line total before or including tax according to LineAmountTypes."),
+  },
+  { description: "Xero quote line item." },
+);
+
+/**
+ * Xero returns a quote's LineAmountTypes upper-cased ("EXCLUSIVE"), where the
+ * create input spells it "Exclusive" as invoices do, so this field stays a
+ * plain string rather than reusing the input enum. Read off the live Quotes
+ * endpoint, not inferred: an enum here would reject every real quote.
+ *
+ * /Quotes also returns no `pagination` object, unlike /Invoices, so the list
+ * action's pagination is null for quotes.
+ */
+const quoteSchema = s.looseObject(
+  {
+    QuoteID: s.uuid("Unique Xero quote ID."),
+    QuoteNumber: s.nullableString("Quote number."),
+    Status: s.stringEnum("Quote status.", ["DRAFT", "SENT", "DECLINED", "ACCEPTED", "INVOICED", "DELETED"]),
+    Contact: transactionContactSchema,
+    Title: s.nullableString("Quote title."),
+    Summary: s.nullableString("Summary shown beneath the quote title."),
+    Terms: s.nullableString("Quote terms."),
+    Reference: s.nullableString("Quote reference."),
+    DateString: s.nullableString("Quote date."),
+    ExpiryDateString: s.nullableString("Date the quote expires."),
+    LineAmountTypes: s.nullableString("How line amounts treat tax, as Xero returns it: EXCLUSIVE, INCLUSIVE or NOTAX."),
+    CurrencyCode: s.nullableString("Quote currency code."),
+    SubTotal: s.number("Quote subtotal."),
+    TotalTax: s.number("Total quote tax."),
+    Total: s.number("Quote total."),
+    UpdatedDateUTC: s.string("Xero quote update timestamp."),
+    LineItems: s.array("Quote line items when returned by Xero.", quoteLineSchema),
+  },
+  { description: "Xero sales quote." },
 );
 
 /**
@@ -803,6 +849,83 @@ export const xeroActions: readonly ActionDefinition[] = [
     outputSchema: s.actionOutput({ invoice: invoiceSchema }, "Created draft Xero invoice."),
     requiredScopes: [xeroScopes.invoicesWrite],
     followUpActions: ["xero.get_invoice"],
+  }),
+  defineProviderAction(service, {
+    name: "list_quotes",
+    description:
+      "List or filter sales quotes in Xero. Xero returns no pagination object for quotes, so pagination is null.",
+    inputSchema: s.object(
+      "Quote filters and pagination.",
+      {
+        page: pageSchema,
+        orderBy: s.nonEmptyString("Xero order expression, such as UpdatedDateUTC DESC."),
+        status: s.stringEnum("Only return quotes with this status.", [
+          "DRAFT",
+          "SENT",
+          "DECLINED",
+          "ACCEPTED",
+          "INVOICED",
+          "DELETED",
+        ]),
+        contactId: s.uuid("Only return quotes for this Xero contact ID."),
+        dateFrom: s.date("Only return quotes dated on or after this date."),
+        dateTo: s.date("Only return quotes dated on or before this date."),
+      },
+      { optional: ["page", "orderBy", "status", "contactId", "dateFrom", "dateTo"] },
+    ),
+    outputSchema: listOutputSchema("quotes", "Quotes returned by Xero.", quoteSchema),
+    requiredScopes: [xeroScopes.quotesRead],
+    followUpActions: ["xero.get_quote", "xero.create_quote"],
+  }),
+  defineProviderAction(service, {
+    name: "get_quote",
+    description: "Get one Xero sales quote with its line items.",
+    inputSchema: s.actionInput({ quoteId: s.uuid("Unique Xero quote ID.") }, ["quoteId"]),
+    outputSchema: s.actionOutput({ quote: quoteSchema }, "Selected Xero quote."),
+    requiredScopes: [xeroScopes.quotesRead],
+  }),
+  defineProviderAction(service, {
+    name: "create_quote",
+    description:
+      "Create one sales quote in Xero, as a draft unless status says otherwise. Retrieve the quote's PDF with retrieve_endpoint on /Quotes/{quoteId} and accept application/pdf.",
+    inputSchema: s.actionInput(
+      {
+        contactId: s.uuid("Existing Xero contact ID the quote is addressed to."),
+        date: s.date("Quote date."),
+        expiryDate: s.date("Date the quote expires."),
+        title: s.nonEmptyString("Quote title, shown above the line items."),
+        summary: s.nonEmptyString("Summary shown beneath the quote title."),
+        terms: s.nonEmptyString("Quote terms."),
+        reference: s.nonEmptyString("Quote reference."),
+        quoteNumber: s.nonEmptyString("Quote number. Xero allocates the next one when omitted."),
+        currencyCode: s.nonEmptyString("Three-letter quote currency code."),
+        lineAmountTypes: s.stringEnum("How line amounts treat tax.", ["Exclusive", "Inclusive", "NoTax"]),
+        status: s.stringEnum("Status to create the quote in. Defaults to DRAFT.", ["DRAFT", "SENT"]),
+        idempotencyKey: s.string("Optional retry-safe Xero idempotency key.", { maxLength: 128 }),
+        lineItems: s.array(
+          "Quote line items.",
+          s.object(
+            "One quote line item.",
+            {
+              description: s.nonEmptyString("Line item description."),
+              quantity: s.number("Quantity."),
+              unitAmount: s.number("Amount per unit."),
+              accountCode: s.nonEmptyString(
+                "Xero account code. Optional on a quote, unlike an invoice, but needed before the quote can be turned into one.",
+              ),
+              taxType: s.nonEmptyString("Optional Xero tax type code."),
+            },
+            { required: ["description", "quantity", "unitAmount"], optional: ["accountCode", "taxType"] },
+          ),
+          { minItems: 1 },
+        ),
+      },
+      ["contactId", "lineItems"],
+      "Quote details. Xero allocates the quote number when omitted.",
+    ),
+    outputSchema: s.actionOutput({ quote: quoteSchema }, "Created Xero quote."),
+    requiredScopes: [xeroScopes.quotesWrite],
+    followUpActions: ["xero.get_quote"],
   }),
 ];
 

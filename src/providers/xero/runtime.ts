@@ -358,6 +358,53 @@ export const xeroActionHandlers: Record<string, ProviderRuntimeHandler<XeroConte
     });
     return { invoice: firstCollectionItem(payload, "Invoices") };
   },
+  async list_quotes(input, context) {
+    return listXeroCollection(context, "/Quotes", "Quotes", "quotes", {
+      page: optionalPositiveInteger(input.page, "page"),
+      order: optionalString(input.orderBy),
+      Status: optionalString(input.status),
+      ContactID: optionalString(input.contactId),
+      DateFrom: optionalString(input.dateFrom),
+      DateTo: optionalString(input.dateTo),
+    });
+  },
+  async get_quote(input, context) {
+    const quoteId = requiredString(input.quoteId, "quoteId", providerInputError);
+    const payload = await requestXeroJson({ path: `/Quotes/${encodeURIComponent(quoteId)}`, context });
+    return { quote: firstCollectionItem(payload, "Quotes") };
+  },
+  async create_quote(input, context) {
+    const quote = compactObject({
+      Contact: { ContactID: requiredString(input.contactId, "contactId", providerInputError) },
+      Date: optionalString(input.date),
+      ExpiryDate: optionalString(input.expiryDate),
+      Title: optionalString(input.title),
+      Summary: optionalString(input.summary),
+      Terms: optionalString(input.terms),
+      Reference: optionalString(input.reference),
+      QuoteNumber: optionalString(input.quoteNumber),
+      CurrencyCode: optionalString(input.currencyCode),
+      LineAmountTypes: optionalString(input.lineAmountTypes),
+      Status: optionalString(input.status) ?? "DRAFT",
+      LineItems: objectArray(input.lineItems, "lineItems", providerInputError).map((line, index) =>
+        compactObject({
+          Description: requiredString(line.description, `lineItems[${index}].description`, providerInputError),
+          Quantity: requiredNumber(line.quantity, `lineItems[${index}].quantity`),
+          UnitAmount: requiredNumber(line.unitAmount, `lineItems[${index}].unitAmount`),
+          AccountCode: optionalString(line.accountCode),
+          TaxType: optionalString(line.taxType),
+        }),
+      ),
+    });
+    const payload = await requestXeroJson({
+      path: "/Quotes",
+      context,
+      method: "PUT",
+      body: { Quotes: [quote] },
+      headers: idempotencyHeaders(input.idempotencyKey),
+    });
+    return { quote: firstCollectionItem(payload, "Quotes") };
+  },
 };
 
 export function createXeroCredential(values: Record<string, unknown>): XeroCustomConnectionCredential {

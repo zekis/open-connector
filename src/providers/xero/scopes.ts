@@ -4,6 +4,12 @@ export const xeroScopes: Readonly<Record<string, string>> = {
   contactsWrite: "accounting.contacts",
   invoicesRead: "accounting.invoices.read",
   invoicesWrite: "accounting.invoices",
+  // Quotes sit in the same Accounting scope family as invoices. Measured on the
+  // live connection: GET /Quotes returns 200 with accounting.invoices granted and
+  // no quotes-specific scope present, so these alias the invoice scopes rather
+  // than request a scope Xero may not issue.
+  quotesRead: "accounting.invoices.read",
+  quotesWrite: "accounting.invoices",
   paymentsRead: "accounting.payments.read",
   bankTransactionsRead: "accounting.banktransactions.read",
   bankSummaryRead: "accounting.reports.banksummary.read",
