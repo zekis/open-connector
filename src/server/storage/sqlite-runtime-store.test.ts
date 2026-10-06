@@ -1064,7 +1064,7 @@ describe("SqliteRuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
-      allowedRecipients: ["@tierneymorris.com.au"],
+      allowedRecipients: ["@company.test"],
     });
     expect(created.token).toMatch(/^oct_/);
     expect(created.record.name).toBe("Claude Desktop");
@@ -1079,7 +1079,7 @@ describe("SqliteRuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
-      allowedRecipients: ["@tierneymorris.com.au"],
+      allowedRecipients: ["@company.test"],
     });
     expect(listed?.lastUsedAt).toBeTruthy();
     expect(JSON.stringify(listed)).not.toContain(created.token);
@@ -1089,13 +1089,13 @@ describe("SqliteRuntimeDatabase", () => {
         allowedActions: ["github.get_current_user"],
         blockedActions: [],
         allowedProxies: ["slack"],
-        allowedRecipients: ["zeke.tierney@sgcaustralia.com.au"],
+        allowedRecipients: ["pat.lee@partner.test"],
       }),
     ).resolves.toMatchObject({
       allowedActions: ["github.get_current_user"],
       blockedActions: [],
       allowedProxies: ["slack"],
-      allowedRecipients: ["zeke.tierney@sgcaustralia.com.au"],
+      allowedRecipients: ["pat.lee@partner.test"],
     });
 
     await expect(tokens.revokeToken(created.record.id)).resolves.toBe(true);
@@ -1136,7 +1136,7 @@ describe("SqliteRuntimeDatabase", () => {
         blockedActions: ["github.delete_repository"],
         allowedProxies: ["github"],
         blockedProxies: [],
-        allowedRecipients: ["@tierneymorris.com.au"],
+        allowedRecipients: ["@company.test"],
       },
       updatedAt: "2026-07-20T00:00:00.000Z",
     };

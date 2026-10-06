@@ -100,11 +100,11 @@ describe("policy input", () => {
         allowedActions: [],
         blockedActions: [],
         allowedProxies: [],
-        allowedRecipients: [" @TierneyMorris.com.au ", "Zeke.Tierney@sgcaustralia.com.au", "@tierneymorris.com.au"],
+        allowedRecipients: [" @Company.test ", "Pat.Lee@partner.test", "@company.test"],
       }).allowedRecipients,
-    ).toEqual(["@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"]);
+    ).toEqual(["@company.test", "pat.lee@partner.test"]);
     for (const rule of [
-      "tierneymorris.com.au",
+      "company.test",
       "@localhost",
       "a@b@example.com",
       "Name <a@example.com>",

@@ -8,7 +8,7 @@ import {
   parseActionPolicyList,
 } from "./action-policy.ts";
 
-const trustedRecipients = ["@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"];
+const trustedRecipients = ["@company.test", "pat.lee@partner.test"];
 
 const sendEmail: ActionDefinition = {
   id: "outlook.send_email",
@@ -338,16 +338,16 @@ describe("recipient policy", () => {
     expect(snapshot.restrictsRecipients()).toBe(true);
     expect(
       snapshot.evaluateRecipients(sendEmail, [
-        "alice@tierneymorris.com.au",
-        "Bob Smith <Bob@TierneyMorris.com.au>",
-        "Zeke.Tierney@SGCAustralia.com.au",
+        "alice@company.test",
+        "Bob Smith <Bob@Company.test>",
+        "Pat.Lee@Partner.test",
       ]),
     ).toEqual({ allowed: true, checks: [{ source: "deployment", outcome: "allow_match" }] });
     for (const outsider of [
-      "someone.else@sgcaustralia.com.au",
-      "alice@mail.tierneymorris.com.au",
-      "alice@tierneymorris.com.au.example.com",
-      "tierneymorris.com.au",
+      "someone.else@partner.test",
+      "alice@mail.company.test",
+      "alice@company.test.example.com",
+      "company.test",
     ]) {
       expect(snapshot.evaluateRecipients(sendEmail, [outsider])).toMatchObject({
         allowed: false,
@@ -359,7 +359,7 @@ describe("recipient policy", () => {
   it("refuses the whole send when one recipient is outside the list, naming only the refused ones", () => {
     const decision = new ActionPolicyService({ allowedRecipients: trustedRecipients })
       .createSnapshot()
-      .evaluateRecipients(sendEmail, ["alice@tierneymorris.com.au", "Outsider <Outsider@Example.com>"]);
+      .evaluateRecipients(sendEmail, ["alice@company.test", "Outsider <Outsider@Example.com>"]);
     expect(decision).toEqual({
       allowed: false,
       code: "recipient_not_allowed",
@@ -383,16 +383,16 @@ describe("recipient policy", () => {
 
   it("requires every recipient to match each layer that lists recipients", () => {
     const snapshot = new ActionPolicyService({ allowedRecipients: trustedRecipients }).createSnapshot(
-      { ...emptyPolicyRules(), allowedRecipients: ["@tierneymorris.com.au"] },
+      { ...emptyPolicyRules(), allowedRecipients: ["@company.test"] },
       {
         allowedActions: [],
         blockedActions: [],
         allowedProxies: [],
-        allowedRecipients: ["alice@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"],
+        allowedRecipients: ["alice@company.test", "pat.lee@partner.test"],
       },
     );
     const prior = [{ source: "deployment" as const, outcome: "allow_match" as const, rule: "outlook.*" }];
-    expect(snapshot.evaluateRecipients(sendEmail, ["alice@tierneymorris.com.au"], prior)).toEqual({
+    expect(snapshot.evaluateRecipients(sendEmail, ["alice@company.test"], prior)).toEqual({
       allowed: true,
       checks: [
         ...prior,
@@ -401,7 +401,7 @@ describe("recipient policy", () => {
         { source: "token", outcome: "allow_match" },
       ],
     });
-    expect(snapshot.evaluateRecipients(sendEmail, ["zeke.tierney@sgcaustralia.com.au"])).toMatchObject({
+    expect(snapshot.evaluateRecipients(sendEmail, ["pat.lee@partner.test"])).toMatchObject({
       allowed: false,
       checks: [
         { source: "deployment", outcome: "allow_match" },
@@ -409,9 +409,9 @@ describe("recipient policy", () => {
         { source: "token", outcome: "allow_match" },
       ],
     });
-    expect(snapshot.evaluateRecipients(sendEmail, ["bob@tierneymorris.com.au"])).toMatchObject({
+    expect(snapshot.evaluateRecipients(sendEmail, ["bob@company.test"])).toMatchObject({
       allowed: false,
-      message: expect.stringContaining("bob@tierneymorris.com.au"),
+      message: expect.stringContaining("bob@company.test"),
       checks: [
         { source: "deployment", outcome: "allow_match" },
         { source: "runtime", outcome: "allow_match" },
@@ -431,7 +431,7 @@ describe("recipient policy", () => {
   });
 
   it("reduces display-name recipients to their bare address", () => {
-    expect(normalizeRecipientAddress('  "Tierney, Zeke" <Zeke@Example.COM> ')).toBe("zeke@example.com");
+    expect(normalizeRecipientAddress('  "Lee, Pat" <Pat@Example.COM> ')).toBe("pat@example.com");
     expect(normalizeRecipientAddress(" Plain@Example.com ")).toBe("plain@example.com");
   });
 });

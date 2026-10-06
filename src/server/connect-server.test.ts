@@ -1630,7 +1630,7 @@ describe("ConnectServer", () => {
     const pairingResponse = await app.request("/api/mobile-pairings", {
       method: "POST",
       headers: adminHeaders,
-      body: JSON.stringify({ name: "Zeke's phone" }),
+      body: JSON.stringify({ name: "Pat's phone" }),
     });
     expect(pairingResponse.status).toBe(200);
     const pairing = (await pairingResponse.json()) as {
@@ -1655,7 +1655,7 @@ describe("ConnectServer", () => {
     expect(session.headers.get("set-cookie")).toContain("Max-Age=34560000");
     const devicesResponse = await app.request("/api/mobile-devices", { headers: { cookie } });
     const devices = (await devicesResponse.json()) as Array<{ id: string; name: string }>;
-    expect(devices).toMatchObject([{ name: "Zeke's phone" }]);
+    expect(devices).toMatchObject([{ name: "Pat's phone" }]);
 
     const revokeResponse = await app.request(`/api/mobile-devices/${devices[0]!.id}`, {
       method: "DELETE",
