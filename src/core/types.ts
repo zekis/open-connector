@@ -183,6 +183,11 @@ export type ActionDefinition = {
   outputSchema: JsonSchema;
   /** Related actions that are useful after this action completes. */
   followUpActions?: string[];
+  /**
+   * Whether running this action delivers email. A recipient policy checks these actions before they
+   * run, using the recipient resolver their executor module exports, and refuses them without one.
+   */
+  sendsMail?: boolean;
   /** Action ids that model a start/status/cancel async workflow. */
   asyncLifecycle?: {
     /** Action used to start an async provider operation. */
@@ -500,6 +505,20 @@ export type ProviderProxyExecutor = (
   input: ProxyRequestInput,
   context: ExecutionContext,
 ) => Promise<ProxyExecutionResult>;
+
+/**
+ * Resolve every address a mail-sending action would deliver to, before it runs.
+ *
+ * The input has already passed the action schema. Resolvers may call the provider (for example to
+ * read a draft or the message being replied to) and should throw when the recipients cannot be
+ * determined, so a recipient policy can refuse the action.
+ */
+export type RecipientResolver = (input: unknown, context: ExecutionContext) => Promise<string[]>;
+
+/**
+ * Recipient resolver map for one provider, keyed by full action id.
+ */
+export type RecipientResolvers<Service extends string = string> = Record<`${Service}.${string}`, RecipientResolver>;
 
 /**
  * Executor map for one provider.

@@ -2,7 +2,12 @@ import type { ActionDefinition } from "./types.ts";
 
 export type PolicySource = "deployment" | "runtime" | "token";
 
-export type PolicyErrorCode = "action_not_allowed" | "action_blocked" | "proxy_not_allowed" | "proxy_blocked";
+export type PolicyErrorCode =
+  | "action_not_allowed"
+  | "action_blocked"
+  | "proxy_not_allowed"
+  | "proxy_blocked"
+  | "recipient_not_allowed";
 
 export interface PolicyCheck {
   source: PolicySource;
@@ -24,12 +29,15 @@ export interface PolicyRules {
   blockedActions: string[];
   allowedProxies: string[];
   blockedProxies: string[];
+  /** Email addresses or `@domain` rules that mail-sending actions may deliver to. Empty means unrestricted. */
+  allowedRecipients: string[];
 }
 
 export interface TokenPolicy {
   allowedActions: string[];
   blockedActions: string[];
   allowedProxies: string[];
+  allowedRecipients: string[];
 }
 
 export interface RuntimePolicyState {
@@ -43,6 +51,7 @@ export interface ActionPolicyConfig {
   blockedActions?: string[];
   allowedProxies?: string[];
   blockedProxies?: string[];
+  allowedRecipients?: string[];
 }
 
 interface CompiledRule {
@@ -57,6 +66,7 @@ interface CompiledLayer {
   blockedActions: CompiledRule[];
   allowedProxies: CompiledRule[];
   blockedProxies: CompiledRule[];
+  allowedRecipients: CompiledRule[];
 }
 
 /**
@@ -80,6 +90,7 @@ export class ActionPolicySnapshot {
         blockedActions: token.blockedActions,
         allowedProxies: token.allowedProxies,
         blockedProxies: [],
+        allowedRecipients: token.allowedRecipients,
       });
       const tokenLayer = compileLayer("token", tokenRules);
       this.layers.push(tokenLayer);
@@ -127,7 +138,11 @@ export class ActionPolicySnapshot {
     return { allowed: true, checks };
   }
 
-  evaluateProxy(service: string): ActionPolicyDecision {
+  /**
+   * Pass `sendsMail` for services with mail-sending actions: a recipient policy refuses their proxy,
+   * because a raw provider request can deliver mail to any address.
+   */
+  evaluateProxy(service: string, sendsMail = false): ActionPolicyDecision {
     for (const layer of this.proxyLayers) {
       const blocked = layer.blockedProxies.find((rule) => rule.matches(service));
       if (blocked) {
@@ -170,7 +185,66 @@ export class ActionPolicySnapshot {
       checks.push({ source: "token", outcome: "allow_match", rule: allowed.pattern });
     }
 
+    const recipientLayer = sendsMail ? this.layers.find((layer) => layer.allowedRecipients.length > 0) : undefined;
+    if (recipientLayer) {
+      return {
+        allowed: false,
+        code: "recipient_not_allowed",
+        message: `${service} proxy is unavailable while a recipient policy is active, because proxied requests could send mail to any address.`,
+        checks: [...checks, { source: recipientLayer.source, outcome: "allow_miss" }],
+      };
+    }
+
     return { allowed: true, checks };
+  }
+
+  /** Whether any layer limits who mail-sending actions may deliver to. */
+  restrictsRecipients(): boolean {
+    return this.layers.some((layer) => layer.allowedRecipients.length > 0);
+  }
+
+  /**
+   * Check every address a mail-sending action would deliver to against each layer's recipient
+   * allowlist. Pass `undefined` when the recipients could not be determined; that is refused while a
+   * recipient policy is active. `checks` carries the earlier action checks into the decision.
+   */
+  evaluateRecipients(
+    action: ActionDefinition,
+    recipients: readonly string[] | undefined,
+    checks: PolicyCheck[] = [],
+  ): ActionPolicyDecision {
+    const layers = this.layers.filter((layer) => layer.allowedRecipients.length > 0);
+    if (layers.length === 0) {
+      return { allowed: true, checks };
+    }
+    if (!recipients) {
+      return {
+        allowed: false,
+        code: "recipient_not_allowed",
+        message: `${action.id} was refused because its recipients could not be determined while a recipient policy is active.`,
+        checks: [...checks, { source: layers[0].source, outcome: "allow_miss" }],
+      };
+    }
+
+    const addresses = [...new Set(recipients.map(normalizeRecipientAddress))];
+    const nextChecks = [...checks];
+    const refused = new Set<string>();
+    for (const layer of layers) {
+      const missed = addresses.filter((address) => !layer.allowedRecipients.some((rule) => rule.matches(address)));
+      for (const address of missed) {
+        refused.add(address);
+      }
+      nextChecks.push({ source: layer.source, outcome: missed.length > 0 ? "allow_miss" : "allow_match" });
+    }
+    if (refused.size > 0) {
+      return {
+        allowed: false,
+        code: "recipient_not_allowed",
+        message: `${action.id} would send mail to recipients outside the recipient allowlist: ${[...refused].join(", ")}.`,
+        checks: nextChecks,
+      };
+    }
+    return { allowed: true, checks: nextChecks };
   }
 }
 
@@ -196,8 +270,8 @@ export class ActionPolicyService {
     return this.createSnapshot().evaluate(action);
   }
 
-  evaluateProxy(service: string): ActionPolicyDecision {
-    return this.createSnapshot().evaluateProxy(service);
+  evaluateProxy(service: string, sendsMail = false): ActionPolicyDecision {
+    return this.createSnapshot().evaluateProxy(service, sendsMail);
   }
 }
 
@@ -207,7 +281,19 @@ export function emptyPolicyRules(): PolicyRules {
     blockedActions: [],
     allowedProxies: [],
     blockedProxies: [],
+    allowedRecipients: [],
   };
+}
+
+/**
+ * Reduce a recipient such as `Name <user@example.com>` to its lowercase bare address.
+ */
+export function normalizeRecipientAddress(value: string): string {
+  const trimmed = value.trim();
+  const open = trimmed.lastIndexOf("<");
+  const close = trimmed.lastIndexOf(">");
+  const address = open >= 0 && close > open ? trimmed.slice(open + 1, close) : trimmed;
+  return address.trim().toLowerCase();
 }
 
 export function parseActionPolicyList(value: string | undefined): string[] {
@@ -223,6 +309,7 @@ function policyRules(config: ActionPolicyConfig): PolicyRules {
     blockedActions: config.blockedActions ?? [],
     allowedProxies: config.allowedProxies ?? [],
     blockedProxies: config.blockedProxies ?? [],
+    allowedRecipients: config.allowedRecipients ?? [],
   });
 }
 
@@ -232,11 +319,13 @@ function immutablePolicyRules(rules: PolicyRules): PolicyRules {
     blockedActions: [...rules.blockedActions],
     allowedProxies: [...rules.allowedProxies],
     blockedProxies: [...rules.blockedProxies],
+    allowedRecipients: [...rules.allowedRecipients],
   };
   Object.freeze(immutable.allowedActions);
   Object.freeze(immutable.blockedActions);
   Object.freeze(immutable.allowedProxies);
   Object.freeze(immutable.blockedProxies);
+  Object.freeze(immutable.allowedRecipients);
   return Object.freeze(immutable);
 }
 
@@ -247,6 +336,7 @@ function compileLayer(source: PolicySource, rules: PolicyRules): CompiledLayer {
     blockedActions: rules.blockedActions.map(compileActionRule),
     allowedProxies: rules.allowedProxies.map(compileProxyRule),
     blockedProxies: rules.blockedProxies.map(compileProxyRule),
+    allowedRecipients: rules.allowedRecipients.map(compileRecipientRule),
   };
 }
 
@@ -268,4 +358,19 @@ function compileActionRule(pattern: string): CompiledRule {
 
 function compileProxyRule(pattern: string): CompiledRule {
   return { pattern, matches: pattern === "*" ? () => true : (service) => service === pattern };
+}
+
+/** `@example.com` matches every address at exactly that domain; any other rule matches one address. */
+function compileRecipientRule(pattern: string): CompiledRule {
+  const rule = pattern.trim().toLowerCase();
+  if (rule.startsWith("@")) {
+    return {
+      pattern,
+      matches: (address) => {
+        const separator = address.lastIndexOf("@");
+        return separator > 0 && address.slice(separator) === rule;
+      },
+    };
+  }
+  return { pattern, matches: (address) => address === rule };
 }

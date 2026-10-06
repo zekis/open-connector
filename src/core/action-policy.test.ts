@@ -1,7 +1,26 @@
 import type { ActionDefinition } from "./types.ts";
 
 import { describe, expect, it } from "vitest";
-import { ActionPolicyService, parseActionPolicyList } from "./action-policy.ts";
+import {
+  ActionPolicyService,
+  emptyPolicyRules,
+  normalizeRecipientAddress,
+  parseActionPolicyList,
+} from "./action-policy.ts";
+
+const trustedRecipients = ["@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"];
+
+const sendEmail: ActionDefinition = {
+  id: "outlook.send_email",
+  service: "outlook",
+  name: "send_email",
+  description: "Send an email.",
+  requiredScopes: [],
+  providerPermissions: [],
+  inputSchema: { type: "object" },
+  outputSchema: { type: "object" },
+  sendsMail: true,
+};
 
 const action: ActionDefinition = {
   id: "github.create_issue",
@@ -20,6 +39,7 @@ describe("ActionPolicyService", () => {
       allowedActions: ["xero.*", "github.*@shared-id"],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     expect(policy.evaluate(action).allowed).toBe(true);
     expect(policy.evaluate(action, "shared-id").allowed).toBe(true);
@@ -41,6 +61,7 @@ describe("ActionPolicyService", () => {
       allowedActions: ["github.*@shared-id"],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     expect(blocked.evaluate(action, "shared-id").allowed).toBe(false);
   });
@@ -166,8 +187,9 @@ describe("ActionPolicyService", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       },
-      { allowedActions: ["github.*"], blockedActions: [], allowedProxies: [] },
+      { allowedActions: ["github.*"], blockedActions: [], allowedProxies: [], allowedRecipients: [] },
     );
 
     expect(snapshot.evaluate(action)).toEqual({
@@ -186,6 +208,7 @@ describe("ActionPolicyService", () => {
       blockedActions: [],
       allowedProxies: [],
       blockedProxies: [],
+      allowedRecipients: [],
     });
 
     expect(snapshot.evaluate(action)).toMatchObject({
@@ -205,6 +228,7 @@ describe("ActionPolicyService", () => {
       blockedActions: ["github.create_issue"],
       allowedProxies: [],
       blockedProxies: [],
+      allowedRecipients: [],
     });
     expect(runtimeBlocked.evaluate(action)).toMatchObject({
       allowed: false,
@@ -218,8 +242,14 @@ describe("ActionPolicyService", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       },
-      { allowedActions: ["github.*"], blockedActions: ["github.create_issue"], allowedProxies: [] },
+      {
+        allowedActions: ["github.*"],
+        blockedActions: ["github.create_issue"],
+        allowedProxies: [],
+        allowedRecipients: [],
+      },
     );
     expect(tokenBlocked.evaluate(action)).toMatchObject({
       allowed: false,
@@ -234,6 +264,7 @@ describe("ActionPolicyService", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       })
       .evaluate(action);
 
@@ -253,6 +284,7 @@ describe("ActionPolicyService", () => {
       blockedActions: [],
       allowedProxies: [],
       blockedProxies: [],
+      allowedRecipients: [],
     };
 
     expect(
@@ -261,6 +293,7 @@ describe("ActionPolicyService", () => {
           allowedActions: ["*"],
           blockedActions: [],
           allowedProxies: [],
+          allowedRecipients: [],
         })
         .evaluateProxy("github"),
     ).toMatchObject({
@@ -278,6 +311,7 @@ describe("ActionPolicyService", () => {
           allowedActions: ["gmail.send_email"],
           blockedActions: ["github.create_issue"],
           allowedProxies: ["github"],
+          allowedRecipients: [],
         })
         .evaluateProxy("github"),
     ).toEqual({
@@ -287,5 +321,117 @@ describe("ActionPolicyService", () => {
         { source: "token", outcome: "allow_match", rule: "github" },
       ],
     });
+  });
+});
+
+describe("recipient policy", () => {
+  it("leaves mail unrestricted when no layer lists recipients", () => {
+    const snapshot = new ActionPolicyService().createSnapshot();
+    expect(snapshot.restrictsRecipients()).toBe(false);
+    expect(snapshot.evaluateRecipients(sendEmail, ["anyone@example.com"])).toEqual({ allowed: true, checks: [] });
+    expect(snapshot.evaluateRecipients(sendEmail, undefined)).toEqual({ allowed: true, checks: [] });
+    expect(snapshot.evaluateProxy("outlook", true)).toEqual({ allowed: true, checks: [] });
+  });
+
+  it("matches whole domains and single addresses case-insensitively", () => {
+    const snapshot = new ActionPolicyService({ allowedRecipients: trustedRecipients }).createSnapshot();
+    expect(snapshot.restrictsRecipients()).toBe(true);
+    expect(
+      snapshot.evaluateRecipients(sendEmail, [
+        "alice@tierneymorris.com.au",
+        "Bob Smith <Bob@TierneyMorris.com.au>",
+        "Zeke.Tierney@SGCAustralia.com.au",
+      ]),
+    ).toEqual({ allowed: true, checks: [{ source: "deployment", outcome: "allow_match" }] });
+    for (const outsider of [
+      "someone.else@sgcaustralia.com.au",
+      "alice@mail.tierneymorris.com.au",
+      "alice@tierneymorris.com.au.example.com",
+      "tierneymorris.com.au",
+    ]) {
+      expect(snapshot.evaluateRecipients(sendEmail, [outsider])).toMatchObject({
+        allowed: false,
+        code: "recipient_not_allowed",
+      });
+    }
+  });
+
+  it("refuses the whole send when one recipient is outside the list, naming only the refused ones", () => {
+    const decision = new ActionPolicyService({ allowedRecipients: trustedRecipients })
+      .createSnapshot()
+      .evaluateRecipients(sendEmail, ["alice@tierneymorris.com.au", "Outsider <Outsider@Example.com>"]);
+    expect(decision).toEqual({
+      allowed: false,
+      code: "recipient_not_allowed",
+      message:
+        "outlook.send_email would send mail to recipients outside the recipient allowlist: outsider@example.com.",
+      checks: [{ source: "deployment", outcome: "allow_miss" }],
+    });
+  });
+
+  it("refuses mail whose recipients could not be determined", () => {
+    const snapshot = new ActionPolicyService().createSnapshot({
+      ...emptyPolicyRules(),
+      allowedRecipients: trustedRecipients,
+    });
+    expect(snapshot.evaluateRecipients(sendEmail, undefined)).toMatchObject({
+      allowed: false,
+      code: "recipient_not_allowed",
+      checks: [{ source: "runtime", outcome: "allow_miss" }],
+    });
+  });
+
+  it("requires every recipient to match each layer that lists recipients", () => {
+    const snapshot = new ActionPolicyService({ allowedRecipients: trustedRecipients }).createSnapshot(
+      { ...emptyPolicyRules(), allowedRecipients: ["@tierneymorris.com.au"] },
+      {
+        allowedActions: [],
+        blockedActions: [],
+        allowedProxies: [],
+        allowedRecipients: ["alice@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"],
+      },
+    );
+    const prior = [{ source: "deployment" as const, outcome: "allow_match" as const, rule: "outlook.*" }];
+    expect(snapshot.evaluateRecipients(sendEmail, ["alice@tierneymorris.com.au"], prior)).toEqual({
+      allowed: true,
+      checks: [
+        ...prior,
+        { source: "deployment", outcome: "allow_match" },
+        { source: "runtime", outcome: "allow_match" },
+        { source: "token", outcome: "allow_match" },
+      ],
+    });
+    expect(snapshot.evaluateRecipients(sendEmail, ["zeke.tierney@sgcaustralia.com.au"])).toMatchObject({
+      allowed: false,
+      checks: [
+        { source: "deployment", outcome: "allow_match" },
+        { source: "runtime", outcome: "allow_miss" },
+        { source: "token", outcome: "allow_match" },
+      ],
+    });
+    expect(snapshot.evaluateRecipients(sendEmail, ["bob@tierneymorris.com.au"])).toMatchObject({
+      allowed: false,
+      message: expect.stringContaining("bob@tierneymorris.com.au"),
+      checks: [
+        { source: "deployment", outcome: "allow_match" },
+        { source: "runtime", outcome: "allow_match" },
+        { source: "token", outcome: "allow_miss" },
+      ],
+    });
+  });
+
+  it("refuses proxies of mail-sending providers while a recipient policy is active", () => {
+    const snapshot = new ActionPolicyService({ allowedRecipients: trustedRecipients }).createSnapshot();
+    expect(snapshot.evaluateProxy("outlook", true)).toMatchObject({
+      allowed: false,
+      code: "recipient_not_allowed",
+      checks: [{ source: "deployment", outcome: "allow_miss" }],
+    });
+    expect(snapshot.evaluateProxy("github")).toEqual({ allowed: true, checks: [] });
+  });
+
+  it("reduces display-name recipients to their bare address", () => {
+    expect(normalizeRecipientAddress('  "Tierney, Zeke" <Zeke@Example.COM> ')).toBe("zeke@example.com");
+    expect(normalizeRecipientAddress(" Plain@Example.com ")).toBe("plain@example.com");
   });
 });

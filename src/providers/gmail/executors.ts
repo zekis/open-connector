@@ -1,7 +1,17 @@
-import type { CredentialValidators, ExecutionContext, ProviderExecutors } from "../../core/types.ts";
+import type {
+  CredentialValidators,
+  ExecutionContext,
+  ProviderExecutors,
+  RecipientResolvers,
+} from "../../core/types.ts";
 import type { GmailDraftResource, GmailMessageResource, GmailThreadResource } from "./message.ts";
 
-import { defineProviderExecutors, ProviderRequestError, requireOAuthCredential } from "../provider-runtime.ts";
+import {
+  defineProviderExecutors,
+  defineRecipientResolvers,
+  ProviderRequestError,
+  requireOAuthCredential,
+} from "../provider-runtime.ts";
 import {
   buildRecipients,
   encodeMimeMessage,
@@ -190,11 +200,73 @@ export const gmailActionHandlers: Record<string, ActionHandler> = {
 export const executors: ProviderExecutors = defineProviderExecutors<ActionContext>({
   service: "gmail",
   handlers: gmailActionHandlers,
-  async createContext(context: ExecutionContext, fetcher: typeof fetch): Promise<ActionContext> {
-    const credential = await requireOAuthCredential(context, "gmail");
-    return { userId: "me", accessToken: credential.accessToken, fetcher };
-  },
+  createContext: createGmailContext,
 });
+
+/**
+ * Recipients of the Gmail actions that send mail, matching how each handler addresses its message.
+ */
+export const recipientResolvers: RecipientResolvers = defineRecipientResolvers<ActionContext>({
+  service: "gmail",
+  resolvers: {
+    async send_email(input) {
+      const recipients = buildRecipients(input);
+      return splitAddresses([...recipients.to, ...recipients.cc, ...recipients.bcc]);
+    },
+    async reply_email(input, { userId, accessToken, fetcher }) {
+      const message = await getMessageResource(
+        userId,
+        normalizeMessageId(input.messageId),
+        accessToken,
+        fetcher,
+        "metadata",
+      );
+      return [requiredReplyAddress(message)];
+    },
+    async reply_to_thread(input, { userId, accessToken, fetcher }) {
+      const recipients = buildRecipients(input);
+      const to = splitAddresses(recipients.to);
+      if (to.length === 0) {
+        const thread = await getThreadResource(
+          userId,
+          normalizeThreadId(input.threadId),
+          accessToken,
+          fetcher,
+          "metadata",
+        );
+        const target = thread.messages?.at(-1);
+        if (!target) {
+          throw new ProviderRequestError(400, "thread has no messages");
+        }
+        to.push(requiredReplyAddress(target));
+      }
+      return [...to, ...splitAddresses([...recipients.cc, ...recipients.bcc])];
+    },
+    async send_draft(input, { userId, accessToken, fetcher }) {
+      const draft = await getDraftResource(userId, normalizeMessageId(input.draftId), accessToken, fetcher, "metadata");
+      const headers = draft.message?.payload?.headers ?? [];
+      return splitAddresses(["To", "Cc", "Bcc"].map((name) => readHeader(headers, name)));
+    },
+  },
+  createContext: createGmailContext,
+});
+
+async function createGmailContext(context: ExecutionContext, fetcher: typeof fetch): Promise<ActionContext> {
+  const credential = await requireOAuthCredential(context, "gmail");
+  return { userId: "me", accessToken: credential.accessToken, fetcher };
+}
+
+function splitAddresses(values: string[]): string[] {
+  return values.flatMap((value) => parseAddressList(value));
+}
+
+function requiredReplyAddress(message: GmailMessageResource): string {
+  const address = resolveReplyHeaders(message).to;
+  if (!address) {
+    throw new ProviderRequestError(502, "the original Gmail message has no sender to reply to");
+  }
+  return address;
+}
 
 export const credentialValidators: CredentialValidators = {
   async oauth2(input, { fetcher }) {

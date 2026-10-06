@@ -1768,6 +1768,7 @@ export class ConnectServer {
           allowedActions: [],
           blockedActions: ["*"],
           allowedProxies: [],
+          allowedRecipients: [],
         })
       : undefined;
     return this.actionPolicy.createSnapshot(record?.rules ?? emptyPolicyRules(), runtimeGrant, record?.updatedAt);
@@ -2064,6 +2065,7 @@ export class ConnectServer {
         allowedActions: created.record.allowedActions,
         blockedActions: created.record.blockedActions,
         allowedProxies: created.record.allowedProxies,
+        allowedRecipients: created.record.allowedRecipients,
         createdAt: created.record.createdAt,
       },
     });

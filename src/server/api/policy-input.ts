@@ -15,6 +15,7 @@ export function readRuntimePolicyRules(body: JsonRequestBody): PolicyRules {
     blockedActions: readRules(body.blockedActions, "blockedActions", "action"),
     allowedProxies: readRules(body.allowedProxies, "allowedProxies", "proxy"),
     blockedProxies: readRules(body.blockedProxies, "blockedProxies", "proxy"),
+    allowedRecipients: readRules(body.allowedRecipients, "allowedRecipients", "recipient"),
   };
 }
 
@@ -26,10 +27,13 @@ export function readTokenPolicy(body: JsonRequestBody, allowOmitted = false): To
     allowedActions: readRules(body.allowedActions, "allowedActions", "action", allowOmitted),
     blockedActions: readRules(body.blockedActions, "blockedActions", "action", allowOmitted),
     allowedProxies: readRules(body.allowedProxies, "allowedProxies", "proxy", allowOmitted),
+    allowedRecipients: readRules(body.allowedRecipients, "allowedRecipients", "recipient", allowOmitted),
   };
 }
 
-function readRules(value: unknown, fieldName: string, kind: "action" | "proxy", allowOmitted = false): string[] {
+type PolicyRuleKind = "action" | "proxy" | "recipient";
+
+function readRules(value: unknown, fieldName: string, kind: PolicyRuleKind, allowOmitted = false): string[] {
   if (value === undefined && allowOmitted) {
     return [];
   }
@@ -37,7 +41,7 @@ function readRules(value: unknown, fieldName: string, kind: "action" | "proxy", 
   const rules: string[] = [];
   const seen = new Set<string>();
   for (const value of values) {
-    const rule = value.trim();
+    const rule = kind === "recipient" ? value.trim().toLowerCase() : value.trim();
     if (!rule) {
       throw invalidInput(`${fieldName} must not contain empty rules.`);
     }
@@ -56,7 +60,13 @@ function readRules(value: unknown, fieldName: string, kind: "action" | "proxy", 
   return rules;
 }
 
-function assertRuleSyntax(rule: string, fieldName: string, kind: "action" | "proxy"): void {
+function assertRuleSyntax(rule: string, fieldName: string, kind: PolicyRuleKind): void {
+  if (kind === "recipient") {
+    if (!/^[^\s@<>,]*@[^\s@<>,]+\.[^\s@<>,]+$/.test(rule) || rule.endsWith(".")) {
+      throw invalidInput(`${fieldName} contains an invalid recipient rule: ${rule}. Use an email address or @domain.`);
+    }
+    return;
+  }
   if (kind === "action" && rule.includes("@")) {
     const parts = rule.split("@");
     if (parts.length !== 2 || !/^[a-zA-Z0-9:_-]+$/.test(parts[1])) {

@@ -99,15 +99,21 @@ describe("action execution OpenAPI", () => {
     expect(runtimePolicyPath.get.responses["200"]).toBeDefined();
     expect(runtimePolicyPath.put.responses["413"]).toBeDefined();
     expect(tokenPath.put.responses["413"]).toBeDefined();
-    expect(policyRules.required).toEqual(["allowedActions", "blockedActions", "allowedProxies", "blockedProxies"]);
+    expect(policyRules.required).toEqual([
+      "allowedActions",
+      "blockedActions",
+      "allowedProxies",
+      "blockedProxies",
+      "allowedRecipients",
+    ]);
     expect(policyRules.properties.allowedActions).toMatchObject({
       maxItems: 128,
       items: { maxLength: 256, description: expect.stringContaining("256-byte UTF-8 limit") },
     });
     expect(tokenSummary.required).toEqual(
-      expect.arrayContaining(["allowedActions", "blockedActions", "allowedProxies"]),
+      expect.arrayContaining(["allowedActions", "blockedActions", "allowedProxies", "allowedRecipients"]),
     );
-    expect(tokenPolicy.required).toEqual(["allowedActions", "blockedActions", "allowedProxies"]);
+    expect(tokenPolicy.required).toEqual(["allowedActions", "blockedActions", "allowedProxies", "allowedRecipients"]);
     expect(runLog.properties).toHaveProperty("policy");
     expect(runLog.properties).toHaveProperty("runtimeTokenId");
   });

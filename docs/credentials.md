@@ -326,6 +326,31 @@ Action policy entries are comma-separated action ids. A provider-wide wildcard s
 matches all actions for that provider, and a bare `*` matches every action. Proxy policy entries are
 comma-separated provider service names, or `*` for all provider proxies.
 
+### Restrict who mail can be sent to
+
+Use `OOMOL_CONNECT_ALLOWED_RECIPIENTS` to let agents send and reply to email only to trusted
+recipients. Entries are full email addresses or whole domains written `@example.com`, matched
+case-insensitively; a domain rule matches that exact domain, not its subdomains:
+
+```bash
+OOMOL_CONNECT_ALLOWED_RECIPIENTS="@example.com,partner@example.org" npm run dev
+```
+
+The same `allowedRecipients` list is available in the runtime policy (`PUT /api/runtime-policy` or
+**Access > Edit policy > Mail recipients**) and on each persistent runtime token. An empty list adds
+no restriction, so existing deployments are unchanged. When one or more layers list recipients,
+every recipient of an action that sends mail must match each of those lists, or the action is
+refused with `recipient_not_allowed` before anything is sent; the error names the refused
+addresses. Actions that send mail (`outlook.send_email`, `outlook.send_draft`,
+`outlook.reply_email`, `gmail.send_email`, `gmail.send_draft`, `gmail.reply_email`, and
+`gmail.reply_to_thread`) are checked against every to, cc, and bcc recipient. A draft's recipients
+are read from the provider before it is sent, and a reply is checked against the original sender
+and reply-to addresses as well as any recipients it adds. If the recipients cannot be
+determined, the action is refused. Creating or editing a draft is not checked; sending it is.
+
+While a recipient policy is active, the provider proxy is refused for providers with mail-sending
+actions, because a raw proxied request could send mail to any address.
+
 ### Restrict a token to one connection
 
 In **Access > Edit token policy**, choose **Allow the rules below**, add an action

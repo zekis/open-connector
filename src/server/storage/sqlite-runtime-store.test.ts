@@ -169,6 +169,7 @@ describe("SqliteRuntimeDatabase", () => {
       "0021_inbox.sql",
       "0022_mcp_oauth.sql",
       "0023_feed_posts.sql",
+      "0024_runtime_token_recipients.sql",
     ];
     expect(entries.filter((entry) => entry.message === "sqlite migration started")).toEqual(
       migrations.map((migration) => ({ fields: { migration }, message: "sqlite migration started" })),
@@ -947,7 +948,7 @@ describe("SqliteRuntimeDatabase", () => {
       connectionId: migratedConnection?.id,
     });
     await expect(migrated.runtimeTokenStore.list()).resolves.toMatchObject([
-      { id: "legacy-token", allowedActions: [], blockedActions: [], allowedProxies: [] },
+      { id: "legacy-token", allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] },
     ]);
     await expect(migrated.runtimePolicyStore.get()).resolves.toBeUndefined();
     await expect(
@@ -1063,6 +1064,7 @@ describe("SqliteRuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: ["@tierneymorris.com.au"],
     });
     expect(created.token).toMatch(/^oct_/);
     expect(created.record.name).toBe("Claude Desktop");
@@ -1077,6 +1079,7 @@ describe("SqliteRuntimeDatabase", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: ["@tierneymorris.com.au"],
     });
     expect(listed?.lastUsedAt).toBeTruthy();
     expect(JSON.stringify(listed)).not.toContain(created.token);
@@ -1086,11 +1089,13 @@ describe("SqliteRuntimeDatabase", () => {
         allowedActions: ["github.get_current_user"],
         blockedActions: [],
         allowedProxies: ["slack"],
+        allowedRecipients: ["zeke.tierney@sgcaustralia.com.au"],
       }),
     ).resolves.toMatchObject({
       allowedActions: ["github.get_current_user"],
       blockedActions: [],
       allowedProxies: ["slack"],
+      allowedRecipients: ["zeke.tierney@sgcaustralia.com.au"],
     });
 
     await expect(tokens.revokeToken(created.record.id)).resolves.toBe(true);
@@ -1131,6 +1136,7 @@ describe("SqliteRuntimeDatabase", () => {
         blockedActions: ["github.delete_repository"],
         allowedProxies: ["github"],
         blockedProxies: [],
+        allowedRecipients: ["@tierneymorris.com.au"],
       },
       updatedAt: "2026-07-20T00:00:00.000Z",
     };
@@ -1141,6 +1147,26 @@ describe("SqliteRuntimeDatabase", () => {
 
     const second = new SqliteRuntimeDatabase(databasePath);
     await expect(second.runtimePolicyStore.get()).resolves.toEqual(record);
+    second.close();
+  });
+
+  it("reads a runtime policy saved before recipient rules existed as unrestricted recipients", async () => {
+    const databasePath = await createDatabasePath();
+    const first = new SqliteRuntimeDatabase(databasePath);
+    first.close();
+    const legacy = new DatabaseSync(databasePath);
+    legacy
+      .prepare("insert into runtime_policy (id, value, updated_at) values (1, ?, ?)")
+      .run(
+        JSON.stringify({ allowedActions: ["github.*"], blockedActions: [], allowedProxies: [], blockedProxies: [] }),
+        "2026-07-20T00:00:00.000Z",
+      );
+    legacy.close();
+
+    const second = new SqliteRuntimeDatabase(databasePath);
+    await expect(second.runtimePolicyStore.get()).resolves.toMatchObject({
+      rules: { allowedActions: ["github.*"], allowedRecipients: [] },
+    });
     second.close();
   });
 
@@ -1161,6 +1187,7 @@ describe("SqliteRuntimeDatabase", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       },
       updatedAt: "2026-07-20T00:00:00.000Z",
     });

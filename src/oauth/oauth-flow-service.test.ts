@@ -588,6 +588,10 @@ class EmptyProviderLoader implements IProviderLoader {
   async loadCredentialValidators(_service: string): Promise<CredentialValidators | undefined> {
     return undefined;
   }
+
+  async loadRecipientResolver(): Promise<undefined> {
+    return undefined;
+  }
 }
 
 class MemoryConnectionStore implements IConnectionStore {

@@ -143,6 +143,8 @@ const action = (input: {
   properties?: Record<string, JsonSchema>;
   required?: string[];
   outputSchema: JsonSchema;
+  /** Whether the action delivers email, so a recipient policy checks it before it runs. */
+  sendsMail?: boolean;
 }): ActionDefinition =>
   defineProviderAction(service, {
     name: input.name,
@@ -153,6 +155,7 @@ const action = (input: {
       description: "The input payload for this action.",
     }),
     outputSchema: input.outputSchema,
+    sendsMail: input.sendsMail,
   });
 
 const withUser = (properties: Record<string, JsonSchema> = {}): Record<string, JsonSchema> => ({
@@ -293,6 +296,7 @@ export const gmailActions: ActionDefinition[] = [
     name: "send_email",
     description: "Send an email from the connected Gmail account.",
     requiredScopes: gmailSendScopes,
+    sendsMail: true,
     properties: recipientFields(),
     outputSchema: s.object({ messageId }, { required: ["messageId"], description: "Sent message result." }),
   }),
@@ -300,6 +304,7 @@ export const gmailActions: ActionDefinition[] = [
     name: "reply_email",
     description: "Reply to an existing Gmail thread using the original message's reply headers.",
     requiredScopes: gmailSendScopes,
+    sendsMail: true,
     properties: { threadId, messageId, body: s.string({ description: "Reply body." }) },
     required: ["threadId", "messageId", "body"],
     outputSchema: s.object({ messageId }, { required: ["messageId"], description: "Reply result." }),
@@ -308,6 +313,7 @@ export const gmailActions: ActionDefinition[] = [
     name: "reply_to_thread",
     description: "Reply to an existing Gmail thread while preserving Gmail threading.",
     requiredScopes: gmailSendScopes,
+    sendsMail: true,
     properties: { threadId, ...recipientFields() },
     required: ["threadId"],
     outputSchema: s.object({ messageId, threadId }, { required: ["messageId"], description: "Thread reply result." }),
@@ -362,6 +368,7 @@ export const gmailActions: ActionDefinition[] = [
     name: "send_draft",
     description: "Send an existing Gmail draft as-is.",
     requiredScopes: gmailSendScopes,
+    sendsMail: true,
     properties: { draftId },
     required: ["draftId"],
     outputSchema: s.object(

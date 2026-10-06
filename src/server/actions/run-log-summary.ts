@@ -22,6 +22,7 @@ const safeErrorMessages: Record<string, string> = {
   oauth_token_expired: "The OAuth credential has expired.",
   provider_error: "The provider request failed.",
   rate_limited: "The provider rate limit was reached.",
+  recipient_not_allowed: "The mail recipients were refused by runtime policy.",
 };
 
 interface SummaryState {

@@ -858,6 +858,10 @@ class FakeProviderLoader implements IProviderLoader {
   async loadCredentialValidators(_service: string): Promise<CredentialValidators | undefined> {
     return this.validators;
   }
+
+  async loadRecipientResolver(): Promise<undefined> {
+    return undefined;
+  }
 }
 
 class MemoryConnectionStore implements IConnectionStore {

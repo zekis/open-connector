@@ -129,6 +129,7 @@ export interface RuntimeTokenSummary {
   allowedActions: string[];
   blockedActions: string[];
   allowedProxies: string[];
+  allowedRecipients: string[];
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -138,6 +139,7 @@ export interface PolicyRules {
   blockedActions: string[];
   allowedProxies: string[];
   blockedProxies: string[];
+  allowedRecipients: string[];
 }
 
 export interface RuntimePolicyState {
@@ -1207,6 +1209,7 @@ function emptyPolicyRules(): PolicyRules {
     blockedActions: [],
     allowedProxies: [],
     blockedProxies: [],
+    allowedRecipients: [],
   };
 }
 

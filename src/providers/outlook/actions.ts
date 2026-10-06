@@ -21,6 +21,7 @@ interface OutlookActionSource {
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
   followUpActions?: string[];
+  sendsMail?: boolean;
 }
 
 const rawObject = s.record(true, { description: "A generic JSON object returned by Microsoft Graph." });
@@ -331,48 +332,54 @@ const actions: OutlookActionSource[] = [
     input({ mailbox, messageId }, ["messageId"]),
     success,
   ),
-  action(
-    "send_draft",
-    "Send an existing Outlook draft message by message ID.",
-    outlookSendScopes,
-    [outlookProviderScopes.mailSend],
-    input({ mailbox, messageId }, ["messageId"]),
-    success,
-  ),
-  action(
-    "send_email",
-    "Send a new Outlook email in a single operation, without creating a standalone draft first.",
-    outlookSendScopes,
-    [outlookProviderScopes.mailSend],
-    input(
-      {
-        mailbox,
-        ...messageWriteFields,
-        saveToSentItems: s.boolean({ description: "Whether to save the sent message in Sent Items." }),
-      },
-      ["subject", "body"],
+  sendingMail(
+    action(
+      "send_draft",
+      "Send an existing Outlook draft message by message ID.",
+      outlookSendScopes,
+      [outlookProviderScopes.mailSend],
+      input({ mailbox, messageId }, ["messageId"]),
+      success,
     ),
-    success,
   ),
-  action(
-    "reply_email",
-    "Reply to an existing Outlook message with either a comment or a replacement body, and optionally add more recipients to the reply.",
-    outlookSendScopes,
-    [outlookProviderScopes.mailSend],
-    input(
-      {
-        mailbox,
-        messageId,
-        comment: s.string({ description: "Comment to include with the reply." }),
-        body: s.string({ description: "Reply body content." }),
-        isHtml: s.boolean({ description: "Whether the reply body is already HTML content." }),
-        toRecipients: recipientList("Additional primary recipients for the reply."),
-        ccRecipients: recipientList("Additional Cc recipients for the reply."),
-        bccRecipients: recipientList("Additional Bcc recipients for the reply."),
-      },
-      ["messageId"],
+  sendingMail(
+    action(
+      "send_email",
+      "Send a new Outlook email in a single operation, without creating a standalone draft first.",
+      outlookSendScopes,
+      [outlookProviderScopes.mailSend],
+      input(
+        {
+          mailbox,
+          ...messageWriteFields,
+          saveToSentItems: s.boolean({ description: "Whether to save the sent message in Sent Items." }),
+        },
+        ["subject", "body"],
+      ),
+      success,
     ),
-    success,
+  ),
+  sendingMail(
+    action(
+      "reply_email",
+      "Reply to an existing Outlook message with either a comment or a replacement body, and optionally add more recipients to the reply.",
+      outlookSendScopes,
+      [outlookProviderScopes.mailSend],
+      input(
+        {
+          mailbox,
+          messageId,
+          comment: s.string({ description: "Comment to include with the reply." }),
+          body: s.string({ description: "Reply body content." }),
+          isHtml: s.boolean({ description: "Whether the reply body is already HTML content." }),
+          toRecipients: recipientList("Additional primary recipients for the reply."),
+          ccRecipients: recipientList("Additional Cc recipients for the reply."),
+          bccRecipients: recipientList("Additional Bcc recipients for the reply."),
+        },
+        ["messageId"],
+      ),
+      success,
+    ),
   ),
   action(
     "get_mailbox_settings",
@@ -404,6 +411,11 @@ const actions: OutlookActionSource[] = [
 ];
 
 export const outlookActions: ActionDefinition[] = actions.map((item) => defineProviderAction(service, item));
+
+/** Mark an action that delivers email, so a recipient policy checks it before it runs. */
+function sendingMail(source: OutlookActionSource): OutlookActionSource {
+  return { ...source, sendsMail: true };
+}
 
 function action(
   name: string,

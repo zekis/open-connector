@@ -24,6 +24,7 @@ describe("AccessPage", () => {
           blockedActions: [],
           allowedProxies: [],
           blockedProxies: [],
+          allowedRecipients: [],
         }),
         connections: [
           {
@@ -83,12 +84,14 @@ describe("AccessPage", () => {
             blockedActions: ["github.delete_repository"],
             allowedProxies: [],
             blockedProxies: ["*"],
+            allowedRecipients: [],
           },
           runtime: {
             allowedActions: ["github.create_issue"],
             blockedActions: [],
             allowedProxies: ["github"],
             blockedProxies: [],
+            allowedRecipients: [],
           },
         },
         tokens: [
@@ -98,6 +101,7 @@ describe("AccessPage", () => {
             allowedActions: ["github.*"],
             blockedActions: ["github.delete_repository"],
             allowedProxies: ["github"],
+            allowedRecipients: [],
             createdAt: "2026-07-20T00:00:00.000Z",
           },
         ],
@@ -124,6 +128,7 @@ describe("AccessPage", () => {
       blockedActions: "",
       allowedProxies: " github ",
       blockedProxies: "*\n",
+      allowedRecipients: "",
     });
 
     expect(rules).toEqual({
@@ -131,12 +136,14 @@ describe("AccessPage", () => {
       blockedActions: [],
       allowedProxies: ["github"],
       blockedProxies: ["*"],
+      allowedRecipients: [],
     });
     expect(policyDraftFromRules(rules)).toEqual({
       allowedActions: "github.*\ngithub.create_issue",
       blockedActions: "",
       allowedProxies: "github",
       blockedProxies: "*",
+      allowedRecipients: "",
     });
   });
 });

@@ -7,6 +7,7 @@ import type {
   ProxyExecutionResult,
   ProxyRequestInput,
   ProxyResponse,
+  RecipientResolvers,
   ResolvedCredential,
   TransitFileWriter,
 } from "../core/types.ts";
@@ -94,6 +95,20 @@ export interface ProviderExecutorDefinition<TContext> {
   allowPrivateNetwork?: () => boolean;
   /** Skip the redundant DNS resolved-address check; only for hardcoded-host providers. */
   skipDnsValidation?: boolean;
+}
+
+/**
+ * Provider-native recipient resolver: returns every address one mail-sending action would deliver to.
+ */
+export type ProviderRecipientResolver<TContext> = (
+  input: Record<string, unknown>,
+  context: TContext,
+) => Promise<string[]>;
+
+export interface ProviderRecipientResolverDefinition<TContext> {
+  service: string;
+  resolvers: Record<string, ProviderRecipientResolver<TContext>>;
+  createContext: ProviderRuntimeContextFactory<TContext>;
 }
 
 export interface BearerCredential {
@@ -793,6 +808,23 @@ export function defineProviderExecutors<TContext>(input: ProviderExecutorDefinit
   }
 
   return executors;
+}
+
+/**
+ * Adapt provider-native recipient resolvers, keyed by provider-local action names, to full action ids.
+ *
+ * Errors are not mapped: a resolver that throws leaves the recipients undetermined, which a recipient
+ * policy refuses.
+ */
+export function defineRecipientResolvers<TContext>(
+  input: ProviderRecipientResolverDefinition<TContext>,
+): RecipientResolvers {
+  const resolvers: RecipientResolvers = {};
+  for (const [name, resolve] of Object.entries(input.resolvers)) {
+    resolvers[`${input.service}.${name}`] = async (actionInput, executionContext) =>
+      resolve(actionInput as Record<string, unknown>, await input.createContext(executionContext, providerFetch));
+  }
+  return resolvers;
 }
 
 /** Egress-guard options shared by the credential-typed executor helpers. */

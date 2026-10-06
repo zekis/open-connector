@@ -13,7 +13,13 @@ import {
   validatePolicyEditorDraft,
 } from "./policy";
 
-const emptyRules = { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
+const emptyRules = {
+  allowedActions: [],
+  blockedActions: [],
+  allowedProxies: [],
+  blockedProxies: [],
+  allowedRecipients: [],
+};
 
 describe("web policy evaluation", () => {
   it("previews a scoped allow rule against the selected connection", () => {
@@ -71,7 +77,7 @@ describe("web policy evaluation", () => {
 
   it("treats runtime token proxy grants as explicit permissions", () => {
     const policy: RuntimePolicyState = {
-      deployment: { ...emptyRules, allowedProxies: ["github"] },
+      deployment: { ...emptyRules, allowedProxies: ["github"], allowedRecipients: [] },
       runtime: emptyRules,
     };
     const token = {
@@ -80,6 +86,7 @@ describe("web policy evaluation", () => {
       allowedActions: ["*"],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
       createdAt: "2026-07-20T00:00:00.000Z",
     };
 
@@ -88,7 +95,11 @@ describe("web policy evaluation", () => {
       code: "proxy_not_allowed",
     });
     expect(
-      evaluatePolicy("github", "proxy", policyLayers(policy, { ...token, allowedProxies: ["github"] })),
+      evaluatePolicy(
+        "github",
+        "proxy",
+        policyLayers(policy, { ...token, allowedProxies: ["github"], allowedRecipients: [] }),
+      ),
     ).toMatchObject({ allowed: true });
   });
 
@@ -141,6 +152,21 @@ describe("web policy evaluation", () => {
       "dokploy.github-getGithubBranches",
       "dokploy.application-saveGithubProvider",
     ]);
+  });
+
+  it("edits recipient allow rules alongside action and proxy rules", () => {
+    expect(policyRuleIssue("@tierneymorris.com.au", "recipient")).toBeUndefined();
+    expect(policyRuleIssue("zeke.tierney@sgcaustralia.com.au", "recipient")).toBeUndefined();
+    expect(policyRuleIssue("tierneymorris.com.au", "recipient")).toBe("invalid");
+    expect(policyRuleIssue("Zeke <zeke@example.com>", "recipient")).toBe("invalid");
+    expect(policyRuleCandidates([], "recipient")).toEqual([]);
+
+    const draft = createPolicyEditorDraft({ ...emptyRules, allowedRecipients: ["@tierneymorris.com.au"] });
+    expect(policyRulesFromEditorDraft(draft).allowedRecipients).toEqual(["@tierneymorris.com.au"]);
+    expect(validatePolicyEditorDraft(draft, true)).toEqual([]);
+    expect(
+      validatePolicyEditorDraft({ ...draft, rules: { ...draft.rules, allowedRecipients: ["not-an-address"] } }, false),
+    ).toEqual([{ field: "allowedRecipients", code: "invalid", rule: "not-an-address" }]);
   });
 });
 

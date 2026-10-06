@@ -1,5 +1,11 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
-import type { ActionDefinition, ActionExecutor, ProviderDefinition, ResolvedCredential } from "../../core/types.ts";
+import type {
+  ActionDefinition,
+  ActionExecutor,
+  ProviderDefinition,
+  RecipientResolver,
+  ResolvedCredential,
+} from "../../core/types.ts";
 import type { IProviderLoader } from "../../providers/provider-loader.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { Logger } from "../logger.ts";
@@ -23,13 +29,25 @@ const echoAction: ActionDefinition = {
   outputSchema: { type: "object" },
 };
 
+const sendAction: ActionDefinition = {
+  id: "example.send",
+  service: "example",
+  name: "send",
+  description: "Send an email.",
+  requiredScopes: [],
+  providerPermissions: [],
+  inputSchema: { type: "object", properties: { to: { type: "array", items: { type: "string" } } } },
+  outputSchema: { type: "object" },
+  sendsMail: true,
+};
+
 const exampleProvider: ProviderDefinition = {
   service: "example",
   displayName: "Example",
   categories: ["Developer Tools"],
   authTypes: ["no_auth"],
   auth: [{ type: "no_auth" }],
-  actions: [echoAction],
+  actions: [echoAction, sendAction],
 };
 
 afterEach(() => {
@@ -167,6 +185,7 @@ describe("ActionRunner", () => {
         allowedActions: ["example.*@example:shared"],
         blockedActions: [],
         allowedProxies: [],
+        allowedRecipients: [],
       });
       const denied = await runner.run({ actionId: echoAction.id, input: {}, caller, policy });
       expect(denied?.result).toMatchObject({ ok: false, error: { code: "action_not_allowed" } });
@@ -232,6 +251,111 @@ describe("ActionRunner", () => {
     expect(runs.items[0]).toMatchObject({ ok: false, errorCode: "approval_pending" });
   });
 
+  describe("recipient policy", () => {
+    const actionPolicy = new ActionPolicyService({ allowedRecipients: ["@tierneymorris.com.au"] });
+    const resolveTo: RecipientResolver = async (input) => (input as { to: string[] }).to;
+
+    it("leaves mail-sending actions alone when no recipient policy is configured", async () => {
+      const resolver = vi.fn(resolveTo);
+      const executor = vi.fn(async () => ({ ok: true as const, output: {} }));
+      const runner = createRunner({
+        runs: new MemoryRunLogStore(),
+        logger: createTestLogger().logger,
+        providerLoader: new TestProviderLoader(executor, resolver),
+        actionPolicy: new ActionPolicyService(),
+      });
+
+      const run = await runner.run({ actionId: sendAction.id, input: { to: ["anyone@example.com"] }, caller: "mcp" });
+
+      expect(run?.result.ok).toBe(true);
+      expect(resolver).not.toHaveBeenCalled();
+      expect(executor).toHaveBeenCalledOnce();
+    });
+
+    it("sends when every recipient is allowed and refuses before approval or execution otherwise", async () => {
+      const runs = new MemoryRunLogStore();
+      const requestAction = vi.fn().mockResolvedValue({ allowed: true });
+      const executor = vi.fn(async () => ({ ok: true as const, output: {} }));
+      const runner = createRunner({
+        runs,
+        logger: createTestLogger().logger,
+        providerLoader: new TestProviderLoader(executor, resolveTo),
+        actionPolicy,
+        approvals: { requestAction },
+      });
+
+      const allowed = await runner.run({
+        actionId: sendAction.id,
+        input: { to: ["alice@tierneymorris.com.au"] },
+        caller: "mcp",
+      });
+      expect(allowed?.result.ok).toBe(true);
+      expect(executor).toHaveBeenCalledOnce();
+
+      const refused = await runner.run({
+        actionId: sendAction.id,
+        input: { to: ["alice@tierneymorris.com.au", "outsider@example.com"] },
+        caller: "mcp",
+      });
+      expect(refused?.result).toEqual({
+        ok: false,
+        error: {
+          code: "recipient_not_allowed",
+          message: "example.send would send mail to recipients outside the recipient allowlist: outsider@example.com.",
+        },
+      });
+      expect(executor).toHaveBeenCalledOnce();
+      expect(requestAction).toHaveBeenCalledOnce();
+      expect(runs.items.at(-1)).toMatchObject({
+        ok: false,
+        errorCode: "recipient_not_allowed",
+        policy: { allowed: false, checks: [{ source: "deployment", outcome: "allow_miss" }] },
+      });
+    });
+
+    it.each([
+      ["has no recipient resolver", undefined],
+      [
+        "cannot resolve its recipients",
+        async () => {
+          throw new Error("lookup failed");
+        },
+      ],
+    ])("fails closed when a mail-sending action %s", async (_case, resolver) => {
+      const executor = vi.fn(async () => ({ ok: true as const, output: {} }));
+      const runner = createRunner({
+        runs: new MemoryRunLogStore(),
+        logger: createTestLogger().logger,
+        providerLoader: new TestProviderLoader(executor, resolver),
+        actionPolicy,
+      });
+
+      const run = await runner.run({
+        actionId: sendAction.id,
+        input: { to: ["alice@tierneymorris.com.au"] },
+        caller: "http",
+      });
+
+      expect(run?.result).toMatchObject({ ok: false, error: { code: "recipient_not_allowed" } });
+      expect(executor).not.toHaveBeenCalled();
+    });
+
+    it("does not check actions that do not send mail", async () => {
+      const resolver = vi.fn(resolveTo);
+      const runner = createRunner({
+        runs: new MemoryRunLogStore(),
+        logger: createTestLogger().logger,
+        providerLoader: new TestProviderLoader(async () => ({ ok: true, output: {} }), resolver),
+        actionPolicy,
+      });
+
+      const run = await runner.run({ actionId: echoAction.id, input: {}, caller: "http" });
+
+      expect(run?.result.ok).toBe(true);
+      expect(resolver).not.toHaveBeenCalled();
+    });
+  });
+
   it("bypasses the shared connector gate for callers that enforce approval themselves", async () => {
     const runs = new MemoryRunLogStore();
     const { logger } = createTestLogger();
@@ -257,7 +381,7 @@ function createRunner(options: {
   actionPolicy?: ActionPolicyService;
   approvals?: Pick<ConnectionApprovalService, "requestAction">;
 }): ActionRunner {
-  const catalog = createCatalogStore([exampleProvider], { executableActionIds: [echoAction.id] });
+  const catalog = createCatalogStore([exampleProvider], { executableActionIds: [echoAction.id, sendAction.id] });
   const providerLoader =
     options.providerLoader ?? new TestProviderLoader(async () => ({ ok: true, output: { message: "ok" } }));
   return new ActionRunner({
@@ -273,9 +397,11 @@ function createRunner(options: {
 
 class TestProviderLoader implements IProviderLoader {
   private readonly executor: ActionExecutor;
+  private readonly recipientResolver?: RecipientResolver;
 
-  constructor(executor: ActionExecutor) {
+  constructor(executor: ActionExecutor, recipientResolver?: RecipientResolver) {
     this.executor = executor;
+    this.recipientResolver = recipientResolver;
   }
 
   async loadActionExecutor(): Promise<ActionExecutor> {
@@ -288,6 +414,10 @@ class TestProviderLoader implements IProviderLoader {
 
   async loadCredentialValidators(): Promise<undefined> {
     return undefined;
+  }
+
+  async loadRecipientResolver(): Promise<RecipientResolver | undefined> {
+    return this.recipientResolver;
   }
 }
 

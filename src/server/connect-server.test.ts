@@ -1727,6 +1727,7 @@ describe("ConnectServer", () => {
         allowedActions: [" example.* ", "example.*"],
         blockedActions: ["example.delete"],
         allowedProxies: [" example ", "example"],
+        allowedRecipients: [],
       }),
     });
     expect(created.status).toBe(200);
@@ -1769,6 +1770,7 @@ describe("ConnectServer", () => {
         allowedActions: [" example.* ", "example.*"],
         blockedActions: ["example.delete"],
         allowedProxies: [" example ", "example"],
+        allowedRecipients: [],
       }),
     });
     expect(created.status).toBe(200);
@@ -1779,6 +1781,7 @@ describe("ConnectServer", () => {
       allowedActions: ["example.*"],
       blockedActions: ["example.delete"],
       allowedProxies: ["example"],
+      allowedRecipients: [],
     });
     expect(JSON.stringify(createdBody.record)).not.toContain(createdBody.token);
 
@@ -1791,19 +1794,26 @@ describe("ConnectServer", () => {
         allowedActions: ["example.*"],
         blockedActions: ["example.delete"],
         allowedProxies: ["example"],
+        allowedRecipients: [],
       },
     ]);
 
     const updated = await app.request(`/api/runtime-tokens/${createdBody.record.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ allowedActions: ["example.echo"], blockedActions: [], allowedProxies: [] }),
+      body: JSON.stringify({
+        allowedActions: ["example.echo"],
+        blockedActions: [],
+        allowedProxies: [],
+        allowedRecipients: [],
+      }),
     });
     expect(updated.status).toBe(200);
     await expect(updated.json()).resolves.toMatchObject({
       allowedActions: ["example.echo"],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
 
     const unauthorized = await app.request("/v1/actions");
@@ -1848,6 +1858,7 @@ describe("ConnectServer", () => {
       blockedActions: ["example.echo"],
       allowedProxies: ["example"],
       blockedProxies: [],
+      allowedRecipients: [],
     };
 
     const updated = await app.request("/api/runtime-policy", {
@@ -1884,6 +1895,7 @@ describe("ConnectServer", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       }),
     });
     expect(invalid.status).toBe(400);
@@ -1947,6 +1959,7 @@ describe("ConnectServer", () => {
         blockedActions: ["example.echo"],
         allowedProxies: [],
         blockedProxies: [],
+        allowedRecipients: [],
       }),
     });
     const denied = await app.request("/v1/actions/example.echo", request);
@@ -2068,6 +2081,7 @@ describe("ConnectServer", () => {
       allowedActions: ["xero.*", `example.*@${shared.id}`],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     const request = (connectionName: string, key: string) =>
       app.request("/v1/actions/example.echo", {
@@ -2088,6 +2102,7 @@ describe("ConnectServer", () => {
       allowedActions: [`example.*@${personal.id}`],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     const deniedReplay = await request("shared", "shared-request");
     expect(deniedReplay.status).toBe(400);
@@ -3388,6 +3403,7 @@ describe("ConnectServer", () => {
         allowedActions: ["*"],
         blockedActions: [],
         allowedProxies: [],
+        allowedRecipients: [],
       }),
     });
     const deniedToken = (await deniedCreation.json()) as { token: string };
@@ -3399,6 +3415,7 @@ describe("ConnectServer", () => {
         allowedActions: ["example.echo"],
         blockedActions: ["example.delete"],
         allowedProxies: ["example"],
+        allowedRecipients: [],
       }),
     });
     const grantedToken = (await grantedCreation.json()) as { token: string };
@@ -4448,6 +4465,10 @@ class EmptyProviderLoader implements IProviderLoader {
   async loadCredentialValidators(): Promise<undefined> {
     return undefined;
   }
+
+  async loadRecipientResolver(): Promise<undefined> {
+    return undefined;
+  }
 }
 
 class EchoProviderLoader implements IProviderLoader {
@@ -4482,6 +4503,10 @@ class EchoProviderLoader implements IProviderLoader {
         };
       },
     };
+  }
+
+  async loadRecipientResolver(): Promise<undefined> {
+    return undefined;
   }
 }
 
