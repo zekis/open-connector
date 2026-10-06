@@ -155,14 +155,14 @@ describe("web policy evaluation", () => {
   });
 
   it("edits recipient allow rules alongside action and proxy rules", () => {
-    expect(policyRuleIssue("@tierneymorris.com.au", "recipient")).toBeUndefined();
-    expect(policyRuleIssue("zeke.tierney@sgcaustralia.com.au", "recipient")).toBeUndefined();
-    expect(policyRuleIssue("tierneymorris.com.au", "recipient")).toBe("invalid");
-    expect(policyRuleIssue("Zeke <zeke@example.com>", "recipient")).toBe("invalid");
+    expect(policyRuleIssue("@company.test", "recipient")).toBeUndefined();
+    expect(policyRuleIssue("pat.lee@partner.test", "recipient")).toBeUndefined();
+    expect(policyRuleIssue("company.test", "recipient")).toBe("invalid");
+    expect(policyRuleIssue("Pat <pat@example.com>", "recipient")).toBe("invalid");
     expect(policyRuleCandidates([], "recipient")).toEqual([]);
 
-    const draft = createPolicyEditorDraft({ ...emptyRules, allowedRecipients: ["@tierneymorris.com.au"] });
-    expect(policyRulesFromEditorDraft(draft).allowedRecipients).toEqual(["@tierneymorris.com.au"]);
+    const draft = createPolicyEditorDraft({ ...emptyRules, allowedRecipients: ["@company.test"] });
+    expect(policyRulesFromEditorDraft(draft).allowedRecipients).toEqual(["@company.test"]);
     expect(validatePolicyEditorDraft(draft, true)).toEqual([]);
     expect(
       validatePolicyEditorDraft({ ...draft, rules: { ...draft.rules, allowedRecipients: ["not-an-address"] } }, false),

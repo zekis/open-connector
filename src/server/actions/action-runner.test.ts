@@ -252,7 +252,7 @@ describe("ActionRunner", () => {
   });
 
   describe("recipient policy", () => {
-    const actionPolicy = new ActionPolicyService({ allowedRecipients: ["@tierneymorris.com.au"] });
+    const actionPolicy = new ActionPolicyService({ allowedRecipients: ["@company.test"] });
     const resolveTo: RecipientResolver = async (input) => (input as { to: string[] }).to;
 
     it("leaves mail-sending actions alone when no recipient policy is configured", async () => {
@@ -286,7 +286,7 @@ describe("ActionRunner", () => {
 
       const allowed = await runner.run({
         actionId: sendAction.id,
-        input: { to: ["alice@tierneymorris.com.au"] },
+        input: { to: ["alice@company.test"] },
         caller: "mcp",
       });
       expect(allowed?.result.ok).toBe(true);
@@ -294,7 +294,7 @@ describe("ActionRunner", () => {
 
       const refused = await runner.run({
         actionId: sendAction.id,
-        input: { to: ["alice@tierneymorris.com.au", "outsider@example.com"] },
+        input: { to: ["alice@company.test", "outsider@example.com"] },
         caller: "mcp",
       });
       expect(refused?.result).toEqual({
@@ -332,7 +332,7 @@ describe("ActionRunner", () => {
 
       const run = await runner.run({
         actionId: sendAction.id,
-        input: { to: ["alice@tierneymorris.com.au"] },
+        input: { to: ["alice@company.test"] },
         caller: "http",
       });
 

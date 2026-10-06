@@ -333,7 +333,7 @@ describe("Outlook recipients", () => {
   const personal = { getCredential: async () => ({ ...sharedCredential, connectionValues: {} }) };
   const shared = { getCredential: async () => sharedCredential };
   const policy = new ActionPolicyService({
-    allowedRecipients: ["@tierneymorris.com.au", "zeke.tierney@sgcaustralia.com.au"],
+    allowedRecipients: ["@company.test", "pat.lee@partner.test"],
   }).createSnapshot();
   const outlookAction = (name: string): ActionDefinition => outlookActions.find((item) => item.name === name)!;
   const graphRecipient = (address: string) => ({ emailAddress: { address, name: address } });
@@ -358,14 +358,14 @@ describe("Outlook recipients", () => {
     const input = {
       subject: "Hello",
       body: "Hi",
-      toRecipients: ["alice@tierneymorris.com.au"],
-      ccRecipients: [{ address: "Zeke.Tierney@sgcaustralia.com.au", name: "Zeke" }],
+      toRecipients: ["alice@company.test"],
+      ccRecipients: [{ address: "Pat.Lee@partner.test", name: "Pat" }],
       bccRecipients: ["outsider@example.com"],
     };
     const recipients = await recipientResolvers["outlook.send_email"]!(input, personal);
     expect(recipients).toEqual([
-      "alice@tierneymorris.com.au",
-      "Zeke.Tierney@sgcaustralia.com.au",
+      "alice@company.test",
+      "Pat.Lee@partner.test",
       "outsider@example.com",
     ]);
     expect(policy.evaluateRecipients(outlookAction("send_email"), recipients)).toMatchObject({
@@ -385,7 +385,7 @@ describe("Outlook recipients", () => {
   it("reads a draft's recipients from Graph before it is sent", async () => {
     const fetcher = createFetch(async () =>
       Response.json({
-        toRecipients: [graphRecipient("alice@tierneymorris.com.au")],
+        toRecipients: [graphRecipient("alice@company.test")],
         ccRecipients: [],
         bccRecipients: [graphRecipient("outsider@example.com")],
       }),
@@ -394,7 +394,7 @@ describe("Outlook recipients", () => {
 
     const recipients = await recipientResolvers["outlook.send_draft"]!({ messageId: "draft 1" }, shared);
 
-    expect(recipients).toEqual(["alice@tierneymorris.com.au", "outsider@example.com"]);
+    expect(recipients).toEqual(["alice@company.test", "outsider@example.com"]);
     const url = new URL(String(vi.mocked(fetcher).mock.calls[0]![0]));
     expect(url.pathname).toBe("/v1.0/users/support%40example.com/messages/draft%201");
     expect(url.searchParams.get("$select")).toBe("toRecipients,ccRecipients,bccRecipients");
@@ -427,16 +427,16 @@ describe("Outlook recipients", () => {
       message: expect.stringContaining("stranger@example.com"),
     });
 
-    const fetcher = original("alice@tierneymorris.com.au", ["list@tierneymorris.com.au"]);
+    const fetcher = original("alice@company.test", ["list@company.test"]);
     vi.stubGlobal("fetch", fetcher);
     const trusted = await recipientResolvers["outlook.reply_email"]!(
-      { messageId: "message 1", comment: "Thanks", ccRecipients: ["zeke.tierney@sgcaustralia.com.au"] },
+      { messageId: "message 1", comment: "Thanks", ccRecipients: ["pat.lee@partner.test"] },
       personal,
     );
     expect(trusted).toEqual([
-      "list@tierneymorris.com.au",
-      "alice@tierneymorris.com.au",
-      "zeke.tierney@sgcaustralia.com.au",
+      "list@company.test",
+      "alice@company.test",
+      "pat.lee@partner.test",
     ]);
     expect(policy.evaluateRecipients(outlookAction("reply_email"), trusted).allowed).toBe(true);
     const url = new URL(String(vi.mocked(fetcher).mock.calls[0]![0]));
