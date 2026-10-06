@@ -599,7 +599,8 @@ describe("Xero Custom Connection runtime", () => {
 
     await expect(xeroActionHandlers.list_bank_transactions!({ page: 1 }, context)).rejects.toMatchObject({
       status: 401,
-      message: "Xero rejected the access token after an automatic refresh: AuthorizationUnsuccessful",
+      message:
+        "Xero refused this request as unauthorised: AuthorizationUnsuccessful. A fresh access token was obtained first, so the client credentials are valid: this is usually an endpoint the connection has not been granted a scope for, or a disconnected Xero organisation, rather than an expired token. The connection is authorised for: accounting.banktransactions.read.",
       details: {
         xeroResponse: {
           Title: "Unauthorized",
@@ -614,6 +615,42 @@ describe("Xero Custom Connection runtime", () => {
       },
     });
     expect(tokenNumber).toBe(2);
+  });
+
+  it("names only the scopes the token actually carries when Xero refuses an endpoint", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({
+          access_token: "partial-scope-token",
+          expires_in: 1800,
+          token_type: "Bearer",
+          scope: "accounting.transactions.read",
+        });
+      }
+      return jsonResponse({ Title: "Unauthorized", Status: 401, Detail: "AuthorizationUnsuccessful" }, 401);
+    }) as ProviderFetch;
+    const context = createContext(
+      {
+        clientId: "partial-scope-client",
+        clientSecret: "secret",
+        scopes: "accounting.transactions.read accounting.reports.read",
+      },
+      fetcher,
+    );
+
+    await expect(
+      xeroActionHandlers.retrieve_endpoint!({ api: "accounting", endpoint: "/Reports/ProfitAndLoss" }, context),
+    ).rejects.toMatchObject({
+      status: 401,
+      message:
+        "Xero refused this request as unauthorised: AuthorizationUnsuccessful. A fresh access token was obtained first, so the client credentials are valid: this is usually an endpoint the connection has not been granted a scope for, or a disconnected Xero organisation, rather than an expired token. The connection is authorised for: accounting.transactions.read.",
+      details: {
+        requestedScopes: ["accounting.transactions.read", "accounting.reports.read"],
+        tokenScopes: ["accounting.transactions.read"],
+        accessTokenRefreshAttempted: true,
+      },
+    });
   });
 });
 
