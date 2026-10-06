@@ -2,7 +2,7 @@ import type { CatalogStore, RuntimeActionDefinition } from "./catalog-store.ts";
 import type { ConnectionService, ConnectionSummary } from "./connection-service.ts";
 import type { ActionPolicyDecision, ActionPolicySnapshot } from "./core/action-policy.ts";
 import type { ActionSearchIndexProvider } from "./core/action-search.ts";
-import type { JsonSchema, ProviderDefinition } from "./core/types.ts";
+import type { ProviderDefinition } from "./core/types.ts";
 import type { IProviderLoader } from "./providers/provider-loader.ts";
 import type { ActionRunner, ActionRunResult } from "./server/actions/action-runner.ts";
 import type { RuntimeGrant } from "./server/storage/runtime-token-service.ts";
@@ -13,6 +13,7 @@ import * as z from "zod/v4";
 import { ConnectionError } from "./connection-service.ts";
 import { ActionPolicyService, emptyPolicyRules } from "./core/action-policy.ts";
 import { createActionSearchIndexProvider, searchActions as searchActionIndex } from "./core/action-search.ts";
+import { summarizeInputSchema } from "./core/schema-summary.ts";
 import { renderActionMarkdown } from "./server/api/action-markdown.ts";
 
 /**
@@ -348,21 +349,6 @@ async function executeAction(
   return actionExecutionPayload(run);
 }
 
-function summarizeInputSchema(schema: JsonSchema): unknown {
-  const properties =
-    schema.properties && typeof schema.properties === "object" ? (schema.properties as Record<string, JsonSchema>) : {};
-  const required = new Set(
-    Array.isArray(schema.required) ? schema.required.filter((value): value is string => typeof value === "string") : [],
-  );
-
-  return Object.entries(properties).map(([name, property]) => ({
-    name,
-    required: required.has(name),
-    type: describeSchemaType(property),
-    description: typeof property.description === "string" ? property.description : "",
-  }));
-}
-
 type ActionCapability = {
   execution: RuntimeActionDefinition["execution"];
   authTypes: ProviderDefinition["authTypes"];
@@ -427,22 +413,6 @@ async function getSelectedConnectionSummary(
     throw new ConnectionError("connection_not_found", `${service} connection not found: ${connection.connectionName}.`);
   }
   return connection;
-}
-
-function describeSchemaType(schema: JsonSchema | undefined): string {
-  if (!schema) {
-    return "unknown";
-  }
-  if (schema.const !== undefined) {
-    return JSON.stringify(schema.const);
-  }
-  if (Array.isArray(schema.enum)) {
-    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
-  }
-  if (Array.isArray(schema.anyOf)) {
-    return schema.anyOf.map((value) => describeSchemaType(value as JsonSchema)).join(" | ");
-  }
-  return typeof schema.type === "string" ? schema.type : "unknown";
 }
 
 interface ToolExecutionMeta {

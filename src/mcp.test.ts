@@ -32,13 +32,47 @@ const echoAction: ActionDefinition = {
   outputSchema: { type: "object" },
 };
 
+const createOrderAction: ActionDefinition = {
+  id: "example.create_order",
+  service: "example",
+  name: "create_order",
+  description: "Create an order with line items.",
+  requiredScopes: [],
+  providerPermissions: [],
+  inputSchema: {
+    type: "object",
+    properties: {
+      lineItems: {
+        type: "array",
+        description: "Order lines.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string", description: "Line description." },
+            quantity: { type: "number", description: "Quantity." },
+            code: { type: "string", description: "Optional item code." },
+          },
+          required: ["description", "quantity"],
+        },
+      },
+      shipTo: {
+        type: "object",
+        description: "Delivery address.",
+        properties: { street: { type: "string" }, city: { type: "string" } },
+      },
+    },
+    required: ["lineItems"],
+  },
+  outputSchema: { type: "object" },
+};
+
 const exampleProvider: ProviderDefinition = {
   service: "example",
   displayName: "Example",
   categories: ["Developer Tools"],
   authTypes: ["no_auth"],
   auth: [{ type: "no_auth" }],
-  actions: [echoAction],
+  actions: [echoAction, createOrderAction],
 };
 
 const getAccountAction: ActionDefinition = {
@@ -165,6 +199,47 @@ describe("MCP server", () => {
           authType: "no_auth",
           default: true,
         },
+      });
+    });
+  });
+
+  it("describes nested input shapes in action search summaries", async () => {
+    await withMcpClient(async (client) => {
+      const search = await client.callTool({
+        name: "search_actions",
+        arguments: { query: "create order line items", limit: 1 },
+      });
+
+      expect(search.structuredContent).toMatchObject({
+        ok: true,
+        data: [
+          {
+            id: "example.create_order",
+            inputSummary: [
+              {
+                name: "lineItems",
+                required: true,
+                type: "array<{ description*: string; quantity*: number; code?: string }>",
+                description: "Order lines.",
+                properties: [
+                  { name: "description", required: true, type: "string", description: "Line description." },
+                  { name: "quantity", required: true, type: "number", description: "Quantity." },
+                  { name: "code", required: false, type: "string", description: "Optional item code." },
+                ],
+              },
+              {
+                name: "shipTo",
+                required: false,
+                type: "{ street?: string; city?: string }",
+                description: "Delivery address.",
+                properties: [
+                  { name: "street", required: false, type: "string", description: "" },
+                  { name: "city", required: false, type: "string", description: "" },
+                ],
+              },
+            ],
+          },
+        ],
       });
     });
   });

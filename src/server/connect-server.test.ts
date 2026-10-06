@@ -2511,11 +2511,11 @@ describe("ConnectServer", () => {
     expect(response.status).toBe(200);
     const markdown = await response.text();
     expect(markdown).toContain("Echo **input**.\n\n- Supports markdown descriptions.");
-    expect(markdown).toContain("| `cc` | No       | `string \\| array` |");
+    expect(markdown).toContain("| `cc` | No       | `string \\| array<string>` |");
     expect(markdown).toContain(
       "- `cc`\n\n  Cc recipients.\n\n  - Use **email** addresses.\n  - Accepts multiple values.",
     );
-    expect(markdown).not.toContain("| `cc` | No       | `string | array` |");
+    expect(markdown).not.toContain("| `cc` | No       | `string | array<string>` |");
   });
 
   it("applies local action policy before executing HTTP actions", async () => {
