@@ -29,6 +29,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: [],
       createdAt: "2026-07-20T00:00:00.000Z",
     };
     const store: IRuntimeTokenStore = {
@@ -45,6 +46,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: [],
     });
     expect(store.findByHash).toHaveBeenCalledWith(record.tokenHash);
     expect(store.list).not.toHaveBeenCalled();
@@ -59,6 +61,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: [],
       createdAt: "2026-07-20T00:00:00.000Z",
     };
     const store: IRuntimeTokenStore = {
@@ -75,6 +78,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: ["github.*"],
       blockedActions: ["github.delete_repository"],
       allowedProxies: ["github"],
+      allowedRecipients: [],
     });
     await expect(new RuntimeTokenService(store).getGrantById("missing")).resolves.toBeUndefined();
     expect(store.findByHash).not.toHaveBeenCalled();
@@ -90,6 +94,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: [],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
       createdAt: "2026-07-20T00:00:00.000Z",
     };
     const store: IRuntimeTokenStore = {
@@ -109,6 +114,7 @@ describe("RuntimeTokenService", () => {
       allowedActions: [],
       blockedActions: [],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     expect(logger.warn).toHaveBeenCalledWith(
       { tokenId: "token-1", err: expect.any(Error) },
@@ -127,6 +133,7 @@ describe("RuntimeTokenService", () => {
         allowedActions: [],
         blockedActions: [],
         allowedProxies: [],
+        allowedRecipients: [],
         createdAt: "2026-09-10T00:00:00.000Z",
         audience: "https://ocgw.example.test/mcp",
         scopes: ["mcp:access"],
@@ -139,6 +146,7 @@ describe("RuntimeTokenService", () => {
         allowedActions: [],
         blockedActions: [],
         allowedProxies: [],
+        allowedRecipients: [],
         createdAt: "2026-09-10T00:00:00.000Z",
         audience: "https://ocgw.example.test/mcp",
         scopes: ["mcp:access"],

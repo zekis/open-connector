@@ -186,7 +186,13 @@ describe("loadRuntimeData", () => {
           return Response.json({ items: [], nextCursor: null });
         }
         if (path === "/api/runtime-policy") {
-          const rules = { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
+          const rules = {
+            allowedActions: [],
+            blockedActions: [],
+            allowedProxies: [],
+            blockedProxies: [],
+            allowedRecipients: [],
+          };
           return Response.json({ deployment: rules, runtime: rules });
         }
         return Response.json([]);
@@ -232,7 +238,13 @@ describe("loadRuntimeData", () => {
           return Response.json({ items: [], nextCursor: null });
         }
         if (path === "/api/runtime-policy") {
-          const rules = { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
+          const rules = {
+            allowedActions: [],
+            blockedActions: [],
+            allowedProxies: [],
+            blockedProxies: [],
+            allowedRecipients: [],
+          };
           return Response.json({ deployment: rules, runtime: rules });
         }
         return Response.json([]);
@@ -263,7 +275,13 @@ describe("loadRuntimeData", () => {
           return Response.json({ items: [], nextCursor: null });
         }
         if (path === "/api/runtime-policy") {
-          const rules = { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
+          const rules = {
+            allowedActions: [],
+            blockedActions: [],
+            allowedProxies: [],
+            blockedProxies: [],
+            allowedRecipients: [],
+          };
           return Response.json({ deployment: rules, runtime: rules });
         }
         return Response.json([]);

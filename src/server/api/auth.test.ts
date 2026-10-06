@@ -9,7 +9,13 @@ import {
 
 describe("createLocalAuthMiddleware", () => {
   it("allows runtime activity review and comments without granting administrative access", async () => {
-    const grant = { tokenId: "maya", allowedActions: [], blockedActions: [], allowedProxies: [] };
+    const grant = {
+      tokenId: "maya",
+      allowedActions: [],
+      blockedActions: [],
+      allowedProxies: [],
+      allowedRecipients: [],
+    };
     const app = new Hono();
     app.use(
       "*",
@@ -79,7 +85,7 @@ describe("createLocalAuthMiddleware", () => {
       createLocalAuthMiddleware({
         resolveRuntimeToken: async (token) =>
           token === "runtime-token"
-            ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [] }
+            ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] }
             : undefined,
       }),
     );
@@ -107,7 +113,7 @@ describe("createLocalAuthMiddleware", () => {
         hasRuntimeTokens: async () => true,
         resolveRuntimeToken: async (token) =>
           token === "oct_valid"
-            ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [] }
+            ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] }
             : undefined,
       }),
     );
@@ -180,7 +186,7 @@ describe("createLocalAuthMiddleware", () => {
   it("resolves dynamic runtime tokens for a lowercase bearer scheme", async () => {
     const resolveRuntimeToken = vi.fn(async (token: string) =>
       token === "oct_valid"
-        ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [] }
+        ? { tokenId: "token-1", allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] }
         : undefined,
     );
     const app = new Hono();
@@ -231,12 +237,13 @@ describe("createLocalAuthMiddleware", () => {
               allowedActions: [],
               blockedActions: [],
               allowedProxies: [],
+              allowedRecipients: [],
               audience: "https://ocgw.example.test/mcp",
               scopes: ["mcp:access"],
             };
           }
           return token === "legacy-token"
-            ? { tokenId: "legacy", allowedActions: [], blockedActions: [], allowedProxies: [] }
+            ? { tokenId: "legacy", allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] }
             : undefined;
         },
         mcpOAuth: {

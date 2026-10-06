@@ -10,6 +10,7 @@ export interface RuntimeTokenRecord {
   allowedActions: string[];
   blockedActions: string[];
   allowedProxies: string[];
+  allowedRecipients: string[];
   createdAt: string;
   lastUsedAt?: string;
   audience?: string;
@@ -23,6 +24,7 @@ export interface RuntimeTokenSummary {
   allowedActions: string[];
   blockedActions: string[];
   allowedProxies: string[];
+  allowedRecipients: string[];
   createdAt: string;
   lastUsedAt?: string;
   audience?: string;
@@ -70,7 +72,7 @@ export class RuntimeTokenService {
 
   async createToken(
     name: string,
-    policy: TokenPolicy = { allowedActions: [], blockedActions: [], allowedProxies: [] },
+    policy: TokenPolicy = { allowedActions: [], blockedActions: [], allowedProxies: [], allowedRecipients: [] },
     options: RuntimeTokenCreationOptions = {},
   ): Promise<RuntimeTokenCreation> {
     const token = `${tokenPrefix}${randomBytes(32).toString("base64url")}`;
@@ -82,6 +84,7 @@ export class RuntimeTokenService {
       allowedActions: policy.allowedActions,
       blockedActions: policy.blockedActions,
       allowedProxies: policy.allowedProxies,
+      allowedRecipients: policy.allowedRecipients,
       createdAt: now,
       audience: options.audience,
       scopes: options.scopes,
@@ -154,6 +157,7 @@ export function summarizeRuntimeToken(record: RuntimeTokenRecord): RuntimeTokenS
     allowedActions: record.allowedActions,
     blockedActions: record.blockedActions,
     allowedProxies: record.allowedProxies,
+    allowedRecipients: record.allowedRecipients,
     createdAt: record.createdAt,
     lastUsedAt: record.lastUsedAt,
     audience: record.audience,
@@ -168,6 +172,7 @@ function runtimeGrant(record: RuntimeTokenRecord): RuntimeGrant {
     allowedActions: record.allowedActions,
     blockedActions: record.blockedActions,
     allowedProxies: record.allowedProxies,
+    allowedRecipients: record.allowedRecipients,
     audience: record.audience,
     scopes: record.scopes,
     expiresAt: record.expiresAt,

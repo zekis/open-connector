@@ -1,5 +1,5 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
-import type { TokenPolicy } from "../../core/action-policy.ts";
+import type { PolicyRules, TokenPolicy } from "../../core/action-policy.ts";
 import type { ResolvedCredential } from "../../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
@@ -51,6 +51,7 @@ import type { IRuntimePolicyStore, RuntimePolicyRecord } from "./runtime-policy-
 import type { IRunLogStore, RunLog, RunLogListInput, RunLogPage, RunLogWriteResult } from "./runtime-store.ts";
 import type { IRuntimeTokenStore, RuntimeTokenRecord } from "./runtime-token-service.ts";
 
+import { emptyPolicyRules } from "../../core/action-policy.ts";
 import { parseRuntimeActionHttpResult } from "../api/runtime-api.ts";
 import { PlainTextSecretCodec } from "../secrets/secret-codec-core.ts";
 import { DEFAULT_RUN_LIMIT, decodeRunLogCursor, encodeRunLogCursor } from "./runtime-store.ts";
@@ -542,10 +543,10 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         insert into runtime_tokens (
-          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .bind(
@@ -555,6 +556,7 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
         JSON.stringify(record.allowedActions),
         JSON.stringify(record.blockedActions),
         JSON.stringify(record.allowedProxies),
+        JSON.stringify(record.allowedRecipients),
         record.createdAt,
         record.lastUsedAt ?? null,
         record.audience ?? null,
@@ -568,8 +570,8 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
     const { results } = await this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         from runtime_tokens
         where revoked_at is null
         order by created_at desc, id desc
@@ -583,8 +585,8 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
     const row = await this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         from runtime_tokens
         where token_hash = ? and revoked_at is null
       `,
@@ -599,16 +601,17 @@ export class D1RuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         update runtime_tokens
-        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?
+        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?, allowed_recipients = ?
         where id = ? and revoked_at is null
-        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
       `,
       )
       .bind(
         JSON.stringify(policy.allowedActions),
         JSON.stringify(policy.blockedActions),
         JSON.stringify(policy.allowedProxies),
+        JSON.stringify(policy.allowedRecipients),
         id,
       )
       .first<RuntimeRow>();
@@ -636,6 +639,7 @@ function readRuntimeTokenRow(row: RuntimeRow): RuntimeTokenRecord {
     allowedActions: parseJson(readString(row, "allowed_actions")),
     blockedActions: parseJson(readString(row, "blocked_actions")),
     allowedProxies: parseJson(readString(row, "allowed_proxies")),
+    allowedRecipients: parseJson(readString(row, "allowed_recipients")),
     createdAt: readString(row, "created_at"),
     lastUsedAt: readOptionalString(row, "last_used_at"),
     audience: readOptionalString(row, "audience"),
@@ -657,7 +661,7 @@ export class D1RuntimePolicyStore implements IRuntimePolicyStore {
       .first<RuntimeRow>();
     return row
       ? {
-          rules: parseJson(readString(row, "value")),
+          rules: { ...emptyPolicyRules(), ...parseJson<Partial<PolicyRules>>(readString(row, "value")) },
           updatedAt: readString(row, "updated_at"),
         }
       : undefined;

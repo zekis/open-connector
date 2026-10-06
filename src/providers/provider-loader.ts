@@ -1,4 +1,11 @@
-import type { ActionExecutor, CredentialValidators, ProviderExecutors, ProviderProxyExecutor } from "../core/types.ts";
+import type {
+  ActionExecutor,
+  CredentialValidators,
+  ProviderExecutors,
+  ProviderProxyExecutor,
+  RecipientResolver,
+  RecipientResolvers,
+} from "../core/types.ts";
 
 import { withProviderFallbackMessage } from "./provider-runtime.ts";
 import { registeredProxyExecutors } from "./proxy.registry.ts";
@@ -7,6 +14,7 @@ export interface ExecutorModule {
   credentialValidators?: CredentialValidators;
   executors: ProviderExecutors;
   proxy?: ProviderProxyExecutor;
+  recipientResolvers?: RecipientResolvers;
 }
 
 export interface ExecutorModules {
@@ -39,6 +47,11 @@ export interface IProviderLoader {
    * Load a provider credential validator only when a connection is created.
    */
   loadCredentialValidators(service: string): Promise<CredentialValidators | undefined>;
+
+  /**
+   * Load the recipient resolver of a mail-sending action only when a recipient policy checks it.
+   */
+  loadRecipientResolver(service: string, actionId: string): Promise<RecipientResolver | undefined>;
 }
 
 /**
@@ -89,6 +102,16 @@ export class ProviderLoader implements IProviderLoader {
 
     const module = await loadExecutors();
     return module.credentialValidators;
+  }
+
+  async loadRecipientResolver(service: string, actionId: string): Promise<RecipientResolver | undefined> {
+    const loadExecutors = this.executorModules[service];
+    if (!loadExecutors || !actionId.startsWith(`${service}.`)) {
+      return undefined;
+    }
+
+    const module = await loadExecutors();
+    return module.recipientResolvers?.[actionId as `${string}.${string}`];
   }
 
   private _findActionExecutor(

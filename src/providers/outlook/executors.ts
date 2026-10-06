@@ -1,11 +1,17 @@
-import type { CredentialValidators, ProviderExecutors } from "../../core/types.ts";
-import type { OAuthProviderContext } from "../provider-runtime.ts";
+import type {
+  CredentialValidators,
+  ExecutionContext,
+  ProviderExecutors,
+  RecipientResolvers,
+} from "../../core/types.ts";
+import type { OAuthProviderContext, ProviderFetch } from "../provider-runtime.ts";
 
 import { Buffer } from "node:buffer";
 import { compactObject, optionalString, requiredRecord } from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
 import {
   defineProviderExecutors,
+  defineRecipientResolvers,
   requireOAuthCredential,
   ProviderRequestError,
   readTransitFileInput,
@@ -32,6 +38,19 @@ type OutlookRequestInput = {
   headers?: Record<string, string>;
   body?: unknown;
 };
+
+interface OutlookGraphRecipient {
+  emailAddress?: { address?: unknown };
+}
+
+interface OutlookMessageRecipients {
+  from?: OutlookGraphRecipient;
+  sender?: OutlookGraphRecipient;
+  replyTo?: OutlookGraphRecipient[];
+  toRecipients?: OutlookGraphRecipient[];
+  ccRecipients?: OutlookGraphRecipient[];
+  bccRecipients?: OutlookGraphRecipient[];
+}
 
 type OutlookErrorPayload = {
   error?: {
@@ -121,20 +140,86 @@ export const executors: ProviderExecutors = defineProviderExecutors<OutlookRunti
       },
     ]),
   ),
-  async createContext(context, fetcher): Promise<OutlookRuntimeDeps> {
-    const credential = await requireOAuthCredential(context, "outlook");
-    const mailbox = optionalString(credential.connectionValues?.mailbox);
-    if (mailbox) outlookMailboxPath({ mailbox });
-    return {
-      accessToken: credential.accessToken,
-      tokenType: credential.tokenType,
-      mailbox,
-      fetcher,
-      signal: context.signal,
-      transitFiles: context.transitFiles,
-    };
-  },
+  createContext: createOutlookContext,
 });
+
+/**
+ * Recipients of the Outlook actions that send mail. A plain reply goes to the original message's
+ * sender (or its reply-to addresses), so the original is read before the reply is checked.
+ */
+export const recipientResolvers: RecipientResolvers = defineRecipientResolvers<OutlookRuntimeDeps>({
+  service: "outlook",
+  resolvers: {
+    async send_email(input) {
+      return inputRecipientAddresses(input);
+    },
+    async send_draft(input, deps) {
+      const draft = await getMessageRecipients(input, deps, ["toRecipients", "ccRecipients", "bccRecipients"]);
+      return [
+        ...graphRecipientAddresses(draft.toRecipients),
+        ...graphRecipientAddresses(draft.ccRecipients),
+        ...graphRecipientAddresses(draft.bccRecipients),
+      ];
+    },
+    async reply_email(input, deps) {
+      const original = await getMessageRecipients(input, deps, ["from", "sender", "replyTo"]);
+      const author = original.from ?? original.sender;
+      const replyTargets = [
+        ...graphRecipientAddresses(original.replyTo),
+        ...graphRecipientAddresses(author ? [author] : []),
+      ];
+      if (replyTargets.length === 0) {
+        throw new ProviderRequestError(502, "the original Outlook message has no sender to reply to");
+      }
+      return [...replyTargets, ...inputRecipientAddresses(input)];
+    },
+  },
+  createContext: createOutlookContext,
+});
+
+async function createOutlookContext(context: ExecutionContext, fetcher: ProviderFetch): Promise<OutlookRuntimeDeps> {
+  const credential = await requireOAuthCredential(context, "outlook");
+  const mailbox = optionalString(credential.connectionValues?.mailbox);
+  if (mailbox) outlookMailboxPath({ mailbox });
+  return {
+    accessToken: credential.accessToken,
+    tokenType: credential.tokenType,
+    mailbox,
+    fetcher,
+    signal: context.signal,
+    transitFiles: context.transitFiles,
+  };
+}
+
+async function getMessageRecipients(
+  input: Record<string, unknown>,
+  { accessToken, fetcher, mailbox }: OutlookRuntimeDeps,
+  fields: string[],
+): Promise<OutlookMessageRecipients> {
+  const mailboxInput = mailbox ? { ...input, mailbox } : input;
+  const messageId = encodeURIComponent(requiredString(input.messageId, "messageId"));
+  return outlookJsonRequest<OutlookMessageRecipients>(`${outlookMailboxPath(mailboxInput)}/messages/${messageId}`, {
+    accessToken,
+    fetcher,
+    query: { $select: fields.join(",") },
+  });
+}
+
+function inputRecipientAddresses(input: Record<string, unknown>): string[] {
+  return [input.toRecipients, input.ccRecipients, input.bccRecipients].flatMap((value) =>
+    (normalizeRecipients(value) ?? []).flatMap((recipient) => recipient.emailAddress.address ?? []),
+  );
+}
+
+function graphRecipientAddresses(recipients: OutlookGraphRecipient[] | undefined): string[] {
+  return (recipients ?? []).map((recipient) => {
+    const address = recipient.emailAddress?.address;
+    if (typeof address !== "string" || !address.trim()) {
+      throw new ProviderRequestError(502, "an Outlook recipient has no email address");
+    }
+    return address;
+  });
+}
 
 export const credentialValidators: CredentialValidators = {
   async oauth2(input, { fetcher }) {

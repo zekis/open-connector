@@ -84,6 +84,7 @@ export interface PolicyDraft {
   blockedActions: string;
   allowedProxies: string;
   blockedProxies: string;
+  allowedRecipients: string;
 }
 
 export function createTokenDialogMode(created: RuntimeTokenCreation | null): "form" | "created" {
@@ -142,6 +143,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
         allowedActions: rules.allowedActions,
         blockedActions: rules.blockedActions,
         allowedProxies: rules.allowedProxies,
+        allowedRecipients: rules.allowedRecipients,
       });
       setCreated(result);
       setName("");
@@ -193,6 +195,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
         allowedActions: rules.allowedActions,
         blockedActions: rules.blockedActions,
         allowedProxies: rules.allowedProxies,
+        allowedRecipients: rules.allowedRecipients,
       });
       setEditingToken(null);
       setTokenStatus(t("access.policy.saved"));
@@ -237,6 +240,7 @@ export function AccessPage(props: AccessPageProps): ReactNode {
         blockedActions: token.blockedActions,
         allowedProxies: token.allowedProxies,
         blockedProxies: [],
+        allowedRecipients: token.allowedRecipients,
       }),
     );
     setTokenStatus(null);
@@ -758,6 +762,7 @@ function PolicyRuleReadout(props: { rules: PolicyRules }): ReactNode {
     ["blockedActions", t("access.policy.blockedActions")],
     ["allowedProxies", t("access.policy.allowedProxies")],
     ["blockedProxies", t("access.policy.blockedProxies")],
+    ["allowedRecipients", t("access.policy.allowedRecipients")],
   ];
   return (
     <div className="policy-rule-readout">
@@ -917,6 +922,7 @@ export function policyDraftFromRules(rules: PolicyRules): PolicyDraft {
     blockedActions: rules.blockedActions.join("\n"),
     allowedProxies: rules.allowedProxies.join("\n"),
     blockedProxies: rules.blockedProxies.join("\n"),
+    allowedRecipients: rules.allowedRecipients.join("\n"),
   };
 }
 
@@ -926,6 +932,7 @@ export function policyRulesFromDraft(draft: PolicyDraft): PolicyRules {
     blockedActions: parsePolicyLines(draft.blockedActions),
     allowedProxies: parsePolicyLines(draft.allowedProxies),
     blockedProxies: parsePolicyLines(draft.blockedProxies),
+    allowedRecipients: parsePolicyLines(draft.allowedRecipients),
   };
 }
 
@@ -940,7 +947,10 @@ function tokenPolicySummary(token: RuntimeTokenSummary, t: NonNullable<ReturnTyp
 function policyLayerSummary(rules: PolicyRules, t: NonNullable<ReturnType<typeof useTranslate>>): string {
   const action = resourcePolicySummary(rules.allowedActions, rules.blockedActions, t);
   const proxy = resourcePolicySummary(rules.allowedProxies, rules.blockedProxies, t);
-  return t("access.policy.layerSummary", { action, proxy });
+  const summary = t("access.policy.layerSummary", { action, proxy });
+  return rules.allowedRecipients.length === 0
+    ? summary
+    : t("access.policy.layerRecipientSummary", { summary, count: rules.allowedRecipients.length });
 }
 
 function resourcePolicySummary(
@@ -971,5 +981,5 @@ function policyRisk(policy: RuntimePolicyState, providers: ProviderDefinition[])
 }
 
 function emptyPolicyRules(): PolicyRules {
-  return { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [] };
+  return { allowedActions: [], blockedActions: [], allowedProxies: [], blockedProxies: [], allowedRecipients: [] };
 }

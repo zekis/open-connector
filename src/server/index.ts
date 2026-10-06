@@ -43,6 +43,7 @@ const actionPolicy = new ActionPolicyService({
   blockedActions: parseActionPolicyList(process.env.OOMOL_CONNECT_BLOCKED_ACTIONS),
   allowedProxies: parseActionPolicyList(process.env.OOMOL_CONNECT_ALLOWED_PROXIES),
   blockedProxies: parseActionPolicyList(process.env.OOMOL_CONNECT_BLOCKED_PROXIES),
+  allowedRecipients: parseActionPolicyList(process.env.OOMOL_CONNECT_ALLOWED_RECIPIENTS),
 });
 setPrivateNetworkAccessAllowed(parsePrivateNetworkAccessFlag(process.env.OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK));
 const builtRoot = join(process.cwd(), "dist/web");

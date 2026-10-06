@@ -1,5 +1,5 @@
 import type { ConnectionRecord, PolicyRules, ProviderDefinition } from "./model";
-import type { AllowMode, PolicyEditorDraft, PolicyResource } from "./policy";
+import type { AllowMode, PolicyEditorDraft, PolicyResource, PolicyRuleResource } from "./policy";
 import type { ReactNode } from "react";
 
 import { useTranslate } from "@embra/i18n/react";
@@ -41,6 +41,7 @@ export function PolicyEditor(props: PolicyEditorProps): ReactNode {
       onChange={props.onChange}
     />
   );
+  const recipientEditor = <RecipientPolicyEditor draft={props.draft} onChange={props.onChange} />;
 
   return (
     <div className="structured-policy-editor">
@@ -49,6 +50,7 @@ export function PolicyEditor(props: PolicyEditorProps): ReactNode {
           <TabsList variant="line" aria-label={t("access.policy.editor.resourceLabel")}>
             <TabsTrigger value="action">{t("access.policy.editor.actionsTab")}</TabsTrigger>
             <TabsTrigger value="proxy">{t("access.policy.editor.proxiesTab")}</TabsTrigger>
+            <TabsTrigger value="recipient">{t("access.policy.editor.recipientsTab")}</TabsTrigger>
           </TabsList>
           <TabsContent value="action">{actionEditor}</TabsContent>
           <TabsContent value="proxy">
@@ -61,9 +63,13 @@ export function PolicyEditor(props: PolicyEditorProps): ReactNode {
               onChange={props.onChange}
             />
           </TabsContent>
+          <TabsContent value="recipient">{recipientEditor}</TabsContent>
         </Tabs>
       ) : (
-        actionEditor
+        <>
+          {actionEditor}
+          {recipientEditor}
+        </>
       )}
       {issues.length > 0 ? (
         <div className="policy-editor-error" role="alert">
@@ -199,8 +205,30 @@ function PolicyResourceEditor(props: PolicyResourceEditorProps): ReactNode {
   );
 }
 
+interface RecipientPolicyEditorProps {
+  draft: PolicyEditorDraft;
+  onChange(draft: PolicyEditorDraft): void;
+}
+
+/** Allow-only list: an empty list leaves mail recipients unrestricted at this layer. */
+function RecipientPolicyEditor(props: RecipientPolicyEditorProps): ReactNode {
+  return (
+    <div className="policy-resource-editor">
+      <RuleListEditor
+        resource="recipient"
+        effect="allow"
+        values={props.draft.rules.allowedRecipients}
+        providers={[]}
+        onChange={(values) =>
+          props.onChange({ ...props.draft, rules: { ...props.draft.rules, allowedRecipients: values } })
+        }
+      />
+    </div>
+  );
+}
+
 interface RuleListEditorProps {
-  resource: PolicyResource;
+  resource: PolicyRuleResource;
   effect: "allow" | "block";
   values: string[];
   providers: ProviderDefinition[];
@@ -223,14 +251,14 @@ function RuleListEditor(props: RuleListEditorProps): ReactNode {
   }, [candidates, input]);
 
   function addRule(): boolean {
-    const rule = input.trim();
+    const rule = props.resource === "recipient" ? input.trim().toLowerCase() : input.trim();
     if (!rule) {
       setError(t("access.policy.editor.ruleRequired"));
       return false;
     }
     const issue = policyRuleIssue(rule, props.resource);
     if (issue) {
-      setError(t(`access.policy.editor.${issue === "too_long" ? "ruleTooLong" : "ruleInvalid"}`));
+      setError(t(`access.policy.editor.${ruleIssueKey(issue, props.resource)}`));
       return false;
     }
     if (props.values.includes(rule)) {
@@ -388,5 +416,14 @@ function draftIssueLabel(
   if (issue.code === "too_many") {
     return t("access.policy.editor.tooManyRules");
   }
-  return t(issue.code === "too_long" ? "access.policy.editor.ruleTooLong" : "access.policy.editor.ruleInvalid");
+  return t(
+    `access.policy.editor.${ruleIssueKey(issue.code, issue.field === "allowedRecipients" ? "recipient" : "action")}`,
+  );
+}
+
+function ruleIssueKey(issue: "invalid" | "too_long", resource: PolicyRuleResource): string {
+  if (issue === "too_long") {
+    return "ruleTooLong";
+  }
+  return resource === "recipient" ? "recipientRuleInvalid" : "ruleInvalid";
 }

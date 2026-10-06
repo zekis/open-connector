@@ -15,7 +15,12 @@ const refreshTokenPrefix = "ocg_mcp_refresh_";
 const chatGptStableRedirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
 const chatGptCallbackRedirectPattern = /^https:\/\/chatgpt\.com\/connector\/oauth\/[A-Za-z0-9_-]+$/u;
 const pkceValuePattern = /^[A-Za-z0-9._~-]{43,128}$/u;
-const emptyTokenPolicy: TokenPolicy = { allowedActions: [], blockedActions: [], allowedProxies: [] };
+const emptyTokenPolicy: TokenPolicy = {
+  allowedActions: [],
+  blockedActions: [],
+  allowedProxies: [],
+  allowedRecipients: [],
+};
 
 export interface McpOAuthClientRegistration {
   id: string;

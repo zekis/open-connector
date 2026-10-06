@@ -1,5 +1,5 @@
 import type { IConnectionStore, StoredConnection } from "../../connection-service.ts";
-import type { TokenPolicy } from "../../core/action-policy.ts";
+import type { PolicyRules, TokenPolicy } from "../../core/action-policy.ts";
 import type { ResolvedCredential, RuntimeLogger } from "../../core/types.ts";
 import type { IOAuthClientConfigStore, OAuthClientConfig } from "../../oauth/oauth-client-config-service.ts";
 import type { IOAuthStateStore, OAuthAuthorizationState } from "../../oauth/oauth-flow-service.ts";
@@ -52,6 +52,7 @@ import type { IRuntimeTokenStore, RuntimeTokenRecord } from "./runtime-token-ser
 
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { emptyPolicyRules } from "../../core/action-policy.ts";
 import { parseRuntimeActionHttpResult } from "../api/runtime-api.ts";
 import { PlainTextSecretCodec } from "../secrets/secret-codec-core.ts";
 import { DEFAULT_RUN_LIMIT, decodeRunLogCursor, encodeRunLogCursor } from "./runtime-store.ts";
@@ -683,10 +684,10 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         insert into runtime_tokens (
-          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+          id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .run(
@@ -696,6 +697,7 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
         JSON.stringify(record.allowedActions),
         JSON.stringify(record.blockedActions),
         JSON.stringify(record.allowedProxies),
+        JSON.stringify(record.allowedRecipients),
         record.createdAt,
         record.lastUsedAt ?? null,
         record.audience ?? null,
@@ -708,8 +710,8 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
     return this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         from runtime_tokens
         where revoked_at is null
         order by created_at desc, id desc
@@ -723,8 +725,8 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
     const row = this.database
       .prepare(
         `
-        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        select id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
         from runtime_tokens
         where token_hash = ? and revoked_at is null
       `,
@@ -738,16 +740,17 @@ export class SqliteRuntimeTokenStore implements IRuntimeTokenStore {
       .prepare(
         `
         update runtime_tokens
-        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?
+        set allowed_actions = ?, blocked_actions = ?, allowed_proxies = ?, allowed_recipients = ?
         where id = ? and revoked_at is null
-        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, created_at, last_used_at,
-          audience, scopes, expires_at
+        returning id, name, token_hash, allowed_actions, blocked_actions, allowed_proxies, allowed_recipients, created_at,
+          last_used_at, audience, scopes, expires_at
       `,
       )
       .get(
         JSON.stringify(policy.allowedActions),
         JSON.stringify(policy.blockedActions),
         JSON.stringify(policy.allowedProxies),
+        JSON.stringify(policy.allowedRecipients),
         id,
       );
     return row ? readRuntimeTokenRow(row) : undefined;
@@ -773,6 +776,7 @@ function readRuntimeTokenRow(row: unknown): RuntimeTokenRecord {
     allowedActions: parseJson(readString(row, "allowed_actions")),
     blockedActions: parseJson(readString(row, "blocked_actions")),
     allowedProxies: parseJson(readString(row, "allowed_proxies")),
+    allowedRecipients: parseJson(readString(row, "allowed_recipients")),
     createdAt: readString(row, "created_at"),
     lastUsedAt: readOptionalString(row, "last_used_at"),
     audience: readOptionalString(row, "audience"),
@@ -792,7 +796,7 @@ export class SqliteRuntimePolicyStore implements IRuntimePolicyStore {
     const row = this.database.prepare("select value, updated_at from runtime_policy where id = 1").get();
     return row
       ? {
-          rules: parseJson(readString(row, "value")),
+          rules: { ...emptyPolicyRules(), ...parseJson<Partial<PolicyRules>>(readString(row, "value")) },
           updatedAt: readString(row, "updated_at"),
         }
       : undefined;

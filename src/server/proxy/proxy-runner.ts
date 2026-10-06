@@ -67,7 +67,10 @@ export class ProxyRunner {
       };
     }
 
-    const decision = (input.policy ?? this.options.actionPolicy?.createSnapshot())?.evaluateProxy(provider.service);
+    const decision = (input.policy ?? this.options.actionPolicy?.createSnapshot())?.evaluateProxy(
+      provider.service,
+      provider.actions.some((action) => action.sendsMail),
+    );
     if (decision && !decision.allowed) {
       return {
         ok: false,

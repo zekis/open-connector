@@ -63,6 +63,7 @@ describe("ProxyRunner", () => {
       providerLoader: {
         loadActionExecutor: async () => undefined,
         loadCredentialValidators: async () => undefined,
+        loadRecipientResolver: async () => undefined,
         loadProxyExecutor,
       },
     });
@@ -81,6 +82,42 @@ describe("ProxyRunner", () => {
     expect(connections.getConnectionSummary).not.toHaveBeenCalled();
   });
 
+  it("refuses proxies of providers that send mail while a recipient policy is active", async () => {
+    const loadProxyExecutor = vi.fn();
+    const mailProvider: ProviderDefinition = {
+      ...provider,
+      actions: [
+        {
+          id: "example.send_email",
+          service: "example",
+          name: "send_email",
+          description: "Send an email.",
+          requiredScopes: [],
+          providerPermissions: [],
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+          sendsMail: true,
+        },
+      ],
+    };
+    const runner = new ProxyRunner({
+      catalog: { providers: [mailProvider] } as CatalogStore,
+      actionPolicy: new ActionPolicyService({ allowedRecipients: ["@example.com"] }),
+      connections: createConnections(),
+      providerLoader: {
+        loadActionExecutor: async () => undefined,
+        loadCredentialValidators: async () => undefined,
+        loadRecipientResolver: async () => undefined,
+        loadProxyExecutor,
+      },
+    });
+
+    await expect(
+      runner.run({ service: "example", input: { endpoint: "/sendMail", method: "POST" } }),
+    ).resolves.toMatchObject({ ok: false, status: 403, errorCode: "recipient_not_allowed" });
+    expect(loadProxyExecutor).not.toHaveBeenCalled();
+  });
+
   it("combines deployment and Runtime proxy policy while ignoring token action rules", async () => {
     const loadProxyExecutor = vi.fn();
     const actionPolicy = new ActionPolicyService({ allowedProxies: ["example"] });
@@ -89,6 +126,7 @@ describe("ProxyRunner", () => {
       providerLoader: {
         loadActionExecutor: async () => undefined,
         loadCredentialValidators: async () => undefined,
+        loadRecipientResolver: async () => undefined,
         loadProxyExecutor,
       },
     });
@@ -98,8 +136,9 @@ describe("ProxyRunner", () => {
         blockedActions: [],
         allowedProxies: [],
         blockedProxies: ["example"],
+        allowedRecipients: [],
       },
-      { allowedActions: [], blockedActions: ["example.*"], allowedProxies: ["example"] },
+      { allowedActions: [], blockedActions: ["example.*"], allowedProxies: ["example"], allowedRecipients: [] },
     );
 
     await expect(
@@ -119,6 +158,7 @@ describe("ProxyRunner", () => {
       providerLoader: {
         loadActionExecutor: async () => undefined,
         loadCredentialValidators: async () => undefined,
+        loadRecipientResolver: async () => undefined,
         loadProxyExecutor,
       },
     });
@@ -128,8 +168,9 @@ describe("ProxyRunner", () => {
         blockedActions: [],
         allowedProxies: ["example"],
         blockedProxies: [],
+        allowedRecipients: [],
       },
-      { allowedActions: ["*"], blockedActions: [], allowedProxies: [] },
+      { allowedActions: ["*"], blockedActions: [], allowedProxies: [], allowedRecipients: [] },
     );
 
     await expect(
@@ -334,6 +375,7 @@ describe("ProxyRunner", () => {
       providerLoader: {
         loadActionExecutor: async () => undefined,
         loadCredentialValidators: async () => undefined,
+        loadRecipientResolver: async () => undefined,
         loadProxyExecutor: async () => {
           throw new Error("module failed to load");
         },
@@ -515,6 +557,10 @@ class TestProviderLoader implements IProviderLoader {
   }
 
   async loadCredentialValidators(): Promise<CredentialValidators | undefined> {
+    return undefined;
+  }
+
+  async loadRecipientResolver(): Promise<undefined> {
     return undefined;
   }
 }

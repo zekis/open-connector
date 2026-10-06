@@ -238,7 +238,8 @@ Deployment and runtime proxy access is controlled by `OOMOL_CONNECT_ALLOWED_PROX
 independent `allowedProxies` grant that can only narrow those rules. The requested provider must be
 allowed by every configured proxy policy layer and explicitly granted to the persistent token.
 An empty token grant denies proxy access, and `OOMOL_CONNECT_BLOCKED_PROXIES="*"` disables provider
-proxies entirely. Bootstrap runtime tokens and JWTs have no stored token grant, so only the
+proxies entirely. While any layer has an `allowedRecipients` policy, proxy requests to providers with
+mail-sending actions are refused with `recipient_not_allowed`. Bootstrap runtime tokens and JWTs have no stored token grant, so only the
 deployment and runtime proxy policy applies to them.
 
 ## Local Admin Endpoints

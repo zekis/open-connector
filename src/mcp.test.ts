@@ -503,6 +503,7 @@ describe("MCP server", () => {
       allowedActions: ["example.*"],
       blockedActions: ["example.echo"],
       allowedProxies: [],
+      allowedRecipients: [],
     });
     await withMcpClient(
       async (client) => {
@@ -539,6 +540,7 @@ describe("MCP server", () => {
           allowedActions: ["example.*"],
           blockedActions: ["example.echo"],
           allowedProxies: [],
+          allowedRecipients: [],
         },
       },
     );
@@ -554,6 +556,7 @@ async function withMcpClient(
       allowedActions: string[];
       blockedActions: string[];
       allowedProxies: string[];
+      allowedRecipients: string[];
     };
     oauthResourceMetadataUrl?: string;
   } = {},
@@ -653,6 +656,10 @@ class EchoProviderLoader implements IProviderLoader {
   }
 
   async loadCredentialValidators(): Promise<undefined> {
+    return undefined;
+  }
+
+  async loadRecipientResolver(): Promise<undefined> {
     return undefined;
   }
 }

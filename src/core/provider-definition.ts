@@ -13,6 +13,7 @@ export interface DefineProviderActionInput<TName extends string = string> {
   providerPermissions?: readonly string[];
   followUpActions?: readonly string[];
   asyncLifecycle?: ActionDefinition["asyncLifecycle"];
+  sendsMail?: boolean;
 }
 
 export type ProviderActionDefinition<TName extends string = string> = ActionDefinition & { name: TName };
@@ -38,5 +39,6 @@ export function defineProviderAction<TName extends string>(
     outputSchema: input.outputSchema,
     followUpActions: input.followUpActions ? [...input.followUpActions] : undefined,
     asyncLifecycle: input.asyncLifecycle,
+    sendsMail: input.sendsMail,
   };
 }

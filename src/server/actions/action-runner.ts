@@ -1,7 +1,7 @@
 import type { CatalogStore } from "../../catalog-store.ts";
 import type { ConnectionService, ConnectionSummary, ExecutionConnection } from "../../connection-service.ts";
 import type { ActionPolicyDecision, ActionPolicyService, ActionPolicySnapshot } from "../../core/action-policy.ts";
-import type { ExecutionContext, ExecutionResult, TransitFileWriter } from "../../core/types.ts";
+import type { ActionDefinition, ExecutionContext, ExecutionResult, TransitFileWriter } from "../../core/types.ts";
 import type { IProviderLoader } from "../../providers/provider-loader.ts";
 import type { ConnectionApprovalService } from "../approvals/connection-approval-service.ts";
 import type { Logger } from "../logger.ts";
@@ -9,6 +9,7 @@ import type { IRunLogStore, RunLog, RunLogCaller, RunLogListInput, RunLogPage } 
 
 import { ConnectionError } from "../../connection-service.ts";
 import { executeAction as executeProviderAction } from "../../core/execution.ts";
+import { validateActionInput } from "../../core/validation.ts";
 import { safeRunLogError, summarizeForRunLog } from "./run-log-summary.ts";
 
 export interface ActionRunnerOptions {
@@ -94,6 +95,16 @@ export class ActionRunner implements IActionRunner {
           ? await this.options.connections.resolveForExecutionById(action.service, input.connectionId)
           : await this.options.connections.resolveForExecution(action.service, input.connectionName);
         policy = policySnapshot?.evaluate(action, connection.summary?.id ?? null) ?? policy;
+        // Invalid input skips the recipient check: execution rejects it before anything is sent.
+        if (
+          policy.allowed &&
+          policySnapshot?.restrictsRecipients() &&
+          action.sendsMail &&
+          validateActionInput(action, input.input).valid
+        ) {
+          const recipients = await this.resolveRecipients(action, input.input, connection, input.signal);
+          policy = policySnapshot.evaluateRecipients(action, recipients, policy.checks);
+        }
         if (!policy.allowed) {
           result = { ok: false, error: { code: policy.code, message: policy.message } };
         } else {
@@ -207,6 +218,27 @@ export class ActionRunner implements IActionRunner {
 
   getRun(id: string): Promise<RunLog | undefined> {
     return this.options.runs.get(id);
+  }
+
+  /**
+   * Recipients a mail-sending action would deliver to, or `undefined` when they cannot be determined
+   * (no resolver, or the resolver failed), which a recipient policy refuses.
+   */
+  private async resolveRecipients(
+    action: ActionDefinition,
+    input: unknown,
+    connection: ExecutionConnection,
+    signal?: AbortSignal,
+  ): Promise<string[] | undefined> {
+    try {
+      const resolver = await this.options.providerLoader.loadRecipientResolver(action.service, action.id);
+      return resolver
+        ? await resolver(input, this.createExecutionContext(connection.getCredential, signal))
+        : undefined;
+    } catch {
+      this.options.logger?.warn({ actionId: action.id, service: action.service }, "action recipients unavailable");
+      return undefined;
+    }
   }
 
   private createExecutionContext(

@@ -144,7 +144,9 @@ responsibility for securing their deployment. At minimum:
   variables restricts it, and the Action variables do not restrict it. Persistent runtime tokens
   must independently grant provider proxy access through `allowedProxies`; an empty grant denies
   every proxy. Pin both the runtime policy and each token to the services they actually proxy, or set
-  `OOMOL_CONNECT_BLOCKED_PROXIES="*"` to disable provider proxies entirely.
+  `OOMOL_CONNECT_BLOCKED_PROXIES="*"` to disable provider proxies entirely. Use
+  `OOMOL_CONNECT_ALLOWED_RECIPIENTS` (or the runtime and token `allowedRecipients` lists) to limit
+  who mail-sending Actions may deliver to.
 - **Stay current.** Run a supported Node.js (22.18+ / 24) and update to the latest OpenConnector
   release for security fixes.
 

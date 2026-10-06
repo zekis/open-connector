@@ -2,6 +2,8 @@ import type { PolicyRules, ProviderDefinition, RuntimePolicyState, RuntimeTokenS
 
 export type PolicySource = "deployment" | "runtime" | "token";
 export type PolicyResource = "action" | "proxy";
+/** Every kind of rule the editor accepts; recipient rules only allow, and are checked when mail is sent. */
+export type PolicyRuleResource = PolicyResource | "recipient";
 export type AllowMode = "unrestricted" | "restricted";
 
 export interface PolicyLayer {
@@ -52,6 +54,7 @@ export function policyRulesFromEditorDraft(draft: PolicyEditorDraft): PolicyRule
     blockedActions: [...draft.rules.blockedActions],
     allowedProxies: draft.proxyAllowMode === "restricted" ? [...draft.rules.allowedProxies] : [],
     blockedProxies: [...draft.rules.blockedProxies],
+    allowedRecipients: [...draft.rules.allowedRecipients],
   };
 }
 
@@ -73,15 +76,16 @@ export function validatePolicyEditorDraft(draft: PolicyEditorDraft, includeProxi
     issues.push({ field: "allowedProxies", code: "required" });
   }
 
-  const fields: Array<[keyof PolicyRules, PolicyResource]> = [
+  const fields: Array<[keyof PolicyRules, PolicyRuleResource]> = [
     ["allowedActions", "action"],
     ["blockedActions", "action"],
     ...(includeProxies
       ? ([
           ["allowedProxies", "proxy"],
           ["blockedProxies", "proxy"],
-        ] as Array<[keyof PolicyRules, PolicyResource]>)
+        ] as Array<[keyof PolicyRules, PolicyRuleResource]>)
       : []),
+    ["allowedRecipients", "recipient"],
   ];
   for (const [field, resource] of fields) {
     if (rules[field].length > 128) {
@@ -110,6 +114,7 @@ export function policyLayers(policy: RuntimePolicyState, token?: RuntimeTokenSum
         blockedActions: token.blockedActions,
         allowedProxies: token.allowedProxies,
         blockedProxies: [],
+        allowedRecipients: token.allowedRecipients,
       },
     });
   }
@@ -174,7 +179,10 @@ export function countAllowedProxies(providers: ProviderDefinition[], layers: Pol
   };
 }
 
-export function policyRuleCandidates(providers: ProviderDefinition[], resource: PolicyResource): string[] {
+export function policyRuleCandidates(providers: ProviderDefinition[], resource: PolicyRuleResource): string[] {
+  if (resource === "recipient") {
+    return [];
+  }
   if (resource === "proxy") {
     return ["*", ...providers.map((provider) => provider.service)];
   }
@@ -216,7 +224,14 @@ export function filterPolicyRuleCandidates(candidates: string[], query: string, 
   return matches.flat().slice(0, limit);
 }
 
-export function isKnownPolicyRule(rule: string, resource: PolicyResource, providers: ProviderDefinition[]): boolean {
+export function isKnownPolicyRule(
+  rule: string,
+  resource: PolicyRuleResource,
+  providers: ProviderDefinition[],
+): boolean {
+  if (resource === "recipient") {
+    return true;
+  }
   if (resource === "action") rule = rule.split("@")[0];
   if (rule === "*") {
     return true;
@@ -244,9 +259,12 @@ export function parsePolicyLines(value: string): string[] {
   return rules;
 }
 
-export function policyRuleIssue(rule: string, resource: PolicyResource): "invalid" | "too_long" | undefined {
+export function policyRuleIssue(rule: string, resource: PolicyRuleResource): "invalid" | "too_long" | undefined {
   if (new TextEncoder().encode(rule).byteLength > 256) {
     return "too_long";
+  }
+  if (resource === "recipient") {
+    return /^[^\s@<>,]*@[^\s@<>,]+\.[^\s@<>,]+$/.test(rule) && !rule.endsWith(".") ? undefined : "invalid";
   }
   if (resource === "action" && rule.includes("@")) {
     const parts = rule.split("@");
@@ -286,6 +304,7 @@ function clonePolicyRules(rules: PolicyRules): PolicyRules {
     blockedActions: [...rules.blockedActions],
     allowedProxies: [...rules.allowedProxies],
     blockedProxies: [...rules.blockedProxies],
+    allowedRecipients: [...rules.allowedRecipients],
   };
 }
 

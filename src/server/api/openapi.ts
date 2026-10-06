@@ -417,11 +417,20 @@ export function createOpenApiDocument(
             allowedProxies: policyRuleArraySchema(
               "Provider proxies explicitly granted to this token. An empty list grants no proxy access.",
             ),
+            allowedRecipients: policyRuleArraySchema(recipientRulesDescription),
             createdAt: jsonSchema.string({ description: "Creation timestamp." }),
             lastUsedAt: jsonSchema.string({ description: "Last successful use timestamp." }),
           },
           {
-            required: ["id", "name", "allowedActions", "blockedActions", "allowedProxies", "createdAt"],
+            required: [
+              "id",
+              "name",
+              "allowedActions",
+              "blockedActions",
+              "allowedProxies",
+              "allowedRecipients",
+              "createdAt",
+            ],
             description: "Runtime API token summary. Plaintext tokens and token hashes are not returned.",
           },
         ),
@@ -433,6 +442,7 @@ export function createOpenApiDocument(
             allowedProxies: policyRuleArraySchema(
               "Optional provider proxy grants for the new token. Omit or leave empty to deny proxy access.",
             ),
+            allowedRecipients: policyRuleArraySchema(`Optional. ${recipientRulesDescription}`),
           },
           {
             required: ["name"],
@@ -446,10 +456,11 @@ export function createOpenApiDocument(
             allowedProxies: policyRuleArraySchema(
               "Provider proxies explicitly granted to this token. An empty list grants no proxy access.",
             ),
+            allowedRecipients: policyRuleArraySchema(recipientRulesDescription),
           },
           {
-            required: ["allowedActions", "blockedActions", "allowedProxies"],
-            description: "Complete replacement of one stored runtime token's action and proxy permissions.",
+            required: ["allowedActions", "blockedActions", "allowedProxies", "allowedRecipients"],
+            description: "Complete replacement of one stored runtime token's action, proxy, and recipient permissions.",
           },
         ),
         PolicyRules: policyRulesSchema(),
@@ -480,12 +491,18 @@ export function createOpenApiDocument(
             allowed: jsonSchema.boolean({ description: "Whether policy permits execution." }),
             code: {
               type: "string",
-              enum: ["action_not_allowed", "action_blocked", "proxy_not_allowed", "proxy_blocked"],
+              enum: [
+                "action_not_allowed",
+                "action_blocked",
+                "proxy_not_allowed",
+                "proxy_blocked",
+                "recipient_not_allowed",
+              ],
             },
             message: jsonSchema.string({ description: "Policy denial message." }),
             checks: {
               type: "array",
-              maxItems: 3,
+              maxItems: 6,
               items: { $ref: "#/components/schemas/PolicyCheck" },
             },
           },
@@ -1460,6 +1477,9 @@ function createRuntimePolicyPath(): Record<string, unknown> {
   };
 }
 
+const recipientRulesDescription =
+  "Email addresses or @domain rules that mail-sending actions may deliver to. An empty list leaves recipients unrestricted.";
+
 function policyRulesSchema(): JsonSchema {
   return jsonSchema.object(
     {
@@ -1467,10 +1487,11 @@ function policyRulesSchema(): JsonSchema {
       blockedActions: policyRuleArraySchema("Action block rules."),
       allowedProxies: policyRuleArraySchema("Proxy service allow rules."),
       blockedProxies: policyRuleArraySchema("Proxy service block rules."),
+      allowedRecipients: policyRuleArraySchema(recipientRulesDescription),
     },
     {
-      required: ["allowedActions", "blockedActions", "allowedProxies", "blockedProxies"],
-      description: "One complete action and proxy policy layer.",
+      required: ["allowedActions", "blockedActions", "allowedProxies", "blockedProxies", "allowedRecipients"],
+      description: "One complete action, proxy, and recipient policy layer.",
     },
   );
 }
