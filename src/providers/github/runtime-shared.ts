@@ -112,32 +112,52 @@ export async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * Turn a GitHub error response into a ProviderRequestError that says what GitHub said.
+ *
+ * The message names GitHub's own status, its message and any field-level
+ * validation errors (a 422 carries the useful part in `errors`), so a caller can
+ * tell a rejected input from a GitHub outage. When GitHub sends no message at
+ * all, `fallbackMessage` says what was being attempted and the request id is
+ * included so the failure can be traced with GitHub.
+ *
+ * GitHub server errors map to 502: the gateway worked, GitHub did not.
+ */
 export function normalizeGitHubError(
   response: Response,
   payload: unknown,
   fallbackMessage: string,
 ): ProviderRequestError {
-  const message = readGitHubErrorMessage(payload) ?? `${fallbackMessage} with ${response.status}`;
-  if (response.status === 401) {
-    return new ProviderRequestError(401, message);
+  const status = response.status;
+  const requestId = response.headers.get("x-github-request-id") ?? undefined;
+  const githubMessage = readGitHubErrorMessage(payload);
+  const fieldErrors = readGitHubFieldErrors(payload);
+  const reason = [githubMessage, fieldErrors.join("; ")].filter(Boolean).join(": ");
+  const traced = status >= 500 && requestId ? ` (request id ${requestId})` : "";
+  const message = reason
+    ? `GitHub returned ${status}: ${reason}${traced}`
+    : `${fallbackMessage}: GitHub returned ${status} with no error message${traced}`;
+  const details = compactObject({
+    githubStatus: status,
+    githubRequestId: requestId,
+    documentationUrl: readGitHubDocumentationUrl(payload),
+    errors: fieldErrors.length > 0 ? fieldErrors : undefined,
+  });
+
+  if (status === 401) {
+    return new ProviderRequestError(401, message, details);
   }
-  if (response.status === 403 && isRateLimited(response, payload)) {
-    return new ProviderRequestError(429, message);
+  if ((status === 403 && isRateLimited(response, payload)) || status === 429) {
+    return new ProviderRequestError(429, message, details);
   }
-  if (response.status === 403) {
-    return new ProviderRequestError(403, message);
+  if (status === 403 || status === 404) {
+    return new ProviderRequestError(status, message, details);
   }
-  if (response.status === 429) {
-    return new ProviderRequestError(429, message);
-  }
-  if (response.status === 404) {
-    return new ProviderRequestError(404, message);
-  }
-  if (response.status === 400 || response.status === 422) {
-    return new ProviderRequestError(400, message);
+  if (status === 400 || status === 422) {
+    return new ProviderRequestError(400, message, details);
   }
 
-  return new ProviderRequestError(500, message, response.status);
+  return new ProviderRequestError(502, message, details);
 }
 
 function readGitHubErrorMessage(payload: unknown): string | null {
@@ -146,7 +166,51 @@ function readGitHubErrorMessage(payload: unknown): string | null {
   }
 
   const message = (payload as Record<string, unknown>).message;
-  return typeof message === "string" && message ? message : null;
+  if (typeof message !== "string" || !message.trim()) {
+    return null;
+  }
+  // A non-JSON error page arrives here as its raw text; keep the message readable.
+  const trimmed = message.trim();
+  return trimmed.length > maxGitHubErrorMessageLength ? `${trimmed.slice(0, maxGitHubErrorMessageLength)}...` : trimmed;
+}
+
+const maxGitHubErrorMessageLength = 500;
+
+/** GitHub's validation errors: `{ resource, field, code, message? }` entries, or plain strings. */
+function readGitHubFieldErrors(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const errors = (payload as Record<string, unknown>).errors;
+  if (!Array.isArray(errors)) {
+    return [];
+  }
+
+  return errors
+    .map((entry): string => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      if (!entry || typeof entry !== "object") {
+        return "";
+      }
+      const record = entry as Record<string, unknown>;
+      const message = optionalString(record.message);
+      if (message) {
+        return message;
+      }
+      const target = [optionalString(record.resource), optionalString(record.field)].filter(Boolean).join(".");
+      return [target, optionalString(record.code)].filter(Boolean).join(" ");
+    })
+    .filter(Boolean);
+}
+
+function readGitHubDocumentationUrl(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  return optionalString((payload as Record<string, unknown>).documentation_url);
 }
 
 function isRateLimited(response: Response, payload: unknown): boolean {
