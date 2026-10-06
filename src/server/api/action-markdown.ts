@@ -7,6 +7,13 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown, gfmToMarkdown } from "mdast-util-gfm";
 import { toMarkdown } from "mdast-util-to-markdown";
 import { gfm } from "micromark-extension-gfm";
+import {
+  describeSchemaType,
+  MAX_NESTED_DEPTH,
+  nestedObjectSchema,
+  readSchemaProperties,
+  readSchemaRequired,
+} from "../../core/schema-summary.ts";
 
 export type ActionMarkdownContext = {
   connection?: ConnectionSummary;
@@ -125,24 +132,60 @@ function describeConnection(connection: ConnectionSummary | undefined): BlockCon
 }
 
 function describeParameters(schema: JsonSchema): BlockContent[] {
-  const properties = readProperties(schema);
+  const properties = readSchemaProperties(schema);
   const entries = Object.entries(properties);
   if (entries.length === 0) {
     return [textParagraph("This action does not require input parameters.")];
   }
 
-  const required = new Set(readRequired(schema));
+  const required = new Set(readSchemaRequired(schema));
   return [
-    parameterTable(entries, required),
+    parameterTable(entries, required, schema),
     listItems(
       entries.map(([name, property]) =>
-        listItem([paragraph([inlineCode(name)]), ...markdownBlockContent(readDescription(property))]),
+        listItem([
+          paragraph([inlineCode(name)]),
+          ...markdownBlockContent(readDescription(property)),
+          ...describeNestedFields(property, schema, name, 1),
+        ]),
       ),
     ),
   ];
 }
 
-function parameterTable(entries: Array<[string, JsonSchema]>, required: Set<string>): BlockContent {
+/**
+ * List the fields of an object parameter, or of each item of an array of
+ * objects, as `parent.field` / `parent[].field` with their descriptions.
+ */
+function describeNestedFields(property: JsonSchema, root: JsonSchema, path: string, depth: number): BlockContent[] {
+  if (depth > MAX_NESTED_DEPTH) {
+    return [];
+  }
+  const nested = nestedObjectSchema(property, root);
+  if (!nested) {
+    return [];
+  }
+  const prefix = nested.items ? `${path}[]` : path;
+  const required = new Set(readSchemaRequired(nested.schema));
+  return [
+    listItems(
+      Object.entries(readSchemaProperties(nested.schema)).map(([name, field]) => {
+        const fieldPath = `${prefix}.${name}`;
+        const description = readDescription(field).trim();
+        return listItem([
+          paragraph([
+            inlineCode(fieldPath),
+            required.has(name) ? " (required)" : " (optional)",
+            ...(description ? [": ", description] : []),
+          ]),
+          ...describeNestedFields(field, root, fieldPath, depth + 1),
+        ]);
+      }),
+    ),
+  ];
+}
+
+function parameterTable(entries: Array<[string, JsonSchema]>, required: Set<string>, root: JsonSchema): BlockContent {
   return {
     type: "table",
     align: [null, null, null],
@@ -152,7 +195,7 @@ function parameterTable(entries: Array<[string, JsonSchema]>, required: Set<stri
         tableRow([
           inlineCodeTableCell(name),
           textTableCell(required.has(name) ? "Yes" : "No"),
-          inlineCodeTableCell(describeType(property)),
+          inlineCodeTableCell(describeSchemaType(property, root)),
         ]),
       ),
     ],
@@ -264,40 +307,12 @@ function isBlockContent(node: DocumentContent): node is BlockContent {
 type DocumentContent = BlockContent | DefinitionContent;
 
 function buildExampleInput(schema: JsonSchema): Record<string, unknown> {
-  const properties = readProperties(schema);
+  const properties = readSchemaProperties(schema);
   const input: Record<string, unknown> = {};
-  for (const name of readRequired(schema)) {
+  for (const name of readSchemaRequired(schema)) {
     input[name] = exampleValue(properties[name]);
   }
   return input;
-}
-
-function readProperties(schema: JsonSchema): Record<string, JsonSchema> {
-  return schema.properties && typeof schema.properties === "object"
-    ? (schema.properties as Record<string, JsonSchema>)
-    : {};
-}
-
-function readRequired(schema: JsonSchema): string[] {
-  return Array.isArray(schema.required)
-    ? schema.required.filter((value): value is string => typeof value === "string")
-    : [];
-}
-
-function describeType(schema: JsonSchema | undefined): string {
-  if (!schema) {
-    return "unknown";
-  }
-  if (typeof schema.const === "string" || typeof schema.const === "number" || typeof schema.const === "boolean") {
-    return JSON.stringify(schema.const);
-  }
-  if (Array.isArray(schema.enum)) {
-    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
-  }
-  if (Array.isArray(schema.anyOf)) {
-    return schema.anyOf.map((item) => describeType(item as JsonSchema)).join(" | ");
-  }
-  return typeof schema.type === "string" ? schema.type : "unknown";
 }
 
 function readDescription(schema: JsonSchema | undefined): string {
