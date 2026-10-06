@@ -5,12 +5,7 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import { validateActionInput } from "../../core/validation.ts";
 import { xeroActions } from "./actions.ts";
-import {
-  createXeroCredential,
-  validateXeroCredential,
-  xeroActionHandlers,
-  xeroModifiedSinceValue,
-} from "./runtime.ts";
+import { createXeroCredential, validateXeroCredential, xeroActionHandlers, xeroModifiedSinceValue } from "./runtime.ts";
 
 describe("Xero Custom Connection runtime", () => {
   it("defaults new connections to every standard Accounting scope used by dedicated actions", () => {
@@ -804,5 +799,277 @@ describe("Xero modified-since timestamps", () => {
       .mock.calls.find(([input]) => requestUrl(input).pathname === "/api.xro/2.0/Invoices")!;
 
     expect(new Headers(call[1]?.headers).get("if-modified-since")).toBe("2026-08-01T00:00:00");
+  });
+});
+
+describe("Xero quotes", () => {
+  const quoteId = "6f2b1c8e-3d4a-4b5c-9e7f-1a2b3c4d5e6f";
+  const contactId = "835a5877-2fa9-4c4f-b84e-179f7e7d8bc0";
+  const existingQuote = {
+    QuoteID: quoteId,
+    QuoteNumber: "QU-0001",
+    Status: "SENT",
+    Contact: { ContactID: contactId, Name: "Example Customer" },
+    Date: "/Date(1790812800000+0000)/",
+    DateString: "2026-10-01T00:00:00",
+    ExpiryDateString: "2026-10-31T00:00:00",
+    Total: 350,
+  };
+
+  function quoteContext(fetcher: ProviderFetch): XeroContext {
+    return createContext({ clientId: "quote-client", clientSecret: "secret", scopes: "accounting.invoices" }, fetcher);
+  }
+
+  function quoteFetch(onQuotes?: (url: URL, init?: RequestInit) => Response): ProviderFetch {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = requestUrl(input);
+      if (url.hostname === "identity.xero.com") {
+        return jsonResponse({ access_token: "xero-access-token", expires_in: 1800, token_type: "Bearer" });
+      }
+      if (url.pathname.startsWith("/api.xro/2.0/Quotes")) {
+        if (onQuotes) return onQuotes(url, init);
+        if ((init?.method ?? "GET") === "GET") return jsonResponse({ Quotes: [existingQuote] });
+        const sent = JSON.parse(String(init?.body)) as { Quotes: Array<Record<string, unknown>> };
+        return jsonResponse({ Quotes: [{ ...existingQuote, ...sent.Quotes[0], QuoteID: quoteId }] });
+      }
+      throw new Error(`Unexpected Xero URL: ${url}`);
+    }) as ProviderFetch;
+  }
+
+  function quoteCalls(fetcher: ProviderFetch) {
+    return vi.mocked(fetcher).mock.calls.filter(([input]) => requestUrl(input).hostname === "api.xero.com");
+  }
+
+  it("creates a quote as DRAFT by default with Xero field names", async () => {
+    const fetcher = quoteFetch();
+
+    const result = await xeroActionHandlers.create_quote!(
+      {
+        contactId,
+        date: "2026-10-06",
+        expiryDate: "2026-11-05",
+        reference: "REF-0001",
+        title: "Example works",
+        summary: "Scope of the example works",
+        terms: "Valid for 30 days.",
+        currencyCode: "AUD",
+        lineAmountTypes: "Exclusive",
+        brandingThemeId: "5d4f2b9a-1c3e-4f6a-8b7d-9e0f1a2b3c4d",
+        idempotencyKey: "quote-run-0001",
+        lineItems: [
+          { description: "Consulting", quantity: 2, unitAmount: 175, accountCode: "200", discountRate: 10 },
+          { description: "Widget", quantity: 1, unitAmount: 50, itemCode: "WIDGET", taxType: "OUTPUT" },
+        ],
+      },
+      quoteContext(fetcher),
+    );
+
+    const [call] = quoteCalls(fetcher);
+    expect(requestUrl(call![0]).pathname).toBe("/api.xro/2.0/Quotes");
+    expect(call![1]?.method).toBe("PUT");
+    expect(new Headers(call![1]?.headers).get("idempotency-key")).toBe("quote-run-0001");
+    expect(JSON.parse(String(call![1]?.body))).toEqual({
+      Quotes: [
+        {
+          Contact: { ContactID: contactId },
+          Date: "2026-10-06",
+          ExpiryDate: "2026-11-05",
+          Reference: "REF-0001",
+          Title: "Example works",
+          Summary: "Scope of the example works",
+          Terms: "Valid for 30 days.",
+          CurrencyCode: "AUD",
+          LineAmountTypes: "Exclusive",
+          BrandingThemeID: "5d4f2b9a-1c3e-4f6a-8b7d-9e0f1a2b3c4d",
+          Status: "DRAFT",
+          LineItems: [
+            { Description: "Consulting", Quantity: 2, UnitAmount: 175, AccountCode: "200", DiscountRate: 10 },
+            { Description: "Widget", Quantity: 1, UnitAmount: 50, ItemCode: "WIDGET", TaxType: "OUTPUT" },
+          ],
+        },
+      ],
+    });
+    expect(result).toMatchObject({ quote: { QuoteID: quoteId, QuoteNumber: "QU-0001", Status: "DRAFT" } });
+  });
+
+  it("creates a quote marked as SENT when asked", async () => {
+    const fetcher = quoteFetch();
+
+    await xeroActionHandlers.create_quote!(
+      {
+        contactId,
+        date: "2026-10-06",
+        status: "SENT",
+        lineItems: [{ description: "Consulting", quantity: 1, unitAmount: 100 }],
+      },
+      quoteContext(fetcher),
+    );
+
+    const [call] = quoteCalls(fetcher);
+    expect(JSON.parse(String(call![1]?.body)).Quotes[0].Status).toBe("SENT");
+  });
+
+  it("refuses to create a quote as ACCEPTED, in the schema and at runtime", async () => {
+    const input = {
+      contactId,
+      date: "2026-10-06",
+      status: "ACCEPTED",
+      lineItems: [{ description: "Consulting", quantity: 1, unitAmount: 100 }],
+    };
+    const createQuote = xeroActions.find((action) => action.name === "create_quote")!;
+    expect(validateActionInput(createQuote, input).valid).toBe(false);
+
+    const fetcher = quoteFetch();
+    await expect(xeroActionHandlers.create_quote!(input, quoteContext(fetcher))).rejects.toMatchObject({
+      status: 400,
+      message: "status must be DRAFT or SENT when creating a quote; received ACCEPTED",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reads the quote first when the update leaves out contact, date and status", async () => {
+    const fetcher = quoteFetch();
+
+    const result = await xeroActionHandlers.update_quote!(
+      { quoteId, title: "Revised works", expiryDate: "2026-11-30" },
+      quoteContext(fetcher),
+    );
+
+    const calls = quoteCalls(fetcher);
+    expect(calls).toHaveLength(2);
+    expect(requestUrl(calls[0]![0]).pathname).toBe(`/api.xro/2.0/Quotes/${quoteId}`);
+    expect(calls[0]![1]?.method).toBe("GET");
+    expect(requestUrl(calls[1]![0]).pathname).toBe(`/api.xro/2.0/Quotes/${quoteId}`);
+    expect(calls[1]![1]?.method).toBe("POST");
+    expect(JSON.parse(String(calls[1]![1]?.body))).toEqual({
+      Quotes: [
+        {
+          QuoteID: quoteId,
+          Contact: { ContactID: contactId },
+          Date: "2026-10-01",
+          ExpiryDate: "2026-11-30",
+          Title: "Revised works",
+          Status: "SENT",
+        },
+      ],
+    });
+    expect(result).toMatchObject({ quote: { QuoteID: quoteId, Title: "Revised works" } });
+  });
+
+  it("falls back to the /Date()/ form when the existing quote has no DateString", async () => {
+    const fetcher = quoteFetch((_url, init) => {
+      if ((init?.method ?? "GET") === "GET") {
+        return jsonResponse({ Quotes: [{ ...existingQuote, DateString: undefined }] });
+      }
+      return jsonResponse({ Quotes: [existingQuote] });
+    });
+
+    await xeroActionHandlers.update_quote!({ quoteId, status: "ACCEPTED" }, quoteContext(fetcher));
+
+    const body = JSON.parse(String(quoteCalls(fetcher)[1]![1]?.body));
+    expect(body.Quotes[0]).toMatchObject({ Date: "2026-10-01", Status: "ACCEPTED" });
+  });
+
+  it("updates without reading first when contact, date and status are all given", async () => {
+    const fetcher = quoteFetch();
+
+    await xeroActionHandlers.update_quote!(
+      {
+        quoteId,
+        contactId,
+        date: "2026-10-02",
+        status: "DECLINED",
+        lineItems: [{ description: "Consulting", quantity: 3, unitAmount: 175 }],
+      },
+      quoteContext(fetcher),
+    );
+
+    const calls = quoteCalls(fetcher);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![1]?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]![1]?.body))).toEqual({
+      Quotes: [
+        {
+          QuoteID: quoteId,
+          Contact: { ContactID: contactId },
+          Date: "2026-10-02",
+          Status: "DECLINED",
+          LineItems: [{ Description: "Consulting", Quantity: 3, UnitAmount: 175 }],
+        },
+      ],
+    });
+  });
+
+  it("refuses to set INVOICED or DELETED through an update", async () => {
+    const updateQuote = xeroActions.find((action) => action.name === "update_quote")!;
+    expect(validateActionInput(updateQuote, { quoteId, status: "INVOICED" }).valid).toBe(false);
+
+    const fetcher = quoteFetch();
+    await expect(
+      xeroActionHandlers.update_quote!({ quoteId, status: "DELETED" }, quoteContext(fetcher)),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("reports the Xero validation message when it refuses a quote change", async () => {
+    const fetcher = quoteFetch(() =>
+      jsonResponse(
+        {
+          ErrorNumber: 10,
+          Type: "ValidationException",
+          Elements: [{ ValidationErrors: [{ Message: "Quote status cannot be changed from DRAFT to ACCEPTED" }] }],
+        },
+        400,
+      ),
+    );
+
+    await expect(
+      xeroActionHandlers.update_quote!(
+        { quoteId, contactId, date: "2026-10-01", status: "ACCEPTED" },
+        quoteContext(fetcher),
+      ),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: "Quote status cannot be changed from DRAFT to ACCEPTED",
+      details: { xeroResponse: { Type: "ValidationException" } },
+    });
+  });
+
+  it("maps quote filters to the documented query parameters", async () => {
+    const fetcher = quoteFetch(() =>
+      jsonResponse({ Quotes: [existingQuote], pagination: { page: 1, pageSize: 100, pageCount: 1, itemCount: 1 } }),
+    );
+
+    const result = await xeroActionHandlers.list_quotes!(
+      {
+        page: 1,
+        status: "SENT",
+        contactId,
+        dateFrom: "2026-10-01",
+        expiryDateTo: "2026-12-31",
+        ifModifiedSince: "2026-09-01",
+      },
+      quoteContext(fetcher),
+    );
+
+    const [call] = quoteCalls(fetcher);
+    expect(Object.fromEntries(requestUrl(call![0]).searchParams)).toEqual({
+      page: "1",
+      Status: "SENT",
+      ContactID: contactId,
+      DateFrom: "2026-10-01",
+      ExpiryDateTo: "2026-12-31",
+    });
+    expect(new Headers(call![1]?.headers).get("if-modified-since")).toBe("2026-09-01T00:00:00");
+    expect(result).toMatchObject({ quotes: [{ QuoteNumber: "QU-0001" }] });
+  });
+
+  it("gets one quote by ID", async () => {
+    const fetcher = quoteFetch();
+
+    const result = await xeroActionHandlers.get_quote!({ quoteId }, quoteContext(fetcher));
+
+    expect(requestUrl(quoteCalls(fetcher)[0]![0]).pathname).toBe(`/api.xro/2.0/Quotes/${quoteId}`);
+    expect(result).toEqual({ quote: existingQuote });
   });
 });
