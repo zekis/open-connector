@@ -265,7 +265,7 @@ describe("ERPNext assignment", () => {
       async () =>
         new Response(
           JSON.stringify({
-            message: [{ owner: "zeke@tierneymorris.com.au", name: "todo-1" }],
+            message: [{ owner: "pat@company.test", name: "todo-1" }],
           }),
           { headers: { "content-type": "application/json" } },
         ),
@@ -276,7 +276,7 @@ describe("ERPNext assignment", () => {
       {
         doctype: "Activity",
         name: "g68cfomvvu",
-        assign_to: ["zeke@tierneymorris.com.au"],
+        assign_to: ["pat@company.test"],
         description: "PO-0392 systems engineering support",
         priority: "High",
       },
@@ -285,7 +285,7 @@ describe("ERPNext assignment", () => {
 
     expect(result).toEqual({
       ok: true,
-      output: { assignments: [{ owner: "zeke@tierneymorris.com.au", name: "todo-1" }] },
+      output: { assignments: [{ owner: "pat@company.test", name: "todo-1" }] },
     });
 
     const [url, init] = fetcher.mock.calls[0]!;
@@ -294,7 +294,7 @@ describe("ERPNext assignment", () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       doctype: "Activity",
       name: "g68cfomvvu",
-      assign_to: ["zeke@tierneymorris.com.au"],
+      assign_to: ["pat@company.test"],
       description: "PO-0392 systems engineering support",
       priority: "High",
     });
@@ -326,7 +326,7 @@ describe("ERPNext assignment", () => {
     vi.stubGlobal("fetch", fetcher);
 
     const result = await executors["erpnext.unassign_document"]!(
-      { doctype: "Activity", name: "g68cfomvvu", assign_to: "zeke@tierneymorris.com.au" },
+      { doctype: "Activity", name: "g68cfomvvu", assign_to: "pat@company.test" },
       createContext(),
     );
 
@@ -336,7 +336,7 @@ describe("ERPNext assignment", () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       doctype: "Activity",
       name: "g68cfomvvu",
-      assign_to: "zeke@tierneymorris.com.au",
+      assign_to: "pat@company.test",
     });
   });
 
