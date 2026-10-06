@@ -9,6 +9,12 @@ const service = "github";
 const anyObject = s.looseObject({}, { description: "A GitHub API object." });
 const nonEmptyString = s.string({ minLength: 1 });
 const nullableString = s.nullable(s.string());
+/** The longest pull request body GitHub accepts, in characters. */
+export const githubPullRequestBodyMaxLength = 65_536;
+const pullRequestBodySchema = s.string({
+  maxLength: githubPullRequestBodyMaxLength,
+  description: `The pull request description in Markdown, up to ${githubPullRequestBodyMaxLength} characters.`,
+});
 const optionalPaginationFields = {
   perPage: s.integer(),
   page: s.integer(),
@@ -1226,7 +1232,7 @@ export const githubActions: ActionDefinition[] = [
       title: nonEmptyString,
       head: nonEmptyString,
       base: nonEmptyString,
-      body: s.string(),
+      body: pullRequestBodySchema,
       draft: s.boolean(),
       maintainerCanModify: s.boolean(),
     }),
@@ -1241,7 +1247,7 @@ export const githubActions: ActionDefinition[] = [
       repo: nonEmptyString,
       pullNumber: s.integer({ minimum: 1 }),
       title: s.string(),
-      body: s.string(),
+      body: pullRequestBodySchema,
       state: s.stringEnum(["open", "closed"]),
       base: s.string(),
       maintainerCanModify: s.boolean(),
