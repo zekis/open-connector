@@ -119,6 +119,43 @@ export const erpnextActions: ActionDefinition[] = [
     ),
   }),
   defineProviderAction(service, {
+    name: "upload_file",
+    description:
+      "Upload a file to ERPNext/Frappe as a File record, optionally attached to a document. Files are private unless isPrivate is false. Limited to 25 MB; the site's own upload limit may be lower.",
+    inputSchema: s.object(
+      {
+        fileName: s.nonEmptyString("The filename to store, including its extension, such as report.pdf."),
+        contentBase64: s.nonEmptyString("The file content encoded as base64."),
+        doctype: s.nonEmptyString("The DocType of the document to attach the file to. Requires name."),
+        name: s.nonEmptyString("The name of the document to attach the file to. Requires doctype."),
+        isPrivate: s.boolean({
+          description: "Whether the file is private (only users with access can read it). Defaults to true.",
+          default: true,
+        }),
+        folder: s.nonEmptyString("The File folder to place the file in, such as Home/Attachments."),
+      },
+      { optional: ["doctype", "name", "isPrivate", "folder"] },
+    ),
+    outputSchema: s.object(
+      {
+        file: s.object(
+          {
+            name: s.string("The File document identifier."),
+            file_name: s.string("The stored filename."),
+            file_url: s.string("The /files/... or /private/files/... path of the stored file."),
+            is_private: s.integer("1 for a private file, 0 for a public file."),
+            attached_to_doctype: s.nullableString("The DocType the file is attached to, if any."),
+            attached_to_name: s.nullableString("The document the file is attached to, if any."),
+          },
+          {
+            required: ["name", "file_name", "file_url", "is_private", "attached_to_doctype", "attached_to_name"],
+          },
+        ),
+      },
+      { required: ["file"] },
+    ),
+  }),
+  defineProviderAction(service, {
     name: "get_logged_user",
     description: "Get the currently authenticated ERPNext user for the configured connection.",
     inputSchema: s.object("The input payload for fetching the current ERPNext user.", {}),

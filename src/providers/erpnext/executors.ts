@@ -7,7 +7,7 @@ import type {
   TransitFileWriter,
 } from "../../core/types.ts";
 
-import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
+import { base64Bytes, compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed, readBoundedResponseBytes } from "../../core/request.ts";
 import {
   createProviderFetch,
@@ -33,6 +33,8 @@ const erpnextAssignAddMethod = "frappe.desk.form.assign_to.add";
 const erpnextAssignRemoveMethod = "frappe.desk.form.assign_to.remove";
 const erpnextDownloadMethod = "frappe.handler.download_file";
 const erpnextLegacyDownloadMethod = "frappe.core.doctype.file.file.download_file";
+const erpnextUploadMethod = "upload_file";
+const erpnextUploadMaxBytes = 25 * 1024 * 1024;
 
 type ErpnextRequestPhase = "validate" | "execute";
 
@@ -98,6 +100,58 @@ const erpnextActionHandlers: Record<string, ErpnextActionHandler> = {
       createError: (message) => new ProviderRequestError(413, message),
     });
     return { file: await context.transitFiles.create(new File([Uint8Array.from(bytes)], name, { type: mimeType })) };
+  },
+  async upload_file(input, context) {
+    const fileName = readRequiredString(input.fileName, "fileName");
+    if (/[/\\\p{Cc}]/u.test(fileName) || fileName === "." || fileName === "..") {
+      throw new ProviderRequestError(400, "fileName must be a plain filename without path separators.");
+    }
+    const doctype = optionalString(input.doctype);
+    const docname = optionalString(input.name);
+    if ((doctype === undefined) !== (docname === undefined)) {
+      throw new ProviderRequestError(400, "Provide both doctype and name to attach the file, or neither.");
+    }
+    if (input.isPrivate !== undefined && typeof input.isPrivate !== "boolean") {
+      throw new ProviderRequestError(400, "isPrivate must be a boolean.");
+    }
+    const isPrivate = input.isPrivate !== false;
+    const bytes = readUploadBytes(input.contentBase64);
+
+    const form = new FormData();
+    form.set("file", new Blob([bytes]), fileName);
+    form.set("is_private", isPrivate ? "1" : "0");
+    if (doctype && docname) {
+      form.set("doctype", doctype);
+      form.set("docname", docname);
+    }
+    const folder = optionalString(input.folder);
+    if (folder) {
+      form.set("folder", folder);
+    }
+
+    const payload = await requestErpnext({
+      ...context,
+      path: buildMethodPath(erpnextUploadMethod),
+      method: "POST",
+      body: form,
+      phase: "execute",
+    });
+    const file = optionalRecord(optionalRecord(payload)?.message);
+    const name = optionalString(file?.name);
+    const fileUrl = optionalString(file?.file_url);
+    if (!file || !name || !fileUrl) {
+      throw new ProviderRequestError(502, "ERPNext upload_file response did not include a File document");
+    }
+    return {
+      file: {
+        name,
+        file_name: optionalString(file.file_name) ?? fileName,
+        file_url: fileUrl,
+        is_private: Number(file.is_private) === 1 ? 1 : 0,
+        attached_to_doctype: optionalString(file.attached_to_doctype) ?? null,
+        attached_to_name: optionalString(file.attached_to_name) ?? null,
+      },
+    };
   },
   async get_logged_user(_input, context) {
     const payload = await requestErpnext({
@@ -393,12 +447,14 @@ async function requestErpnextDownload(
 
 async function requestErpnext(input: ErpnextRequestOptions): Promise<unknown> {
   const url = buildUrl(input.baseUrl, input.path, input.query);
+  const isFormBody = input.body instanceof FormData;
   let response: Response;
   try {
     response = await input.fetcher(url, {
       method: input.method,
-      headers: buildHeaders(input.apiKey, input.apiSecret, input.body !== undefined),
-      body: input.body === undefined ? undefined : JSON.stringify(input.body),
+      // FormData sets its own multipart content type and boundary.
+      headers: buildHeaders(input.apiKey, input.apiSecret, input.body !== undefined && !isFormBody),
+      body: input.body === undefined ? undefined : isFormBody ? (input.body as FormData) : JSON.stringify(input.body),
       signal: input.signal,
     });
   } catch (error) {
@@ -694,6 +750,18 @@ function readRequiredInputObject(value: unknown, fieldName: string): Record<stri
     throw new ProviderRequestError(400, `${fieldName} must be an object`);
   }
   return record;
+}
+
+function readUploadBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  const encoded = typeof value === "string" ? value.replace(/\s+/g, "") : value;
+  // Check the decoded size from the encoded length first so an oversized payload is never decoded.
+  if (typeof encoded === "string") {
+    const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+    if (Math.floor((encoded.length * 3) / 4) - padding > erpnextUploadMaxBytes) {
+      throw new ProviderRequestError(413, "contentBase64 must decode to 25 MB or less.");
+    }
+  }
+  return base64Bytes(encoded, "contentBase64", (message) => new ProviderRequestError(400, message));
 }
 
 function readOptionalIntegerString(value: unknown): string | undefined {
