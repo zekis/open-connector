@@ -21,7 +21,7 @@ export const provider: ProviderDefinition = {
           secret: false,
           placeholder: "https://pve.example.com:8006",
           description:
-            "HTTPS address of a cluster node or reverse proxy. Private networks require OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK on a self-hosted runtime. The TLS certificate must be trusted.",
+            "HTTP or HTTPS address of a cluster node or reverse proxy. Private networks, including Tailscale, require OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK on a self-hosted runtime. HTTPS connections require a trusted TLS certificate.",
         },
         {
           key: "tokenId",

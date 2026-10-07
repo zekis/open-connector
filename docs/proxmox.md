@@ -8,7 +8,7 @@ running actions. All 15 actions execute locally.
 
 In **Providers > Proxmox VE**, add a connection with:
 
-- `baseUrl`: an HTTPS node origin, such as `https://pve.example.com:8006`, or its
+- `baseUrl`: an HTTP or HTTPS node origin, such as `https://pve.example.com:8006`, or its
   `/api2/json` root. Include the port explicitly when using Proxmox's default 8006.
 - `tokenId`: the full token ID, for example `automation@pve!connector`.
 - `tokenSecret`: the secret shown when creating the API token.
@@ -37,10 +37,12 @@ The action catalog lists potentially required privileges; storage and network
 permissions depend on the requested configuration. Permissions are resource-scoped,
 so connection validation does not flatten them into global granted scopes.
 
-For private clusters, run Open Connector on a host with network access and set
-`OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK=true`. Cloudflare Workers cannot reach a
-private LAN. Loopback and cloud-metadata targets remain blocked. TLS verification
-stays enabled: use a trusted certificate or configure your Node deployment's CA
+For private clusters, including Tailscale, run Open Connector on a host with network
+access and set `OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK=true`. HTTP endpoints over
+Tailscale are supported; use the scheme and port served by your node or reverse
+proxy. Cloudflare Workers cannot reach a private LAN. Loopback and cloud-metadata
+targets remain blocked. For HTTPS, TLS verification stays enabled: use a trusted
+certificate or configure your Node deployment's CA
 trust (for example `NODE_EXTRA_CA_CERTS` for a private CA). There is no insecure TLS
 switch, automatic redirect following, or automatic retry of provisioning requests.
 

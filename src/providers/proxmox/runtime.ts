@@ -36,8 +36,8 @@ export function normalizeProxmoxBaseUrl(
     allowPrivateNetwork,
     createError: (message) => new ProviderRequestError(400, message),
   });
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-    throw new ProviderRequestError(400, "baseUrl must be HTTPS without credentials, query parameters, or a fragment");
+  if (url.username || url.password || url.search || url.hash) {
+    throw new ProviderRequestError(400, "baseUrl must not include credentials, query parameters, or a fragment");
   }
   if (!["", "/api2/json"].includes(url.pathname.replace(/\/+$/u, ""))) {
     throw new ProviderRequestError(400, "baseUrl must be a cluster origin or end in /api2/json");
@@ -121,7 +121,7 @@ async function requestProxmox(
     });
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel();
-      throw new ProviderRequestError(502, "Proxmox redirected the request. Configure the final HTTPS cluster URL.");
+      throw new ProviderRequestError(502, "Proxmox redirected the request. Configure the final cluster URL.");
     }
     const payload = optionalRecord(
       await readProviderJsonBody(response, {

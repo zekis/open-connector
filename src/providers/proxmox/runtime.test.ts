@@ -131,7 +131,7 @@ describe("Proxmox credentials and egress", () => {
   it("normalizes the API root and rejects unsafe or ambiguous URLs", () => {
     expect(normalizeProxmoxBaseUrl(`${values.baseUrl}/api2/json/`)).toBe(`${values.baseUrl}/api2/json`);
     for (const url of [
-      "http://pve.example.com",
+      "ftp://pve.example.com",
       "https://user:password@pve.example.com",
       "https://pve.example.com/api2/json/nodes",
       "https://pve.example.com?token=test",
@@ -142,6 +142,21 @@ describe("Proxmox credentials and egress", () => {
     }
     expect(() => normalizeProxmoxBaseUrl("https://10.0.0.10:8006", false)).toThrow();
     expect(normalizeProxmoxBaseUrl("https://10.0.0.10:8006", true)).toBe("https://10.0.0.10:8006/api2/json");
+    expect(normalizeProxmoxBaseUrl("http://pve.example.com")).toBe("http://pve.example.com/api2/json");
+  });
+
+  it("allows HTTP over Tailscale only when private-network access is enabled", async () => {
+    const tailnetValues = { ...values, baseUrl: "http://100.100.10.20:8080" };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: {} }));
+    setPrivateNetworkAccessAllowed(false);
+    expect(() => credentialValidators.customCredential!({ values: tailnetValues }, { fetcher })).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+    setPrivateNetworkAccessAllowed(true);
+    await expect(credentialValidators.customCredential!({ values: tailnetValues }, { fetcher })).resolves.toBeDefined();
+    expect(String(fetcher.mock.calls[0]![0])).toBe("http://100.100.10.20:8080/api2/json/access/permissions");
+    expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get("authorization")).toBe(
+      `PVEAPIToken=${values.tokenId}=${values.tokenSecret}`,
+    );
   });
 
   it("checks effective token permissions on an authenticated endpoint", async () => {
