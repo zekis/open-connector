@@ -12,6 +12,8 @@ In **Providers > Proxmox VE**, add a connection with:
   `/api2/json` root. Include the port explicitly when using Proxmox's default 8006.
 - `tokenId`: the full token ID, for example `automation@pve!connector`.
 - `tokenSecret`: the secret shown when creating the API token.
+- **Allow private network access (Tailscale / LAN)**: check this for a private
+  cluster. The setting is saved separately for each connection and defaults off.
 
 Create tokens under **Datacenter > Permissions > API Tokens**. With privilege
 separation enabled, grant ACLs to both the user and token: effective access is
@@ -38,13 +40,19 @@ permissions depend on the requested configuration. Permissions are resource-scop
 so connection validation does not flatten them into global granted scopes.
 
 For private clusters, including Tailscale, run Open Connector on a host with network
-access and set `OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK=true`. HTTP endpoints over
+access and check **Allow private network access (Tailscale / LAN)** when saving the
+connection. No server environment variable is needed for Proxmox. HTTP endpoints over
 Tailscale are supported; use the scheme and port served by your node or reverse
 proxy. Cloudflare Workers cannot reach a private LAN. Loopback and cloud-metadata
 targets remain blocked. For HTTPS, TLS verification stays enabled: use a trusted
 certificate or configure your Node deployment's CA
 trust (for example `NODE_EXTRA_CA_CERTS` for a private CA). There is no insecure TLS
 switch, automatic redirect following, or automatic retry of provisioning requests.
+
+When creating a connection through the API, send `allowPrivateNetwork: "true"`
+inside the credential `values` object to enable the same setting. Send `"false"`
+or omit it for public-only access. Existing connections should be saved again with
+the checkbox enabled if they previously relied on the server environment variable.
 
 ## Agent provisioning workflow
 

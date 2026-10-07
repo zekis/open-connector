@@ -14,6 +14,7 @@ import {
   connectionSubmitLabel,
   createOAuthPopupFeatures,
   credentialConnectionRequestBody,
+  CredentialInput,
   isProviderLocallyAvailable,
   oauthClientActionLabel,
   oauthAuthorizationRequestBody,
@@ -276,6 +277,52 @@ describe("ProvidersPage route shell", () => {
       connectionName: "support",
       values: { mailbox: "support@example.com" },
     });
+  });
+
+  it("renders saved private-network options as checkboxes", () => {
+    const provider: ProviderDefinition = {
+      ...catalogOnlyProvider,
+      service: "proxmox",
+      displayName: "Proxmox VE",
+      auth: [
+        {
+          type: "custom_credential",
+          fields: [
+            {
+              key: "allowPrivateNetwork",
+              label: "Allow private network access (Tailscale / LAN)",
+              inputType: "checkbox",
+              required: false,
+              secret: false,
+            },
+          ],
+        },
+      ],
+      actions: [
+        {
+          ...catalogOnlyProvider.actions[0]!,
+          id: "proxmox.list_nodes",
+          service: "proxmox",
+          execution: executableActionExecution,
+        },
+      ],
+    };
+    expect(
+      renderProvidersPage({ ...providerData, providers: [provider], connections: [] }, "/providers/proxmox"),
+    ).toContain('type="checkbox"');
+    const auth = provider.auth[0]!;
+    if (auth.type !== "custom_credential") throw new Error("Expected custom credentials");
+    for (const enabled of ["true", "false"]) {
+      const markup = renderToStaticMarkup(
+        createElement(CredentialInput, { field: auth.fields[0]!, value: enabled, onChange() {} }),
+      );
+      expect(markup).toContain("Allow private network access (Tailscale / LAN)");
+      expect(markup).toMatch(/type="checkbox"/);
+      expect(/type="checkbox"[^>]*checked=""/.test(markup)).toBe(enabled === "true");
+      expect(
+        credentialConnectionRequestBody("custom_credential", "default", { allowPrivateNetwork: enabled }),
+      ).toMatchObject({ values: { allowPrivateNetwork: enabled } });
+    }
   });
 
   it("shows an OAuth client warning when OAuth config is missing", () => {

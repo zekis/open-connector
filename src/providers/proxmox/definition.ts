@@ -21,7 +21,16 @@ export const provider: ProviderDefinition = {
           secret: false,
           placeholder: "https://pve.example.com:8006",
           description:
-            "HTTP or HTTPS address of a cluster node or reverse proxy. Private networks, including Tailscale, require OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK on a self-hosted runtime. HTTPS connections require a trusted TLS certificate.",
+            "HTTP or HTTPS address of a cluster node or reverse proxy. For Tailscale or LAN addresses, enable private network access below. HTTPS connections require a trusted TLS certificate.",
+        },
+        {
+          key: "allowPrivateNetwork",
+          label: "Allow private network access (Tailscale / LAN)",
+          inputType: "checkbox",
+          required: false,
+          secret: false,
+          description:
+            "Allow this connection to reach private addresses. Open Connector must be able to reach your cluster over that network.",
         },
         {
           key: "tokenId",

@@ -34,6 +34,13 @@ export function normalizeCredentialValues(options: NormalizeCredentialValuesOpti
   }
 
   for (const field of options.fields) {
+    if (
+      field.inputType === "checkbox" &&
+      values[field.key] !== undefined &&
+      !["true", "false"].includes(values[field.key]!)
+    ) {
+      throw options.createError(`${field.key} must be "true" or "false".`);
+    }
     if (field.required && !values[field.key]) {
       throw options.createError(`${field.key} is required.`);
     }

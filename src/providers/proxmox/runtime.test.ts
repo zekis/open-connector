@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setDefaultGuardedFetchDnsLookup } from "../../core/guarded-fetch.ts";
 import { setPrivateNetworkAccessAllowed } from "../../core/request.ts";
 import { createProviderFetch } from "../provider-runtime.ts";
-import { credentialValidators } from "./executors.ts";
+import { credentialValidators, executors } from "./executors.ts";
 import { createProxmoxContext, normalizeProxmoxBaseUrl, proxmoxHandlers } from "./runtime.ts";
 
 const values = {
@@ -12,7 +12,12 @@ const values = {
 };
 const upid = "UPID:pve1:00000001:00000002:00000003:qmcreate:101:automation@pve!connector:";
 
+beforeEach(() => {
+  setDefaultGuardedFetchDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   setDefaultGuardedFetchDnsLookup(undefined);
@@ -128,6 +133,29 @@ describe("Proxmox provisioning", () => {
 });
 
 describe("Proxmox credentials and egress", () => {
+  it("uses the saved setting for actions without enabling other connections", async () => {
+    setDefaultGuardedFetchDnsLookup(async () => [{ address: "100.100.10.20", family: 4 }]);
+    // A deployment flag must not override an unchecked connection.
+    setPrivateNetworkAccessAllowed(true);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ data: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const getCredential = vi.fn().mockResolvedValue({
+      authType: "custom_credential",
+      values: { ...values, allowPrivateNetwork: "true" },
+      profile: { accountId: "test", displayName: "Test", grantedScopes: [] },
+      metadata: {},
+    });
+    expect(await executors["proxmox.list_nodes"]!({}, { getCredential })).toEqual({ ok: true, output: { nodes: [] } });
+    getCredential.mockResolvedValue({
+      authType: "custom_credential",
+      values: { ...values, allowPrivateNetwork: "false" },
+      profile: {},
+      metadata: {},
+    });
+    expect(await executors["proxmox.list_nodes"]!({}, { getCredential })).toMatchObject({ ok: false });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes the API root and rejects unsafe or ambiguous URLs", () => {
     expect(normalizeProxmoxBaseUrl(`${values.baseUrl}/api2/json/`)).toBe(`${values.baseUrl}/api2/json`);
     for (const url of [
@@ -151,8 +179,12 @@ describe("Proxmox credentials and egress", () => {
     setPrivateNetworkAccessAllowed(false);
     expect(() => credentialValidators.customCredential!({ values: tailnetValues }, { fetcher })).toThrow();
     expect(fetcher).not.toHaveBeenCalled();
-    setPrivateNetworkAccessAllowed(true);
-    await expect(credentialValidators.customCredential!({ values: tailnetValues }, { fetcher })).resolves.toBeDefined();
+    await expect(
+      credentialValidators.customCredential!(
+        { values: { ...tailnetValues, allowPrivateNetwork: "true" } },
+        { fetcher },
+      ),
+    ).resolves.toBeDefined();
     expect(String(fetcher.mock.calls[0]![0])).toBe("http://100.100.10.20:8080/api2/json/access/permissions");
     expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get("authorization")).toBe(
       `PVEAPIToken=${values.tokenId}=${values.tokenSecret}`,
@@ -174,8 +206,9 @@ describe("Proxmox credentials and egress", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: {} }));
     await expect(credentialValidators.customCredential!({ values }, { fetcher })).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
-    setPrivateNetworkAccessAllowed(true);
-    await expect(credentialValidators.customCredential!({ values }, { fetcher })).resolves.toBeDefined();
+    await expect(
+      credentialValidators.customCredential!({ values: { ...values, allowPrivateNetwork: "true" } }, { fetcher }),
+    ).resolves.toBeDefined();
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

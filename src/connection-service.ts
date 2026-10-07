@@ -30,7 +30,7 @@ export interface ConnectionSummary {
   virtual: boolean;
   default: boolean;
   profile: CredentialProfile;
-  /** Non-secret OAuth options used to edit this connection. */
+  /** Non-secret OAuth options and checkbox settings used to edit this connection. */
   connectionValues?: Record<string, string>;
 }
 
@@ -412,7 +412,7 @@ export class ConnectionService {
     connectionName: string,
     credential: Exclude<ResolvedCredential, { authType: "no_auth" }>,
   ): ConnectionSummary {
-    return {
+    const summary: ConnectionSummary = {
       id,
       service: provider.service,
       connectionName,
@@ -421,16 +421,25 @@ export class ConnectionService {
       virtual: false,
       default: connectionName === defaultConnectionName,
       profile: credential.profile,
-      ...(credential.authType === "oauth2" && credential.connectionValues
-        ? {
-            connectionValues: Object.fromEntries(
-              (provider.auth.find((auth) => auth.type === "oauth2")?.connectionFields ?? [])
-                .filter((field) => !field.secret && credential.connectionValues?.[field.key] !== undefined)
-                .map((field) => [field.key, credential.connectionValues![field.key]]),
-            ),
-          }
-        : {}),
     };
+    if (credential.authType === "oauth2" && credential.connectionValues) {
+      summary.connectionValues = Object.fromEntries(
+        (provider.auth.find((auth) => auth.type === "oauth2")?.connectionFields ?? [])
+          .filter((field) => !field.secret && credential.connectionValues?.[field.key] !== undefined)
+          .map((field) => [field.key, credential.connectionValues![field.key]]),
+      );
+    } else if (credential.authType === "api_key" || credential.authType === "custom_credential") {
+      const auth = provider.auth.find((auth) => auth.type === credential.authType);
+      const fields =
+        auth?.type === "custom_credential" ? auth.fields : auth?.type === "api_key" ? (auth.extraFields ?? []) : [];
+      const settings = fields.filter((field) => field.inputType === "checkbox" && !field.secret);
+      if (settings.length > 0) {
+        summary.connectionValues = Object.fromEntries(
+          settings.map((field) => [field.key, credential.values[field.key] ?? "false"]),
+        );
+      }
+    }
+    return summary;
   }
 
   private createNoAuthConnectionSummary(provider: ProviderDefinition, connectionName: string): ConnectionSummary {

@@ -1,8 +1,9 @@
 import type { CredentialValidationResult } from "../../core/types.ts";
 
 import { optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
-import { assertPublicHttpUrl, isPrivateNetworkAccessAllowed } from "../../core/request.ts";
+import { assertPublicHttpUrl } from "../../core/request.ts";
 import {
+  createProviderFetch,
   createProviderTimeout,
   isAbortLikeError,
   ProviderRequestError,
@@ -27,10 +28,7 @@ interface ProxmoxTask {
 type ProxmoxHandler = (input: Record<string, unknown>, context: ProxmoxContext) => Promise<unknown>;
 
 /** Normalize a node origin or API root without allowing credentials or arbitrary endpoint paths. */
-export function normalizeProxmoxBaseUrl(
-  value: unknown,
-  allowPrivateNetwork: boolean = isPrivateNetworkAccessAllowed(),
-): string {
+export function normalizeProxmoxBaseUrl(value: unknown, allowPrivateNetwork: boolean = false): string {
   const url = assertPublicHttpUrl(requiredString(value, "baseUrl"), {
     fieldName: "baseUrl",
     allowPrivateNetwork,
@@ -56,7 +54,14 @@ export function createProxmoxContext(
     throw new ProviderRequestError(400, "tokenId must have the form user@realm!token-name");
   }
   if (/[\s=]/u.test(tokenSecret)) throw new ProviderRequestError(400, "tokenSecret must not contain whitespace or =");
-  return { baseUrl: normalizeProxmoxBaseUrl(values.baseUrl), tokenId, tokenSecret, fetcher, signal };
+  const allowPrivateNetwork = values.allowPrivateNetwork === "true";
+  return {
+    baseUrl: normalizeProxmoxBaseUrl(values.baseUrl, allowPrivateNetwork),
+    tokenId,
+    tokenSecret,
+    fetcher: createProviderFetch({ fetch: fetcher, allowPrivateNetwork: () => allowPrivateNetwork }),
+    signal,
+  };
 }
 
 export async function validateProxmoxCredential(context: ProxmoxContext): Promise<CredentialValidationResult> {

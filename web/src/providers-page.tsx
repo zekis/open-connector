@@ -1560,7 +1560,27 @@ function OAuthConfigForm(props: OAuthConfigFormProps): ReactNode {
   );
 }
 
-function CredentialInput(props: { field: CredentialField; value: string; onChange(value: string): void }): ReactNode {
+export function CredentialInput(props: {
+  field: CredentialField;
+  value: string;
+  onChange(value: string): void;
+}): ReactNode {
+  if (props.field.inputType === "checkbox") {
+    return (
+      <Label className="field">
+        <span className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            className="size-4 shrink-0 accent-primary"
+            checked={props.value === "true"}
+            onChange={(event) => props.onChange(event.target.checked ? "true" : "false")}
+          />
+          <span>{props.field.label}</span>
+        </span>
+        {props.field.description ? <small>{props.field.description}</small> : null}
+      </Label>
+    );
+  }
   return (
     <Label className="field">
       <span>{props.field.label}</span>

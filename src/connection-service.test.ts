@@ -257,6 +257,44 @@ describe("ConnectionService", () => {
     });
   });
 
+  it("persists checkbox settings for editing without exposing other credential values", async () => {
+    const provider: ProviderDefinition = {
+      ...customCredentialProvider,
+      auth: [
+        {
+          type: "custom_credential",
+          fields: [
+            { key: "password", label: "Password", inputType: "password", required: true, secret: true },
+            {
+              key: "allowPrivateNetwork",
+              label: "Private network",
+              inputType: "checkbox",
+              required: false,
+              secret: false,
+            },
+          ],
+        },
+      ],
+    };
+    const service = createService([provider]);
+    for (const enabled of ["true", "false"]) {
+      const summary = await service.connectWithCustomCredential("database", {
+        values: { password: "secret", allowPrivateNetwork: enabled },
+      });
+      expect(summary.connectionValues).toEqual({ allowPrivateNetwork: enabled });
+      expect(JSON.stringify(summary)).not.toContain("secret");
+      await expect(service.listConnections()).resolves.toMatchObject([
+        { connectionValues: { allowPrivateNetwork: enabled } },
+      ]);
+      await expect(service.getCredential("database")).resolves.toMatchObject({
+        values: { allowPrivateNetwork: enabled },
+      });
+    }
+    await expect(
+      service.connectWithCustomCredential("database", { values: { password: "secret", allowPrivateNetwork: "yes" } }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
   it("verifies credentials before storing them when a provider exposes a validator", async () => {
     const validators: CredentialValidators = {
       async apiKey(input) {
