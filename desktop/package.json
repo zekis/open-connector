@@ -1,0 +1,46 @@
+{
+  "name": "ocgw-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop companion for Open Connector Gateway",
+  "author": "Open Connector contributors",
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "node launch.mjs",
+    "test": "node --test navigation.test.mjs window-state.test.mjs",
+    "smoke": "node launch.mjs --smoke-test",
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "org.openconnector.ocgw.desktop",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.mjs",
+      "navigation.mjs",
+      "window-state.mjs",
+      "assets/**"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": "nsis",
+      "artifactName": "OCGW-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OCGW"
+    }
+  },
+  "productName": "OCGW"
+}
