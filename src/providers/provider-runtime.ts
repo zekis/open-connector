@@ -22,6 +22,25 @@ import { readBoundedResponseBytes } from "../core/request.ts";
  */
 export type ProviderFetch = typeof fetch;
 
+// Only expose known transport diagnostics, never raw causes that may contain credentials or URLs.
+const providerTransportDiagnostics: Record<string, string> = {
+  DEPTH_ZERO_SELF_SIGNED_CERT: "the server uses a self-signed certificate that this runtime does not trust",
+  SELF_SIGNED_CERT_IN_CHAIN: "the certificate chain contains an untrusted self-signed certificate",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE:
+    "the server certificate could not be verified; check the certificate chain and trusted CA",
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: "the certificate issuer is not trusted by this runtime",
+  CERT_HAS_EXPIRED: "the server certificate has expired",
+  ERR_TLS_CERT_ALTNAME_INVALID: "the URL hostname or IP does not match the server certificate",
+  ECONNREFUSED: "the server refused the connection; check the address, port, and listening service",
+  ETIMEDOUT: "the connection timed out; check routing and firewall access from the Open Connector server",
+  UND_ERR_CONNECT_TIMEOUT: "the connection timed out; check routing and firewall access from the Open Connector server",
+  EHOSTUNREACH: "the host is unreachable from the Open Connector server",
+  ENETUNREACH: "the network is unreachable from the Open Connector server",
+  ENOTFOUND: "the server hostname could not be resolved",
+  EAI_AGAIN: "hostname resolution temporarily failed",
+  ECONNRESET: "the server or network reset the connection",
+};
+
 export interface ProviderFetchOptions {
   /** Base transport; defaults to the global fetch. A guarded fetch is unwrapped so guards never stack. */
   fetch?: ProviderFetch;
@@ -46,8 +65,18 @@ export function createProviderFetch(options: ProviderFetchOptions = {}): Provide
     fetch: options.fetch,
     allowPrivateNetwork: options.allowPrivateNetwork,
     skipDnsValidation: options.skipDnsValidation,
-    mapTransportError: (error) =>
-      error instanceof TypeError ? new ProviderRequestError(502, "provider network request failed") : error,
+    mapTransportError: (error) => {
+      if (!(error instanceof TypeError)) return error;
+      const code = optionalRecord(error.cause)?.code;
+      const diagnostic =
+        typeof code === "string" && Object.hasOwn(providerTransportDiagnostics, code)
+          ? providerTransportDiagnostics[code]
+          : undefined;
+      return new ProviderRequestError(
+        502,
+        diagnostic ? `provider network request failed (${code}): ${diagnostic}` : "provider network request failed",
+      );
+    },
     createError: (message) => new ProviderRequestError(502, message),
   });
 }

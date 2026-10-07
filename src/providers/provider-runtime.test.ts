@@ -3,6 +3,7 @@ import type { ExecutionContext, ResolvedCredential } from "../core/types.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPrivateNetworkAccessAllowed, setPrivateNetworkAccessAllowed } from "../core/request.ts";
 import {
+  createProviderFetch,
   createProviderTimeout,
   defineProviderExecutors,
   defineProviderProxy,
@@ -13,6 +14,35 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals();
   setPrivateNetworkAccessAllowed(false);
+});
+
+describe("provider transport diagnostics", () => {
+  it.each([
+    ["DEPTH_ZERO_SELF_SIGNED_CERT", "self-signed certificate"],
+    ["ERR_TLS_CERT_ALTNAME_INVALID", "does not match"],
+    ["UND_ERR_CONNECT_TIMEOUT", "timed out"],
+    ["ECONNREFUSED", "refused the connection"],
+  ])("reports %s without exposing raw transport details", async (code, message) => {
+    const transport = vi.fn<typeof fetch>().mockRejectedValue(
+      new TypeError("secret request URL", {
+        cause: Object.assign(new Error("secret credentials"), { code }),
+      }),
+    );
+    const fetcher = createProviderFetch({ fetch: transport });
+    const error = await fetcher("https://93.184.216.34/").catch((error: unknown) => error);
+    expect(error).toMatchObject({ status: 502, message: expect.stringContaining(message) });
+    expect(String(error)).toContain(code);
+    expect(String(error)).not.toContain("secret");
+  });
+
+  it("does not expose unknown cause codes", async () => {
+    const transport = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("secret", { cause: { code: "SECRET_TOKEN" } }));
+    await expect(createProviderFetch({ fetch: transport })("https://93.184.216.34/")).rejects.toMatchObject({
+      message: "provider network request failed",
+    });
+  });
 });
 
 describe("toProviderExecutionError", () => {
