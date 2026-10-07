@@ -3,13 +3,13 @@ import type { CredentialValidationResult } from "../../core/types.ts";
 import { optionalRecord, optionalString, requiredString } from "../../core/cast.ts";
 import { assertPublicHttpUrl } from "../../core/request.ts";
 import {
-  createProviderFetch,
   createProviderTimeout,
   isAbortLikeError,
   ProviderRequestError,
   providerUserAgent,
   readProviderJsonBody,
 } from "../provider-runtime.ts";
+import { createProxmoxFetch } from "./transport.ts";
 
 export interface ProxmoxContext {
   baseUrl: string;
@@ -55,11 +55,16 @@ export function createProxmoxContext(
   }
   if (/[\s=]/u.test(tokenSecret)) throw new ProviderRequestError(400, "tokenSecret must not contain whitespace or =");
   const allowPrivateNetwork = values.allowPrivateNetwork === "true";
+  const baseUrl = normalizeProxmoxBaseUrl(values.baseUrl, allowPrivateNetwork);
   return {
-    baseUrl: normalizeProxmoxBaseUrl(values.baseUrl, allowPrivateNetwork),
+    baseUrl,
     tokenId,
     tokenSecret,
-    fetcher: createProviderFetch({ fetch: fetcher, allowPrivateNetwork: () => allowPrivateNetwork }),
+    fetcher: createProxmoxFetch({
+      fetcher,
+      allowPrivateNetwork,
+      skipTlsVerification: values.skipTlsVerification === "true" && baseUrl.startsWith("https:"),
+    }),
     signal,
   };
 }

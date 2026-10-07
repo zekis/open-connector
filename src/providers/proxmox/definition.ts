@@ -21,7 +21,7 @@ export const provider: ProviderDefinition = {
           secret: false,
           placeholder: "https://pve.example.com:8006",
           description:
-            "HTTP or HTTPS address of a cluster node or reverse proxy. For Tailscale or LAN addresses, enable private network access below. HTTPS connections require a trusted TLS certificate.",
+            "HTTP or HTTPS address of a cluster node or reverse proxy. For Tailscale or LAN addresses, enable private network access below.",
         },
         {
           key: "allowPrivateNetwork",
@@ -31,6 +31,15 @@ export const provider: ProviderDefinition = {
           secret: false,
           description:
             "Allow this connection to reach private addresses. Open Connector must be able to reach your cluster over that network.",
+        },
+        {
+          key: "skipTlsVerification",
+          label: "Skip TLS certificate verification",
+          inputType: "checkbox",
+          required: false,
+          secret: false,
+          description:
+            "For a trusted home-lab server with a self-signed or mismatched certificate. HTTPS stays encrypted, but this connection will not verify the server's identity. Requires a Node.js deployment.",
         },
         {
           key: "tokenId",

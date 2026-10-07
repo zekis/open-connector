@@ -14,6 +14,9 @@ In **Providers > Proxmox VE**, add a connection with:
 - `tokenSecret`: the secret shown when creating the API token.
 - **Allow private network access (Tailscale / LAN)**: check this for a private
   cluster. The setting is saved separately for each connection and defaults off.
+- **Skip TLS certificate verification**: optionally check this for a trusted
+  home-lab server using a self-signed certificate or a certificate that does not
+  match its Tailscale IP. Defaults off and applies only to this connection.
 
 Create tokens under **Datacenter > Permissions > API Tokens**. With privilege
 separation enabled, grant ACLs to both the user and token: effective access is
@@ -44,15 +47,19 @@ access and check **Allow private network access (Tailscale / LAN)** when saving 
 connection. No server environment variable is needed for Proxmox. HTTP endpoints over
 Tailscale are supported; use the scheme and port served by your node or reverse
 proxy. Cloudflare Workers cannot reach a private LAN. Loopback and cloud-metadata
-targets remain blocked. For HTTPS, TLS verification stays enabled: use a trusted
-certificate or configure your Node deployment's CA
-trust (for example `NODE_EXTRA_CA_CERTS` for a private CA). There is no insecure TLS
-switch, automatic redirect following, or automatic retry of provisioning requests.
+targets remain blocked. HTTPS verifies certificates by default. You can trust your
+private CA using `NODE_EXTRA_CA_CERTS`, or explicitly select **Skip TLS certificate
+verification** for this connection. The latter keeps traffic encrypted but disables
+certificate-chain and hostname verification. It requires a Node.js deployment;
+Cloudflare Workers do not support this option. Redirects and automatic retries of
+provisioning requests remain disabled.
 
 When creating a connection through the API, send `allowPrivateNetwork: "true"`
 inside the credential `values` object to enable the same setting. Send `"false"`
 or omit it for public-only access. Existing connections should be saved again with
 the checkbox enabled if they previously relied on the server environment variable.
+The TLS checkbox is `skipTlsVerification: "true"` in the same credential `values`
+object. It is used for HTTPS requests only and does not affect other connections.
 
 ## Agent provisioning workflow
 
